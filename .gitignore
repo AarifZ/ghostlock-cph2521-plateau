@@ -1,0 +1,15 @@
+﻿*.o
+*.exe
+ghostlock
+ace6t_exploit
+ghostlock-cph2521-o3
+logs/adb_monitor/
+logs/t*.txt
+logs/lock_empty.txt
+logs/survive*.txt
+logs/closest*.txt
+logs/two_node*.txt
+logs/consistent*.txt
+logs/glm*.txt
+logs/no_consumer.txt
+logs/baseline_full.txt
