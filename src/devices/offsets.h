@@ -18,6 +18,12 @@ struct kernel_offsets {
   uint64_t off_anon_pipe_buf_ops, off_ashmem_misc_fops, off_ashmem_fops;
   uint64_t off_ashmem_ioctl, off_ashmem_compat_ioctl, off_ashmem_mmap;
   uint64_t off_ashmem_open, off_ashmem_release, off_ashmem_show_fdinfo;
+  /* Real ashmem_fops .llseek / .read_iter cfi_jt stubs (Image-dumped
+   * 2026-08-16) for MODE4_CLONE_FOPS bit-exact table clone. 0 = unknown. */
+  uint64_t off_ashmem_llseek, off_ashmem_read_iter;
+  /* Kernel image tail lock slot (VERIFY_SWAP phase 2): __bss_stop rounded up
+   * +0x134 — zero-mapped, unreferenced. 0 = unavailable. */
+  uint64_t off_bss_tail_lock;
   uint64_t off_configfs_read_iter, off_configfs_bin_write_iter;
   uint64_t off_copy_splice_read, off_noop_llseek, off_cap_capable_active;
   uint64_t off_slide_nfulnl_logger, off_slide_loggers_0_1, off_slide_boot_id;

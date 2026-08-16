@@ -262,6 +262,12 @@ extern int pselect_custom_write;
 extern uintptr_t pselect_custom_target;
 extern uintptr_t pselect_custom_value;
 
+/* MODE4_WPROOF_SPRAY placement oracle (util.c): peek the sprayed socket
+ * stream and verify the marker write landed in our own fake_fops table.
+ * ret 1 verified, 0 mismatch (delta error measured + logged), -1 no table. */
+int wproof_spray_verify(uint64_t marker_expect);
+
+extern int consumer_nice;
 extern uint32_t f_wait;
 extern uint32_t f_pi_target;
 extern uint32_t f_pi_chain;

