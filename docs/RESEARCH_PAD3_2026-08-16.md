@@ -58,3 +58,34 @@ Confirmed: after write-proof, `/proc/.../boot_id` becomes `0001a37e-89ff-...` an
 
 - **Research:** yes — AAW proven; crash phase isolated; PAD3 is the direct fix for toxic-left erase.
 - **Product (uid0):** only if phase3 lands `*MISC=fake_fops` ALIVE. Not there yet until this (or successor) fires green.
+
+---
+
+## Fire result: `pad3_20260816_171141`
+
+| Field | Value |
+|-------|--------|
+| Config | `MODE4_PAD3=1 MODE4_ONLY=1` |
+| boot_id pre | `36fa1459-3351-4ac3-a5b0-a57f1d0b6e75` |
+| boot_id post | `a71cfe2a-c05e-417c-ad7b-c0ae9bb9d461` |
+| Class | **SOFTBOOT** (true kernel reboot) |
+| Console last | `PAD3_1 only-left left=MISC+16` → `pselect place` then drop |
+| live_sync last | `waiter_after_requeue_enter_pselect` (no `pre_setattr`, no `phase1_ok`) |
+| UAF | EDEADLK 35, spray attempt 3 OK, owner=1 packing |
+
+### Interpretation
+
+**Phase1 pad (`left=MISC+16`, parent_color=0) is toxic.** Same class as bare `left=MISC` erase softboot: only-left erase walks the pad address as an `rb_node` (`+8`/`+16` = `MISC+24`/`MISC+32`), not a quiet BSS region like boot_id.
+
+Pads inside the miscdevice object do **not** solve the toxic-left problem; they inherit it.
+
+### Stop rule
+
+Do **not** thrash phase2/3 or other MISC±N only-left without a new theory.
+
+### Next theories (not fired)
+
+1. Quiet intermediate targets outside miscdevice (known-good boot_id class) cannot directly become `*MISC`.
+2. Root-erase / ION that never uses `left=MISC*` (still need wait_lock=0 without toxic name zero).
+3. only-right / classic parent=MISC-8 if a safe wait_lock path appears.
+4. RE with eng/root for ramoops fault PC on MISC erase.
