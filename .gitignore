@@ -1,9 +1,38 @@
-﻿*.o
+# Build objects / host binaries
+*.o
 *.exe
+*.obj
+*.lib
+*.dll
+*.pdb
+
+# Exploit binaries (keep only ghostlock-cph2521 if intentionally committed)
 ghostlock
 ace6t_exploit
 ghostlock-cph2521-o3
+ghostlock-cph2521-a53exp
+ghostlock-cph2521-glm
+ghostlock-cph2521-*
+!ghostlock-cph2521
+pr_set_mm_probe
+pr_set_mm_probe.exe
+
+# Nested plateau snapshot (duplicate of repo)
+github-bundle/
+
+# Large / one-off archives (boot.img zip is tracked under assets/ if needed)
+*.zip
+!assets/CPH2521_boot.img.zip
+cph2521-closest-plateau-bundle.zip
+
+# Raw boot images (use assets/CPH2521_boot.img.zip)
+*.img
+boot.img
+assets/boot.img
+
+# Lab noise — raw fires, ADB scrapes, monitor state
 logs/adb_monitor/
+logs/aarif_pull/
 logs/t*.txt
 logs/lock_empty.txt
 logs/survive*.txt
@@ -11,5 +40,28 @@ logs/closest*.txt
 logs/two_node*.txt
 logs/consistent*.txt
 logs/glm*.txt
-logs/no_consumer.txt
+logs/no_consumer*.txt
 logs/baseline_full.txt
+logs/adb_probe_now.txt
+logs/a53_stamp.txt
+logs/bt_*.txt
+logs/exp[A-Z]*.txt
+logs/exp_*.txt
+logs/plateau_*.txt
+logs/zero_stab_*.txt
+logs/zero_stab_summary.json
+logs/ref_fpsimd/
+logs/ref_johnny/
+
+# One-off experiment fire scripts (keep fire_mode.ps1 tracked if added)
+fire_breakthrough_t1t2.ps1
+fire_pad3.ps1
+build_cph2521_order3.ps1
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
