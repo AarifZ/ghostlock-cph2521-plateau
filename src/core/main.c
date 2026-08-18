@@ -6,6 +6,7 @@
  */
 
 #include "common.h"
+#include <sys/mount.h>
 #include "offsets.h"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -712,6 +713,22 @@ int run_exploit(int argc, char **argv) {
   set_unbuffer();
   set_limit();
 
+  /* QEMU freestanding-init mode: mount the pseudo-filesystems from bionic
+   * so /dev/ashmem, /proc, /sys exist (env QEMU_INIT=1). */
+  if (env_flag("QEMU_INIT", 0)) {
+    struct { const char *src, *tgt, *fs; } ms[] = {
+        {"proc", "/proc", "proc"},
+        {"devtmpfs", "/dev", "devtmpfs"},
+        {"sysfs", "/sys", "sysfs"},
+    };
+    for (size_t i = 0; i < 3; i++) {
+      errno = 0;
+      long r = mount(ms[i].src, ms[i].tgt, ms[i].fs, 0, NULL);
+      pr_info("QEMU_INIT mount %s -> %s : ret=%ld errno=%d\n",
+              ms[i].fs, ms[i].tgt, r, errno);
+    }
+  }
+
   if (!active_offsets && select_offsets() < 0) return 1;
 
   log_startup_context();
@@ -910,6 +927,14 @@ int run_exploit(int argc, char **argv) {
     else
       landed = boot_wrote;
 
+    if (env_flag("QEMU_INIT", 0)) {
+      char hn[80] = {0};
+      read_first_line("/proc/sys/kernel/hostname", hn, sizeof(hn));
+      pr_success("QEMU_HOSTNAME=[%.60s]\n", hn);
+      read_first_line("/proc/sys/kernel/random/boot_id", boot_after,
+                      sizeof(boot_after));
+      pr_success("QEMU_BOOTID=[%.40s]\n", boot_after);
+    }
     pr_success("WRITE_PROOF done landed=%d boot_wrote=%d enf_wrote=%d "
                "boot_after=%s enforce_after=%s success_calls "
                "cfi_step=%d cfi_errno=%d cfi_wr=%zd\n",

