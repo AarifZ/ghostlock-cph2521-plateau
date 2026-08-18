@@ -349,3 +349,45 @@ Binary ghostlock-cph2521 (156384 B) has the SAFE-WAKE fix + UMASK4 + oracle.
    pointer + stale lock from the EDEADLK residue (wake-the-runnable-task is
    provably safe; stale-lock risk).
 3. pstore via engineering path (EX01 lab image may expose ramoops elsewhere).
+
+---
+
+## SESSION 5 (2026-08-18) — QEMU deep-dive: crash chain DECODED
+
+### Harness (qemu_cph/): real CPH2521 Image boots on qemu virt (nokaslr),
+launcher forks exploit + polls /proc/<tid>/syscall, python cpio/probe/sweep,
+30+ panics captured with full PC/registers.
+
+### DECODED (from panic PC + register analysis + instruction decode):
+1. +0x3f0 = `ldr x9,[x8,#0x38]` — load waiter->lock; garbage x8 = the
+   dangling pi_blocked_on pointing at OVERWRITTEN stack content.
+2. +0x188 = qspinlock `ldaxr` — walk read waiter->lock=0 (stamp misaligned
+   by a word at that shift) → trylock(NULL) fault.
+3. +0x1788 = brk (BUG/UBSAN-class) deep in walk epilogue — the walk gets
+   PAST erase/store when the stamp is aligned.
+4. Wedge/RCU-stall runs = trylock on mapped-but-never-freed lock values
+   (retry loop) OR QEMU-TCG starvation (per-iteration sched_yield in the
+   stamp spin REGRESSES — removed).
+5. **Kernel has NO vmap stacks** — thread stacks live in the linear map;
+   source confirms rt_waiter is a STACK local (the "slab-looking" waiter
+   addresses in panics are linear-map stacks).
+6. Long BLOCKING select lets kernel entries (IRQ) clobber the frozen stamp
+   → walk reads FPSIMD junk. Spin-through-punch keeps it fresh.
+7. Stamp alignment classes change per shift (sweep2.py): -4/-2/-1/+1 =
+   mapped-lock behavior (stamp landing), others = garbage faults.
+8. Waiter/consumer tids land ~500+ (slab_drain clones) — launcher probe
+   range widened; /proc/<tid>/syscall exposes blocked syscalls.
+
+### INSTRUMENT READY, ONE EXPERIMENT PENDING (exact resume point):
+MODE4_QEMU_MAP (built, in qemu exploit): tags every stamp word
+0xDEAD0000_000000C0+ii; the walk's trylock fault address names the word
+index truly at waiter->lock(+0x38) = exact fdset-waiter alignment in ONE
+panic. Last run went quiet (dead-boot class) — just re-run probe.py a few
+times (each ~30s); on a panic, read the tag from "Unable to handle ... 0x…DEAD…C?".
+With the true alignment: set PSELECT_SHIFT accordingly, restore ph6
+safe-store shape, confirm hostname landing in QEMU, then port to device.
+
+### Known QEMU quirks to respect: main thread can hang inside CMP_REQUEUE_PI
+under TCG (its prints stop — use launcher/panic output for truth); keep
+-smp 2; no sched_yield in stamp spin; panic=-1 halts (no auto-exit) —
+probe.py kills QEMU after its window.

@@ -375,7 +375,21 @@ void run_main_route_threads(void) {
           rerr == EDEADLK ? "EDEADLK/UAF-primed" :
           rerr == 0 || rret >= 0 ? "ok/requeued(no-deadlock?)" : "other");
   durable_stage("after_cmp_requeue_pi");
-  while (!atomic_load(&route_done)) usleep(5000);
+  /* SP MEASUREMENT: while the waiter blocks in its 200ms measure-select,
+   * read /proc/<tid>/syscall from THIS thread (its stdout prints work)
+   * and dump the select-path kernel SP. */
+  int measured = 0;
+  while (!atomic_load(&route_done)) {
+    if (!measured && atomic_load(&ss_measure_go)) {
+      char pp[96], sb[256] = {0};
+      snprintf(pp, sizeof(pp), "/proc/self/task/%d/syscall",
+               (int)atomic_load(&waiter_tid));
+      read_first_line(pp, sb, sizeof(sb));
+      pr_success("QEMU_SELECT_SP=[%.200s]\n", sb);
+      measured = 1;
+    }
+    usleep(5000);
+  }
   durable_stage("route_done_observed");
 }
 
