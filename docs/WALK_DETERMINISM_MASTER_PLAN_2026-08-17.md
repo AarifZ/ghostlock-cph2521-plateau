@@ -310,3 +310,42 @@ Binary ghostlock-cph2521 (156384 B) has the SAFE-WAKE fix + UMASK4 + oracle.
 4. Fallback if wake-fix misbehaves: word8=0 crashes (NULL deref) — keep
    tail+0x800. If UMASK lands but reads still denied: kallsyms via
    /sys/kernel/tracing after enabling trace_clock... (tracefs listable).
+
+---
+
+## SESSION 4 (2026-08-17 night → 08-18 morning) — Quest3 restructure + ground truth
+
+### Implemented (all in ghostlock-cph2521 159280 B):
+1. **MODE4_SELFSTAMP** — full Quest3 architecture: fd prestage BEFORE WRPI,
+   zero-gap self-stamp spin after timeout, deterministic handoff, final
+   stamp = long BLOCKING select (F27's stable shape).
+2. Chain-unlock placement studied: before-stamp (unlock's deboost walk reads
+   RAW residue → crash), mid-stamp (walk reads stamped words — still
+   crashed), nounlock (dangling dies → dead boots dominate).
+3. **ph6 hostname oracle**: store "PWNED\0" into init_uts_ns.nodename
+   (0x027CBDA8+8+65) — shell-readable, harmless, persistent. The clean
+   live/dead ground truth with zero side effects.
+4. ph5 equal-prio [3]-exit probe, dying-box harvester (in-process kallsyms
+   dump with per-chunk fsync to /data/local/tmp).
+
+### GROUND TRUTH (hostname campaign, 8 fires): 0 landings.
+- Dead boots (write_proof_miss): ~50-60%
+- Live boots: crash in-walk (pre_setattr last), post-walk, or at unlock
+- F27 remains the ONLY clean live landing in ~60 fires
+
+### The eliminination table (live-boot crash):
+- NOT the erase shape (zero-write + plain-store both crash; P5 [3]-exit
+  crashed under unlock-before → unlock's own deboost walk implicated there)
+- NOT wake(init_task) alone (P5-nounlock crashed once with no wake possible)
+- NOT tearing (blocking final stamp didn't fix)
+- NOT fd policy / stamp content (audited correct every time)
+- UNRESOLVED without a kernel fault dump (pstore SELinux-denied)
+
+### NEXT SESSION — strongest moves, in order:
+1. **QEMU replay** (aristotle repo has qemu/ for this kernel class): boot OUR
+   Image with our exact stamps, fire the same flow, read the panic PC + stack
+   directly. Zero device risk, definitive answer to the live-walk crash.
+2. wps=1/n≤64 residue experiment: word8/word9 unstamped = REAL waiter-task
+   pointer + stale lock from the EDEADLK residue (wake-the-runnable-task is
+   provably safe; stale-lock risk).
+3. pstore via engineering path (EX01 lab image may expose ramoops elsewhere).

