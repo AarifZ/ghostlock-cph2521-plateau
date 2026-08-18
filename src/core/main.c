@@ -732,10 +732,12 @@ int run_exploit(int argc, char **argv) {
   if (env_flag("QEMU_INIT", 0)) {
     struct { const char *src, *tgt, *fs; } ms[] = {
         {"proc", "/proc", "proc"},
-        {"devtmpfs", "/dev", "devtmpfs"},
+        /* devtmpfs mount triggers request_module which DEADLOCKS (kernel
+         * built with STATIC_USERMODEHELPER="") — skipped; static chain
+         * path needs no /dev. */
         {"sysfs", "/sys", "sysfs"},
     };
-    for (size_t i = 0; i < 3; i++) {
+    for (size_t i = 0; i < 2; i++) {
       errno = 0;
       long r = mount(ms[i].src, ms[i].tgt, ms[i].fs, 0, NULL);
       pr_info("QEMU_INIT mount %s -> %s : ret=%ld errno=%d\n",

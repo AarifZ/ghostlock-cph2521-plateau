@@ -391,3 +391,16 @@ safe-store shape, confirm hostname landing in QEMU, then port to device.
 under TCG (its prints stop — use launcher/panic output for truth); keep
 -smp 2; no sched_yield in stamp spin; panic=-1 halts (no auto-exit) —
 probe.py kills QEMU after its window.
+
+### SESSION 5 FINAL STATE (resume here):
+- devtmpfs mount removed (request_module deadlock w/ STATIC_USERMODEHELPER="")
+  → runs now complete cleanly end-to-end (launcher reaps exploit).
+- MAP-tag runs: 5/5 quiet completes — no panic, no stall → the consumer's
+  walk never read the tags. Next: verify the punch fires in QEMU at all
+  (consumer sched_setattr path / EDEADLK priming under TCG — check the
+  WRPI/CMP prints from launcher-class output, or make the consumer's
+  sched_setattr return value visible via a file the launcher cats).
+  If punch fires but walks exit instantly: QEMU dangling is DEAD-class
+  (timeout cleanup clears pi_blocked_on) → mirror Quest3 trigger tweaks
+  (WRPI timeout vs CMP timing) until live-class walks appear, then the
+  MAP panic gives the alignment and everything downstream is ready.
