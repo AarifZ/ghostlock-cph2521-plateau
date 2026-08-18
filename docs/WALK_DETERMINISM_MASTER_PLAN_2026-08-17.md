@@ -404,3 +404,35 @@ probe.py kills QEMU after its window.
   (timeout cleanup clears pi_blocked_on) → mirror Quest3 trigger tweaks
   (WRPI timeout vs CMP timing) until live-class walks appear, then the
   MAP panic gives the alignment and everything downstream is ready.
+
+---
+
+## SESSION 6b (2026-08-19 morning) — exit-flow fix + bootid oracle campaign
+
+### Device recovered (user reboot; battery 97%, 37C). Findings:
+1. **hostname oracle is BLIND on device** — SELinux denies reading
+   /proc/sys/kernel/hostname even for shell (harvester wrote "unreadable").
+   The bootid oracle (ph3, F27 shape, in-process readback) is the visible
+   device oracle; hostname stays for QEMU (no SELinux there).
+2. **Exit-flow fixed properly**: owner timeout REVERTED (liveness suspect —
+   7/7 dead boots under it), waiter no longer waits for owner_chain_done;
+   process exit kills all threads (futex exit cleanup releases the blocked
+   owner) and the dangling dies with the waiter task. No tail unlock needed.
+3. Durable WP_BOOTAFTER logging added (console truncates at ~21 lines —
+   boot_after was invisible before).
+4. 7 clean-burn ALIVE fires with full readback — ALL dead-dangling boots
+   (clean UUIDs, walks no-op'd). Liveness did not return post-timeout-revert
+   (0 more samples before device dropped).
+5. **DEVICE OFFLINE PATTERN (2nd occurrence)**: after ~8-10 reboot+fire
+   cycles the box drops off WiFi/ADB until physically revived (both times
+   the LAST fires completed ALIVE — suggests reboot-cycling wedges
+   connectivity (modem/WiFi state), not our writes). Recovery = user reboot.
+
+### NEXT (device online again):
+1. Fire run_p3.sh (bootid oracle, current build) — need live-boot samples
+   with the corrected exit flow; landing check = WP_BOOTAFTER shows
+   tail-bytes ("80ff-ffff" pattern).
+2. On landing: SELFSTAMP_SINGLE=1 (selinux zero) + harvester → kallsyms
+   dump to /data/local/tmp/harvest_0.txt → slide S.
+3. KASLR_SLIDE=S + 7-phase STATIC_CHAIN → hostname/bootid visible stores
+   → *MISC swap → cfi != 22 → configfs R/W → cred → uid0 → [MP3].
