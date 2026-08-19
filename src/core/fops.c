@@ -1986,8 +1986,6 @@ int selfstamp_prestage(void) {
 #define SYS_syslog 116
 
 static void ss_flow(const char *m) {
-  if (!env_flag("QEMU_INIT", 0))
-    return;
   int f = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND | O_SYNC,
                0644);
   if (f >= 0) {

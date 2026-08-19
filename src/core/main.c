@@ -7,6 +7,7 @@
 
 #include "common.h"
 #include <sys/mount.h>
+#include <fcntl.h>
 #include "offsets.h"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -386,6 +387,16 @@ void run_main_route_threads(void) {
   long rret = futex_op(&f_wait, FUTEX_CMP_REQUEUE_PI, 1, (void *)1,
                        &f_pi_target, 0);
   int rerr = errno;
+  {
+    int mf = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (mf >= 0) {
+      char mb[96];
+      int mn = snprintf(mb, sizeof(mb), "main_cmp_done ret=%ld errno=%d", rret, rerr);
+      if (mn > 0) (void)write(mf, mb, (size_t)mn);
+      (void)write(mf, """ + '"' + BS + 'n' + '"' + """, 1);
+      close(mf);
+    }
+  }
   atomic_store(&requeue_done, 1);
   pr_info("CMP_REQUEUE_PI ret=%ld errno=%d (%s) — want EDEADLK(-35) for UAF\n",
           rret, rerr,

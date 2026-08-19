@@ -436,3 +436,44 @@ probe.py kills QEMU after its window.
    dump to /data/local/tmp/harvest_0.txt → slide S.
 3. KASLR_SLIDE=S + 7-phase STATIC_CHAIN → hostname/bootid visible stores
    → *MISC swap → cfi != 22 → configfs R/W → cred → uid0 → [MP3].
+
+---
+
+## SESSION 7 (2026-08-19, QEMU + lldb) — THE ALIGNMENT + TARGET MYSTERIES SOLVED
+
+### Instrument: QEMU gdbstub + NDK lldb (lldb.cmd with PATH to its dir; batch
+### scripts dumpN.gdb in qemu_cph/). Conditional breakpoints work.
+
+### FINDINGS (device-grade significance):
+1. **CONFIG_VMAP_STACK=y confirmed** (IKCFG): kernel stacks are vmalloc'd at
+   0xffffffc00bxxxxxx. Task structs are slab (linear map). Earlier
+   "no-vmap-stack" conclusion reversed — both observations were correct.
+2. **The walk's crash at +0x188 (lock=NULL trylock) is a task whose dangling
+   pi_blocked_on points at ANOTHER thread's stack** — a slab_drain clone (comm
+   "exploit") self-walking its stale dangling via its own setpriority. It is
+   NOT our consumer's punch. Boot-noise walks dominated all our QEMU traces.
+3. **The dangling DOES point at our waiter-thread's stack with the stamp**:
+   dump7 caught dangling=0xffffffc00b013c30 with MAP tags (0xdead...c5/c7) at
+   0xb0138b0/d8 — same 16K vmap stack, **920 bytes (115 words) BELOW the
+   waiter**. The fdset lands at stack_fds=0xb013898; waiter at +0x398.
+   TRUE alignment delta = +115 words — OUT OF REACH of nfds=320 fdsets (30
+   words) AND beyond any word shift. The select-frame and futex-frame in THIS
+   kernel are 920B apart — the aristotle shift model does not transfer.
+4. **The task holding the useful dangling is NOT the punched tid**: the
+   consumer punches waiter_tid whose own pi_blocked_on is clean; the dangling
+   landed on a clone (or main). Nobody walks the right task except by chance.
+   → explains dead-boot silence ON DEVICE TOO.
+
+### THE FIX (next build — "punch-all"):
+- Consumer enumerates /proc/self/task/* and sched_setattr's EVERY tid each
+  punch round — whichever task holds the dangling gets walked.
+- The stamp already sits on the waiter's stack — but 920B below the waiter
+  field positions. To land the store, the stamp WORDS must move +115 words:
+  with fdsets capped at 30 words this needs a DIFFERENT syscall whose copy
+  lands 920B deeper, OR a waiter-side call with a deeper frame before select
+  (e.g., call select via a wrapper chain of 115*8=920B of extra stack —
+  practically: a recursive function consuming exactly 920B then select()).
+  The recursive-pad approach needs no kernel knowledge and is testable in
+  QEMU with the tag dump in ONE run.
+
+### Evening device session: punch-all build + (if QEMU confirms) pad-920 stamp.
