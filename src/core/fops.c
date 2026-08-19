@@ -2095,8 +2095,9 @@ void selfstamp_route(void) {
     {
       struct timespec tq0;
       clock_gettime(CLOCK_MONOTONIC, &tq0);
-      {
-        /* MCAST dual-stamp: 260B buffer, waiter-word tags at offset 0x34
+      if (env_flag("MCAST_STAMP", 0)) {
+        /* MCAST dual-stamp (opt-in — device A2/A3 crashes when it replaces
+        * select coverage; QEMU measurement tool): 260B buffer, +0x34 tags
          * (Quest3 exp32 geometry) with 0xCAFE0000_0000_00ii family — lldb
          * dump decides which stamp family (DEAD=select / CAFE=MCAST) lands
          * on the waiter fields. */
