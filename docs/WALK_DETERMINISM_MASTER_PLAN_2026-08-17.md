@@ -477,3 +477,33 @@ probe.py kills QEMU after its window.
   QEMU with the tag dump in ONE run.
 
 ### Evening device session: punch-all build + (if QEMU confirms) pad-920 stamp.
+
+---
+## FINAL STATE (2026-08-19 night) — reboot sessions STOPPED by user call
+
+### Honest verdict: no selinux=0, no bootid/hand landing on device, no uid0.
+Tonight: ~20 fires across 3 regression variants (punch-all / MCAST / ungated
+ss_flow — each diagnosed from durable logs and reverted); the corrected binary
+(functionally == the morning walk-completing build) then went 0/4 — the
+morning's 4/5 walk-completions did not reproduce. Live-boot walks crash at
+pre_setattr more often than not; the store has not visibly landed since F27.
+
+### What IS banked (real, QEMU-verified):
+- Walk+stamp mechanics survive end-to-end in QEMU (punch ret=0, no panic)
+- Full crash taxonomy at instruction level; VMAP stacks; clone-noise walks
+- The QEMU harness (boots the real kernel, lldb, tag-mapper, sweeps)
+- consumer_success spin timing; the "no syscalls from the waiter between
+  punch and walk-return" rule (three separate regressions confirmed it)
+
+### The two things that would change the game (next session, minimal fires):
+1. QEMU completion capture: the clean run never finished inside the time
+   window (TCG slowness + harvester sleeps). One long window run with
+   FLOW_LOG=1 shows whether the STORE lands in QEMU — if yes, the primitive
+   is proven and the device gap is environment; if no, the walk is exiting
+   at a guard and the guard can be found in the same run.
+2. The 920B gap: if the QEMU store does NOT land, the fdset still cannot
+   reach the waiter fields (gap analysis in PAD_ANALYSIS.md) — then the
+   stamp vehicle must change (sigreturn/FPSIMD or MCAST interleaved INTO
+   the select loop, not replacing it).
+
+No more device reboots without one of those two answers in hand.
