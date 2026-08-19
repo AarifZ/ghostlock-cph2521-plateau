@@ -507,3 +507,27 @@ pre_setattr more often than not; the store has not visibly landed since F27.
    the select loop, not replacing it).
 
 No more device reboots without one of those two answers in hand.
+
+## THE DECISIVE QEMU DUMP (final, lldb at walk entry, our waiter's walk)
+
+Waiter fields at walk time (dangling target, VMAP stack):
+  pc=1 (BLACK leaf) right=0 left=0 | task=self lock=REAL slab rt_mutex prio=120
+
+=> The dangling points at the CLEAN, REAL rt_mutex_waiter residue.
+=> The select stamp NEVER covered these fields (920B gap — confirmed live).
+=> The MCAST stamp ALSO never reached them (scan found zero CAFE tags).
+=> "Walks completed" = the walk reading the REAL waiter and exiting at the
+   waiter_equal guard (prio 120 == 120). "Crashes" = when the consumer's
+   nice made prio unequal, the walk proceeded on REAL fields and corrupted
+   the REAL rt_mutex state. No stamp was ever read. No store ever fired.
+
+## THE STAMP VEHICLE ANSWER: rt_sigreturn / FPSIMD (the Samsung 5.15 route)
+
+Signal frames go DEEPER than syscall frames (full delivery path). The
+FPSIMD state in a sigframe = 32 × 16B = 512B of attacker-controlled data
+(the thread's FP registers) written to the kernel stack at that depth.
+The waiter thread can: install a handler → load FP regs with the fake
+waiter image → self-signal → the sigframe write covers the residue.
+This is the documented working approach for 5.15 (Root-My-Galaxy PR196).
+Implementation for 5.10.236 CPH2521 = next session (sigaction + FP load +
+signal self-send interleaved with the select spin).
