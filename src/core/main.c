@@ -285,7 +285,7 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         if (env_flag("MODE4_CFI_ON_PUNCH", 0) || env_flag("MODE4_PROOF", 0))
           durable_proof_log("pre_setattr");
         long sched_ret;
-        if (env_flag("PUNCH_ALL_TIDS", 1)) {
+        if (env_flag("PUNCH_ALL_TIDS", 0)) {
           /* The EDEADLK can leave the dangling on ANY task of the process
            * (QEMU lldb-proven: a clone held it while the waiter's own field
            * was clean). sched_setattr EVERY tid; the holder gets walked. */
