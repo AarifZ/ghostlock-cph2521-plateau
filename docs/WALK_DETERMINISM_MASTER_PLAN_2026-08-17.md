@@ -531,3 +531,38 @@ waiter image → self-signal → the sigframe write covers the residue.
 This is the documented working approach for 5.15 (Root-My-Galaxy PR196).
 Implementation for 5.10.236 CPH2521 = next session (sigaction + FP load +
 signal self-send interleaved with the select spin).
+
+## FPSIMD STAMP TEST RESULT (QEMU, 2026-08-20)
+FPSIMD self-signal stamp (FEED tags in v0-v7, 2000 signal iterations):
+ZERO FEED tags found near the waiter residue. The self-signal approach
+writes the sigframe to USERSPACE — the kernel stack during signal delivery
+holds handler frames, not the FP register content. The FP data never lands
+on the kernel stack at any depth.
+
+The Samsung 5.15 approach uses rt_sigreturn (not self-signal): the
+RETURN path copies the crafted user sigframe through kernel frames.
+That is a different mechanism, untested here.
+
+## STAMP VEHICLE SCORECARD (all QEMU-verified against the real residue):
+| Vehicle | Result |
+|---------|--------|
+| select fdsets (nfds=320) | 920B too shallow — STRUCTURAL |
+| MCAST setsockopt (260B) | zero tags near waiter |
+| FPSIMD self-signal | zero tags (data goes to userspace sigframe) |
+| rt_sigreturn | UNTESTED (Samsung route — kernel copies user frame) |
+
+## THE FUNDAMENTAL PROBLEM:
+The rt_waiter residue sits at the depth of futex_wait_requeue_pi's frame
+chain (sys_futex→do_futex→futex_wait→...→futex_wait_requeue_pi). No other
+syscall has the same frame depth on this kernel build. The aristotle shift
+model assumed select/futex frame parity — true on THEIR 5.10.136 build,
+false on CPH2521's 5.10.236 (different frame sizes → 920B offset).
+
+## THE REMAINING VIABLE PATHS:
+1. rt_sigreturn: the kernel reads the crafted sigframe from userspace
+   through its own deep frame chain — depth untested but the Samsung
+   exploit proves it works on 5.15 with a similar gap.
+2. Direct kernel write to task->pi_blocked_on (change WHAT the dangling
+   points at instead of stamping the residue) — needs a write primitive,
+   circular.
+3. A different CVE for the initial write, then this CVE for escalation.

