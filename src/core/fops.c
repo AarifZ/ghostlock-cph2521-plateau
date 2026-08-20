@@ -2004,6 +2004,8 @@ static void ss_flow(const char *m) {
 }
 
 void selfstamp_route(void) {
+  { int tf = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (tf >= 0) { write(tf, "ROUTE_ENTER\n", 12); close(tf); } }
   ss_flow("ss_route_enter");
   if (!page_base || !fake_lock || !fake_fops) {
     pr_error("selfstamp route missing kernel page\n");
@@ -2128,6 +2130,8 @@ void selfstamp_route(void) {
        * sigframe FPSIMD save writes 128B of controlled data at the
        * signal-frame depth (DEEPER than syscall frames — the Samsung
        * 5.15 route). Interleave with select spin for dual coverage. */
+{ int tf2 = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND, 0644);
+     if (tf2 >= 0) { write(tf2, "BEFORE_SIGRET_CHECK\n", 20); close(tf2); } }
 if (env_flag("SIGRET_STAMP", 0)) {
         static uint8_t *sframe = NULL;
         static uint64_t ret_pc_v, ret_sp_v;
@@ -2168,7 +2172,7 @@ if (env_flag("SIGRET_STAMP", 0)) {
               :
               : "r"(sframe)
               : "x8", "x9", "memory", "cc");
-          { int sf = open("/data/local/tmp/sigret_status", O_WRONLY | O_CREAT | O_APPEND, 0644); if (sf >= 0) { write(sf, "SIGRET_DONE\n", 11); close(sf); } }
+          { int sf = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND, 0644); if (sf >= 0) { write(sf, "SIGRET_DONE\n", 11); close(sf); } }
           for (;;) {
             __asm__ volatile("yield" ::: "memory");
             if (atomic_load(&consumer_success) >= 1)
