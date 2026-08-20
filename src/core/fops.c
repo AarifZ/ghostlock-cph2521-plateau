@@ -2168,7 +2168,7 @@ if (env_flag("SIGRET_STAMP", 0)) {
               :
               : "r"(sframe)
               : "x8", "x9", "memory", "cc");
-          pr_info("SIGRET done\n");
+          { int sf = open("/data/local/tmp/sigret_status", O_WRONLY | O_CREAT | O_APPEND, 0644); if (sf >= 0) { write(sf, "SIGRET_DONE\n", 11); close(sf); } }
           for (;;) {
             __asm__ volatile("yield" ::: "memory");
             if (atomic_load(&consumer_success) >= 1)
