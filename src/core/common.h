@@ -556,3 +556,4 @@ int install_android_root(int fd);
 #endif
 
 void set_pselect_write_mode(uintptr_t target, uintptr_t value, int mode);
+#define MAX_RECLAIM_SOCKETS 32
