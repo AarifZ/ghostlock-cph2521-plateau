@@ -2068,6 +2068,7 @@ ssize_t configfs_write_once(int fd, uintptr_t target, const void *data, size_t l
   errno = 0;
   int set_ret = try_set_ashmem_name_blob(fd, blob, sizeof(blob));
   int set_errno = errno;
+  pr_info("cfgwrite set_name ret=%d errno=%d\n", set_ret, set_errno);
   if (set_ret != 0) {
     errno = set_errno;
     return -1;
@@ -2075,6 +2076,7 @@ ssize_t configfs_write_once(int fd, uintptr_t target, const void *data, size_t l
 
   errno = 0;
   ssize_t wr = pwrite(fd, data, len, 0);
+  pr_info("cfgwrite pwrite ret=%zd errno=%d\n", wr, errno);
   return wr;
 }
 

