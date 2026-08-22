@@ -406,6 +406,7 @@ void log_startup_context(void);
 void log_slide_child_context(void);
 void disable_rseq_for_thread(void);
 void init_p0_profile(void);
+int iouring_ring_reclaim_one(unsigned char *payload, size_t plen, int do_register);
 extern uint64_t p0_kernel_phys_load;
 extern uintptr_t g_init_cred_image;
 struct kernel_offsets;

