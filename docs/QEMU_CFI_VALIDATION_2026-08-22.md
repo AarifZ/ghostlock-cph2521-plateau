@@ -137,3 +137,24 @@ write — same signature as WPS1. Two identical crashes at the
 too (stray qword + tree walk into a foreign page). Placement is the
 blocker on BOTH platforms; stop device fires until the QEMU trace
 (now working) pins base's SLUB state and its release path.
+
+## Session 3 (2026-08-23 early AM) — interleaved reclaim + device rolls
+
+- PREPARE_DEADLINE_S env (smp8 TCG needs >180s per attempt).
+- INTERLEAVED RECLAIM: kill micro-batches (KILL_BATCH) with immediate
+  ring claims (RING_BATCH) — page that empties is claimed within
+  batch-microseconds at the PCP head instead of sitting stealable in the
+  buddy for seconds. smp8 win trajectory: 0/4 → 1/4 (KB=4/RB=8) →
+  2/4 (KB=2/RB=8/CYCLES=4). Remaining smp8 miss class: flags=0x8080
+  (base re-claimed by the mm cache as a fresh slab — next cycle's forks
+  beat the rings).
+- Device rolls (interleaved build, MODE4_RETRY=5):
+  JC12 softboot after 2 SURVIVED retry attempts (errno22 no-swap each);
+  JC13 swap landed + bad table (crash at open); JC14 ALIVE with
+  survived attempts (errno22); JC15 not fired (device rebooting).
+  vs previous session: 0/8 boots survived a miss → now most boots
+  survive misses and retry in-place.
+- Next: target the 0x8080 class (frees that the NEXT cycle's forks
+  re-claim — perhaps fork holders BEFORE the kills of the previous
+  cycle freed, i.e., single continuous holder pool with rolling
+  kill/claim), tune smp8 to ≥3/4, then device.
