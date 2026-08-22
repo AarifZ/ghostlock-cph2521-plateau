@@ -31,7 +31,7 @@ $Defs = @(
   '-DTARGET_CONFIG_H=\"target.h\"',
   '-DGHOSTLOCK_KERNEL_5_10=1',
   # Measured on device: shift=0 softboots; shift=-2 survives pselect + CFI probe
-  '-DPSELECT_WAITER_WORD_SHIFT=(-2)',
+  '-DPSELECT_WAITER_WORD_SHIFT=(0)',
   '-DKIMAGE_TEXT_BASE=0xffffffc008000000ULL',
   # CPH2521 mm_struct from mm_cache_init (NOT Quest 0x400)
   '-DMM_STRUCT_SZ=0x3c0',
