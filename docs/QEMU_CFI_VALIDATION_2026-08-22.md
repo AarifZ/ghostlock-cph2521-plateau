@@ -84,3 +84,29 @@ mmdrop) before more device cycles.
   RSP: read/write mem, Z0 breakpoints, p-reg reads).
 - Static guest build: `build_qemu_static.ps1` (-static -ldl; dynamic binary
   can't exec in the initramfs).
+
+## Afternoon addendum — placement forensics (QEMU, kscan tooling)
+
+`qemu_cph/kscan.py` (RSP scan for the per-run `fake_w0` marker = every payload
+copy's lock signature) gives a per-run payload page map:
+
+- No churn, RECLAIM_SENDS=24 → **12 order-0 payload pages** bracketing base
+  (base−0x4000 and base−0x8000 adjacent!) but **never base itself**;
+  base+0x100 stays mm residue in every run.
+- Disassembly of `skb_page_frag_refill`: alloc call has `mov w2, wzr` —
+  **order-0**. The "order-2 LIFO freelist" theory is dead; frags are 4K
+  chunks. The −0xE80 geometry packs lock@+0 / table@+0x100 / W0@+0x300 /
+  task@+0x400 into the first 4K, so order-0 claims align when they happen.
+- Root cause: the emptied mm slab page **never leaves SLUB** (active cpu
+  slab or per-cpu partial; cpu_partial≈13 for 0x3c0 objects) → never
+  reaches the buddy → no order-0 storm can split it.
+- MM_CHURN v1 (256 post-close holder forks+kills): did NOT free base —
+  the spill discards displaced the frag claims instead. Needs the correct
+  sequence: exhaust base's freelist to force a deactivate while empty,
+  then spill with base as the oldest chain entry (discarded last =
+  freshest = first split by the order-0 storm).
+- SNDBUF_KB env added (reclaim socket sndbuf).
+
+Next session: iterate the choreography in kscan until
+`BASE IS PAYLOAD: True`, then device: WPROOF_SPRAY oracle, then
+MODE4_JOINCHANG (post-swap chain already QEMU-proven).
