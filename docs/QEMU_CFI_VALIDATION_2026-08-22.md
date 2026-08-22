@@ -127,3 +127,13 @@ MODE4_JOINCHANG (post-swap chain already QEMU-proven).
   produced 53k stops in 70s.** Next session: trace __mmdrop + discard_slab
   + frag-refill against the armed base to see exactly which frozen/parked
   page base is and when pages actually discard — then target its release.
+
+## Device oracle fire (WPS2, evening)
+
+MODE4_WRITE_PROOF+WPROOF_SPRAY with the full new choreography (COPYA,
+64 sends / 8 sockets, reordered closes): SOFTBOOT mid-walk at the marker
+write — same signature as WPS1. Two identical crashes at the
+`*(fake_fops+0x90)` write moment ⇒ heap placement misses on real hardware
+too (stray qword + tree walk into a foreign page). Placement is the
+blocker on BOTH platforms; stop device fires until the QEMU trace
+(now working) pins base's SLUB state and its release path.
