@@ -110,3 +110,20 @@ copy's lock signature) gives a per-run payload page map:
 Next session: iterate the choreography in kscan until
 `BASE IS PAYLOAD: True`, then device: WPROOF_SPRAY oracle, then
 MODE4_JOINCHANG (post-swap chain already QEMU-proven).
+
+## Session 2 addendum — storm + copy-A + the breakpoint fix
+
+- COPYA (default on): one memcpy duplicates the frag-region structure
+  cluster into skb_buf[0..0x500) — kmalloc-4096 linear heads are also
+  order-0 claims, so ANY linear/frag object landing at base carries the
+  geometry (values identical: lock/table/W0/task are base-derived).
+- 512-send storm (SO_SNDBUFFORCE 32MB + 8 sockets): 164 pages claimed,
+  consecutive runs of adjacent 4K pages visible in scans — base still
+  unclaimed; SLUB chain stays 13(13)/node 0/slabs 47 through everything.
+- Close-order reorder (memfd_leak FIRST, then all pre/post/spray) +
+  +6 prepare-kill spill trigger: chain count unmoved — trigger racy.
+- **Breakpoints were never broken: the QEMU gdb port 1234 TIME_WAIT made
+  launches silently fail. With a fresh port, a single __mmdrop Z0 bp
+  produced 53k stops in 70s.** Next session: trace __mmdrop + discard_slab
+  + frag-refill against the armed base to see exactly which frozen/parked
+  page base is and when pages actually discard — then target its release.
