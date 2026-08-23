@@ -1426,9 +1426,9 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * The main-tree erase (rt_mutex_dequeue from the walk) does
            * child->__rb_parent_color = pc -> *TARGET = VALUE.
            * Default: VALUE=0 (write zero), TARGET=0 (no write). */
-          {0, env_flag("MODE4_SLIDE", 0) ? tree_pc : 0, "tree_pc"},
+          {0, tree_pc, "tree_pc"},
           {1, 0, "tree_right"},
-          {2, env_flag("MODE4_SLIDE", 0) ? tree_l : 0, "tree_left"},
+          {2, tree_l, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
           /* DATAONLY: pi_left = write target. The stack pi-tree erase
