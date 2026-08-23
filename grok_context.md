@@ -2,11 +2,12 @@
 
 **Purpose:** Full context for a collaborating agent (stronger coding/RE focus) working **with** Grok Build on this repo.  
 **Author of this file:** Grok 4.5 (xAI Build TUI session)  
-**Date:** 2026-08-23 (evening) — pickup rewritten  
+**Date:** 2026-08-24 01:00 — ColorOS 15s warning + uid0 x28 checkpoint  
 **Repo workspace:** `C:\Users\LENOVO\Desktop\HILY installer\Oppo\ghostlock-oneplus`  
-**Active branch:** `research-master` (Z4 SELinux park)
+**Active branch:** `research-master` (Z15 park + uid0 x28 path uncommitted-at-handoff)
 
-> **Read first:** `docs/Z4_SELINUX_PARK_2026-08-23.md` + `docs/NEXT_SESSION_2026-08-23.md`. Issue #31: this file §3b. GLM-era: `docs/GLM_HANDOFF_PICKUP_2026-08-23.md`.  
+> **Read first:** `docs/NEXT_SESSION_2026-08-24.md` + `docs/Z29_UID0_CHECKPOINT_2026-08-24.md`. Then Z15 park. Issue #31: this file §3b.  
+> ColorOS dialog (15s restart after park) is **userspace**, not KP — screenshot in `logs/aarif_pull/Z29_coloros_security_warning.jpg`.  
 > **Do not** thrash MISC-only-left or dual-PI without a new theory.  
 > **Do not** auto-reboot loops — phone overheated from a bad retry script.  
 > **Issue #31:** https://github.com/JoinChang/ghostlock-oneplus/issues/31 — JoinChang replied 2026-08-21 (see §3b).
@@ -19,8 +20,9 @@
 |------|--------|
 | GhostLock (CVE-2026-43499) on **OPPO Reno 10 Pro+ CPH2521** | In progress |
 | Kernel `5.10.236-android12-9-o-g74d132f4467a`, locked BL | Confirmed |
-| Product win: SELinux Permissive park → cred → **uid0** | **Park yes (Z4). uid0 not yet.** |
-| Research win: UAF + AAW + **NULL write to `selinux_enforcing` ALIVE** | **Yes (Z4 2026-08-23)** |
+| Product win: SELinux Permissive park → cred → **uid0** | **Park yes (Z15 PLAIN-STORE). uid0 not yet.** |
+| Research win: UAF + AAW + **PLAIN-STORE `selinux_state` ALIVE** | **Yes (Z15; Z4 NULL was delayed ColorOS death)** |
+| x28 PMU leak = `task_struct` (comm canary Z26) | **Yes. `*(+0x780)=init_cred` lives; uid still 2000** |
 
 **Branch policy (user):**
 - Work only on **`research-master`** until plateau is broken or a merge-worthy jump.
@@ -35,7 +37,8 @@
 | Item | Value |
 |------|--------|
 | Device | CPH2521 / OP56D3L1 |
-| Network ADB | `192.168.1.108:5555` via **Shizuku** |
+| Network ADB | `192.168.1.108:5555` via **Shizuku** 13.6 |
+| USB | `596666e9` (use after ColorOS 15s reboot when 5555 is dead) |
 | Host adb | WinGet: `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe` |
 | **Do not use** | Desktop `platform-tools` adb (broken/silent) |
 | USB thrash | **Banned** — kill/start-server + manual replug only |

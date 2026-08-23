@@ -1,11 +1,13 @@
 # Next session pickup — CPH2521 GhostLock
 
+**SUPERSEDED 2026-08-24.** Read `docs/NEXT_SESSION_2026-08-24.md` and `docs/Z29_UID0_CHECKPOINT_2026-08-24.md` first.
+
 **When:** after **Z14 BSS-lock park ALIVE** (2026-08-23).  
 **Workspace:** `C:\Users\LENOVO\Desktop\HILY installer\Oppo\ghostlock-oneplus`  
 **Branch:** `research-master`  
 **Policy:** stay on `research-master`. WiFi ADB `192.168.1.108:5555` (Shizuku). USB OK to fire/classify. After softboot, force-stop Shizuku if 5555 is dead. **Do not second GhostLock process on a park boot (Z5).**
 
-**Read first:** this file, then `docs/Z4_SELINUX_PARK_2026-08-23.md`.
+**Read first:** `docs/NEXT_SESSION_2026-08-24.md`, then this file, then `docs/Z4_SELINUX_PARK_2026-08-23.md`.
 
 ---
 

