@@ -417,6 +417,7 @@ extern uintptr_t g_init_cred_image;
 struct kernel_offsets;
 extern const struct kernel_offsets *active_offsets;
 int env_flag(const char *name, int def);
+unsigned long env_ulong(const char *name, unsigned long def);
 int env_int_range(const char *name, int def, int min, int max);
 long futex_op(
     uint32_t *uaddr, int op, uint32_t val,

