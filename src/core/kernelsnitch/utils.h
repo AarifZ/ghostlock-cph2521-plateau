@@ -138,12 +138,76 @@
 #define PAGE_SIZE 4096
 #endif
 
+static inline unsigned long cpuset_highest_allowed(void)
+{
+    unsigned long hi = 0;
+    FILE *f = fopen("/proc/self/status", "r");
+    if (f) {
+        char l[256];
+        while (fgets(l, sizeof(l), f)) {
+            if (strncmp(l, "Cpus_allowed_list:", 18) == 0) {
+                char *p = l + 18;
+                unsigned long a, b;
+                while (*p) {
+                    while (*p == 32 || *p == 9) p++;
+                    if (!*p) break;
+                    a = strtoul(p, &p, 10);
+                    b = a;
+                    if (*p == 45) b = strtoul(p + 1, &p, 10);
+                    if (b > hi) hi = b;
+                    while (*p && *p != 32 && *p != 44) p++;
+                }
+                break;
+            }
+        }
+        fclose(f);
+    }
+    /* hotplug: the prime core gets OFFLINED when the system idles
+     * (exactly when QUIESCE waits). Clamp to the online set. */
+    FILE *o = fopen("/sys/devices/system/cpu/online", "r");
+    if (o) {
+        char l[128];
+        if (fgets(l, sizeof(l), o)) {
+            char *p = l;
+            unsigned long a, b, hon = 0;
+            while (*p) {
+                while (*p == 32 || *p == 9) p++;
+                if (!*p) break;
+                a = strtoul(p, &p, 10);
+                b = a;
+                if (*p == 45) b = strtoul(p + 1, &p, 10);
+                if (b > hon) hon = b;
+                while (*p && *p != 32 && *p != 44) p++;
+            }
+            if (hon > 0 && hon < hi)
+                hi = hon;
+        }
+        fclose(o);
+    }
+    return hi;
+}
+
+/* Android demotes long-running background procs to a restricted cpuset
+ * (e.g. 0-3) mid-run; pinning to a demoted-out core gives EINVAL. On
+ * failure re-read the CURRENT allowed set and retry with its highest
+ * core. Updates g_core_sel so later pins reuse the valid core. */
 static inline void pin_to_core(size_t core)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core, &cpuset);
-    SYSCHK(sched_setaffinity(0, sizeof(cpu_set_t), &cpuset));
+    if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) != 0) {
+        extern unsigned long g_core_sel;
+        unsigned long hi = cpuset_highest_allowed();
+        if (hi > 0) {
+            g_core_sel = hi;
+            CPU_ZERO(&cpuset);
+            CPU_SET(hi, &cpuset);
+            SYSCHK(sched_setaffinity(0, sizeof(cpu_set_t), &cpuset));
+        } else {
+            SYSCHK(-1);
+        }
+    }
 }
 
 static inline void reset_cpu_pin(void)
