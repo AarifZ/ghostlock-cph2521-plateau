@@ -194,20 +194,31 @@ static inline unsigned long cpuset_highest_allowed(void)
 static inline void pin_to_core(size_t core)
 {
     cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(core, &cpuset);
-    if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) != 0) {
-        extern unsigned long g_core_sel;
-        unsigned long hi = cpuset_highest_allowed();
-        if (hi > 0) {
-            g_core_sel = hi;
-            CPU_ZERO(&cpuset);
-            CPU_SET(hi, &cpuset);
-            SYSCHK(sched_setaffinity(0, sizeof(cpu_set_t), &cpuset));
-        } else {
-            SYSCHK(-1);
+    /* Device ground truth (afftest): the cpuset bounces us between
+     * 0-7 and single cores second-to-second while the prime hotplugs
+     * on/off — a single retry still races. Try every core from the
+     * requested one down to 0; first success wins. */
+    extern unsigned long g_core_sel;
+    if ((unsigned long)core > g_core_sel && core > 0)
+        ;
+    for (long c = (long)core; c >= 0; c--) {
+        CPU_ZERO(&cpuset);
+        CPU_SET((size_t)c, &cpuset);
+        if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == 0) {
+            g_core_sel = (unsigned long)c;
+            return;
         }
     }
+    unsigned long hi = cpuset_highest_allowed();
+    for (long c = (long)hi; c >= 0; c--) {
+        CPU_ZERO(&cpuset);
+        CPU_SET((size_t)c, &cpuset);
+        if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == 0) {
+            g_core_sel = (unsigned long)c;
+            return;
+        }
+    }
+    SYSCHK(-1);
 }
 
 static inline void reset_cpu_pin(void)
