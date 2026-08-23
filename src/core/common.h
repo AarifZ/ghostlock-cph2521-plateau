@@ -71,6 +71,7 @@
  * device's prime core (usually the highest cpuN) — little cores host
  * most background daemons whose mm-cache churn buries our reclaim. */
 extern unsigned long g_core_sel;
+void cpu_hop_claims(unsigned char *payload, size_t plen, int per_cpu);
 #ifndef KSNITCH_COLLISIONS
 #define KSNITCH_COLLISIONS 4
 #endif

