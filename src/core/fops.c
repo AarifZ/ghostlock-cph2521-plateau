@@ -1831,7 +1831,11 @@ void do_pselect_fake_lock_route(void) {
         pr_info("pselect route probing cfi attempt=%d ret=%d expected=%d\n",
                 route_attempt, ret, PSELECT_EXPECTED_READY);
       }
-      if (pselect_custom_write_enabled()) {
+      if (env_flag("MODE4_SWAP_NOCFI", 0)) {
+        /* Bisect: swap landed, deliberately never open ashmem. */
+        pr_info("SWAP_NOCFI: skipping post-walk cfi probe\n");
+        route_verified = 1;
+      } else if (pselect_custom_write_enabled()) {
         cfi_last_step = 0;
         cfi_last_errno = 0;
         route_verified = 1;
