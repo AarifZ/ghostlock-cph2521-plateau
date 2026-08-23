@@ -1,6 +1,8 @@
 #include "common.h"
 #include "runtime_struct_offsets.h"
 #include "kernelsnitch/kernelsnitch.h"
+
+unsigned long g_core_sel = 0;
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <arpa/inet.h>
@@ -611,7 +613,7 @@ pid_t clone_child(void) {
     if (getppid() == 1) {
       _exit(0);
     }
-    pin_to_core(CORE);
+    pin_to_core(g_core_sel);
     for (;;) {
       pause();
     }
@@ -1847,7 +1849,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   int reclaim_sends =
       env_int_range("RECLAIM_SENDS", SKB_RECLAIM_SENDS, 1, 1024);
 
-  pin_to_core(CORE);
+  pin_to_core(g_core_sel);
   sched_yield();
   sched_yield();
   sched_yield();

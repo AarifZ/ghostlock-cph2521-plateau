@@ -67,6 +67,10 @@
 #define MM_PARTIALS 5
 #endif
 #define CORE 0
+/* Runtime-selected pin core (CORE_SEL env, default 0). Set to the
+ * device's prime core (usually the highest cpuN) — little cores host
+ * most background daemons whose mm-cache churn buries our reclaim. */
+extern unsigned long g_core_sel;
 #ifndef KSNITCH_COLLISIONS
 #define KSNITCH_COLLISIONS 4
 #endif

