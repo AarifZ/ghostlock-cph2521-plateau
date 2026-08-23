@@ -1200,9 +1200,11 @@ int run_exploit(int argc, char **argv) {
                     env_flag("MODE4_ARISTOTLE", 0) ||
                     env_flag("MODE4_SLIDE", 0) ||
                     env_flag("MODE4_SLIDE_ZERO", 0) ||
-                    env_flag("MODE4_SLIDE_VERIFY", 0);
+                    env_flag("MODE4_SLIDE_VERIFY", 0) ||
+                    env_flag("MODE4_SLIDE_SWAP", 0);
   if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0) ||
-      env_flag("MODE4_SLIDE_VERIFY", 0)) {
+      env_flag("MODE4_SLIDE_VERIFY", 0) ||
+      env_flag("MODE4_SLIDE_SWAP", 0)) {
     setenv("MODE4_WRITE_PROOF", "1", 0); /* stamp chain gate */
   }
   if (write_proof && umh_available && !force_w1) {
@@ -1218,6 +1220,8 @@ int run_exploit(int argc, char **argv) {
     const char *tgt_name = getenv("WRITE_PROOF_TARGET");
     if (env_flag("MODE4_SLIDE_ZERO", 0)) {
       tgt_name = "dataonly";
+    } else if (env_flag("MODE4_SLIDE_SWAP", 0)) {
+      tgt_name = "bootid"; /* target unused by stamp (stamp overrides) */
     } else if (!tgt_name || !tgt_name[0])
       tgt_name = "bootid";
     uintptr_t proof_tgt;
