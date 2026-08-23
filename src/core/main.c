@@ -518,6 +518,13 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
    * the swap missed.
    */
   if (mode == 4) {
+    if (env_flag("MODE4_SWAP_NOCFI", 0)) {
+      /* Bisect: swap lands, never open ashmem. Survives => our open is
+       * the killer; dies => system traffic through the swapped table. */
+      pr_info("mode4 SWAP_NOCFI: skipping cfi stage\n");
+      durable_stage("swap_nocfi_done");
+      return 1;
+    }
     pr_info("mode4 post-walk cfi stage (unconditional)\n");
     durable_proof_log("cfi_postwalk_enter");
     try_cfi_stage();
