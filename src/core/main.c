@@ -1199,8 +1199,10 @@ int run_exploit(int argc, char **argv) {
   int write_proof = env_flag("MODE4_WRITE_PROOF", 0) ||
                     env_flag("MODE4_ARISTOTLE", 0) ||
                     env_flag("MODE4_SLIDE", 0) ||
-                    env_flag("MODE4_SLIDE_ZERO", 0);
-  if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0)) {
+                    env_flag("MODE4_SLIDE_ZERO", 0) ||
+                    env_flag("MODE4_SLIDE_VERIFY", 0);
+  if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0) ||
+      env_flag("MODE4_SLIDE_VERIFY", 0)) {
     setenv("MODE4_WRITE_PROOF", "1", 0); /* stamp chain gate */
   }
   if (write_proof && umh_available && !force_w1) {

