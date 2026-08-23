@@ -1197,7 +1197,11 @@ int run_exploit(int argc, char **argv) {
    * Always MODE4_ONLY (never W1). Auto-enables aristotle only-left stamp in fops.
    */
   int write_proof = env_flag("MODE4_WRITE_PROOF", 0) ||
-                    env_flag("MODE4_ARISTOTLE", 0);
+                    env_flag("MODE4_ARISTOTLE", 0) ||
+                    env_flag("MODE4_SLIDE", 0);
+  if (env_flag("MODE4_SLIDE", 0)) {
+    setenv("MODE4_WRITE_PROOF", "1", 0); /* stamp chain gate */
+  }
   if (write_proof && umh_available && !force_w1) {
     char boot_before[80];
     char boot_after[80];

