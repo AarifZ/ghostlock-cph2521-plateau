@@ -2220,7 +2220,7 @@ void selfstamp_route(void) {
        * unlock's deboost walk reads our stamped words (not the raw
        * residue) and preserves the dangling for the consumer's walk. */
       select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &tv0);
-      futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+      futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
       durable_proof_log("ss_midstamp_unlock");
     }
     /*

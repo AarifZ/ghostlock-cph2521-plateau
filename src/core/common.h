@@ -276,9 +276,9 @@ int wproof_spray_verify(uint64_t marker_expect);
 
 extern int consumer_nice;
 extern atomic_int ss_measure_go;
-extern uint32_t f_wait;
-extern uint32_t f_pi_target;
-extern uint32_t f_pi_chain;
+extern uint32_t *f_wait;
+extern uint32_t *f_pi_target;
+extern uint32_t *f_pi_chain;
 extern atomic_int waiter_ready;
 extern atomic_int waiter_waiting;
 extern atomic_int owner_started;
