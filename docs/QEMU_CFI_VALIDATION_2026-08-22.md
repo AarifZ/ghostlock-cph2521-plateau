@@ -158,3 +158,21 @@ blocker on BOTH platforms; stop device fires until the QEMU trace
   re-claim — perhaps fork holders BEFORE the kills of the previous
   cycle freed, i.e., single continuous holder pool with rolling
   kill/claim), tune smp8 to ≥3/4, then device.
+
+## Session 4 (2026-08-23 morning) — CPU limiting investigation (user idea)
+
+- CORE_SEL env + QUIESCE_MAX loadavg gate shipped; afftest.c on-device
+  probe produced GROUND TRUTH: pin(7) can succeed then EINVAL 2s later
+  — Android demotes long-running background procs to restricted
+  cpusets; Cpus_allowed_list FLUCTUATES per-second (0-7 ↔ single core
+  "6"); prime core hotplugs online/offline at idle.
+- pin_to_core hardened: multi-try loop (requested core down to 0, then
+  highest-allowed down) — EINVAL aborts eliminated (JC30/31 ran the
+  full flow).
+- KEY RECON INSIGHT (untested): the cpuset bounce migrates us between
+  cpus mid-run — per-CPU SLUB partial lists and PCPs split the reclaim
+  choreography across multiple cpus' allocator state. QEMU-TCG keeps
+  us on one vcpu; the device bounces. THIS may be the real device-vs-
+  QEMU placement gap. Next: re-pin every batch / cpu-agnostic design.
+- JC30-31: full-flow runs (no EINVAL), 1 survived errno22 attempt,
+  walk-crash class persists; placement still 0 on device.
