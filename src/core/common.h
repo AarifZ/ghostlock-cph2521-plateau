@@ -264,6 +264,7 @@ extern uintptr_t fake_parent;
 extern uintptr_t fake_right;
 extern uintptr_t fake_left;
 extern uintptr_t fake_fops;
+extern uintptr_t g_cred_copy;
 extern uintptr_t binwrite_target;
 extern int pselect_custom_write;
 extern uintptr_t pselect_custom_target;

@@ -1,11 +1,63 @@
 # Next session pickup — CPH2521 GhostLock
 
-**When:** after **Z4 SELinux park** (2026-08-23).  
+**When:** after **Z14 BSS-lock park ALIVE** (2026-08-23).  
 **Workspace:** `C:\Users\LENOVO\Desktop\HILY installer\Oppo\ghostlock-oneplus`  
 **Branch:** `research-master`  
-**Policy:** stay on `research-master`. Do not merge `main`. Do not push `origin` (JoinChang, 403 as AarifZ). Plateau remote = `https://github.com/AarifZ/ghostlock-cph2521-plateau`.
+**Policy:** stay on `research-master`. WiFi ADB `192.168.1.108:5555` (Shizuku). USB OK to fire/classify. After softboot, force-stop Shizuku if 5555 is dead. **Do not second GhostLock process on a park boot (Z5).**
 
-**Read first:** `docs/Z4_SELINUX_PARK_2026-08-23.md`. Then this file. Issue #31: `grok_context.md` §3b.
+**Read first:** this file, then `docs/Z4_SELINUX_PARK_2026-08-23.md`.
+
+---
+
+## Z14 freeze (logged) — 8-byte NULL into `selinux_state`
+
+Park at ~40s lived. At **42.4s** dmesg: `before initial load_policy on unknown SID`. At **140s** `getpeercon() failed` → `OplusCfThread` SIGKILL `system_server` + zygote. Kernel+adbd stayed. Screen off. Logs: `logs/aarif_pull/Z14_freeze/`.
+
+`0x02A793C8` is **`&selinux_state`**, not a lone int. Leaf NULL stores 8 zeros: `initialized` (byte 3) dies. That is the delayed UI death, not a panic.
+
+**Z15 PLAIN-STORE park ALIVE and stayed up** (WiFi, boot `4a50ba6c-…`): `pselect ret=5`, `enforce=0`, **`id` still `u:r:shell:s0`**, zygote+system_server alive **>2 min** (Z14 died at +100s). Cred skipped: post-park spray did not set `g_cred_copy` because `pselect_custom_write` was cleared — **fixed in 190928** (`MODE4_UID0` always fills copy).
+
+**Next fire (fresh boot, one process):** same PLAIN-STORE park + UID0. Expect `cred_copy=ffffff80…` then W2. Do not second-process this Z15 boot.
+
+---
+
+## First fire was Z14 — already done. Next is cred-on-park in one process
+
+Z4/Z6 park **ALIVE** with spray `ffffff80 3955 0000` and `pselect ret=4`.  
+Z8 miss ALIVE `ret=0`.  
+**Z9–Z13** all died at **`pselect pre-select +2ms`** on P0 spray pages (`ffffff80 48xx/51xx/65xx/47xx`). Same leaf geometry. Cred never ran.
+
+**Theory:** skb reclaim often misses (`PACKET_RING errno=13`). Overlay `lock=task=sprayed page` then walks garbage → KP entering select. Living parks were the reclaim-hit lottery.
+
+**Fix in current `ghostlock-cph2521` (190480 bytes):** SLIDE_ZERO **skips spray**. Stack `task=P0(init_task)` `lock=P0(init_task+0x878)` (`pi_waiters` empty, `pi_top` NULL). Leaf still `parent=selinux-8` red, `left=right=0`.
+
+WiFi, unix-LF runner (not `fire_mode.ps1` CRLF):
+
+```powershell
+$ADB = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+$S = "192.168.1.108:5555"
+& $ADB connect $S
+# push ghostlock-cph2521 → /data/local/tmp/gl_uid0
+# env: MODE4_ONLY=1 MODE4_SLIDE_ZERO=1 DATAONLY_TARGET=0x2a793c8 MODE4_SWAP_NOCFI=1 MODE4_UID0=1
+```
+
+Success: `enforce_after=0`, `SLIDE_ZERO spray skipped`, place `task=ffffff802a40cf00` `lock=ffffff802a40d778`, **ALIVE**. Then same-process diag; cred only if P0 DRAM task leak (skip if `ffffff87…`).  
+Stop: punch SOFTBOOT at pre-select again.
+
+---
+
+## Scoreboard (uid0 attempt)
+
+| Tag | Page / overlay | pselect | Result |
+|-----|----------------|---------|--------|
+| **Z4/Z6** | spray `ffffff8039550000` | **ret=4** | Park ALIVE `enforce=0` |
+| Z6 cred | leak `ffffff87cd015c80` + `init_cred` as rb parent | — | UI freeze (zygote dead, SID/load_policy) |
+| Z5 | second process on park boot | requeue | KP |
+| Z8 | spray `ffffff8022210000` | ret=0 | miss ALIVE |
+| **Z9–Z13** | spray `ffffff80…` fake_lock/task | **pre-select +2ms** | punch SOFTBOOT |
+| Z7 | `ffffff87…` high alias | pre-select | punch SOFTBOOT |
+
+Do **not** second GhostLock process on a park boot. Do **not** open swapped ashmem. Do **not** USB-thrash.
 
 ---
 

