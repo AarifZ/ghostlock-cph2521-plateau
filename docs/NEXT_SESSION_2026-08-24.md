@@ -1,56 +1,53 @@
-# Next session pickup — 2026-08-24
+# Next session pickup — 2026-08-24 (GBOOT / kevent)
 
-**Read first:** this file, then `docs/Z29_UID0_CHECKPOINT_2026-08-24.md`, then `docs/Z15_SELINUX_PLAIN_PARK_2026-08-23.md`.  
-**Supersedes:** `docs/NEXT_SESSION_2026-08-23.md`.
+**Read first:** this file, then `docs/Z49_GBOOT_CHECKPOINT_2026-08-24.md`, then `docs/Z29_UID0_CHECKPOINT_2026-08-24.md` (x28/cred offsets still valid), then `docs/Z15_SELINUX_PLAIN_PARK_2026-08-23.md`.  
+**Supersedes** the earlier “next fire is self-cred” text in this filename. Self-cred still SIGKILLs until the OPPO sys_exit hook is off.
 
 **Workspace:** `C:\Users\LENOVO\Desktop\HILY installer\Oppo\ghostlock-oneplus`  
 **Branch:** `research-master` only.  
-**Binary:** `ghostlock-cph2521` (rebuild `.\build_cph2521.ps1` if tree moved).
+**Binary:** `ghostlock-cph2521` — rebuild `.\build_cph2521.ps1` if the tree moved.
 
 ---
 
-## ColorOS 15s kill (screenshot)
+## One-sentence status
 
-`logs/aarif_pull/Z29_coloros_security_warning.jpg`
-
-Dialog on top of Shizuku (01:00, 2026-08-24):
-
-> Security warning  
-> An attempt by a malicious app to damage the system has been stopped. For security purposes, your device will restart in 15 seconds.
-
-**Not a kernel panic.** Park/`pselect ret=5`/`enforce=0` can still be a **success**; ColorOS then force-restarts. Same family as Z14 `OplusCfThread`, but this is the **user-visible 15s reboot**. After it: WiFi ADB `192.168.1.108:5555` dead until Shizuku; USB `596666e9` for classify/fire. Do not USB-PnP.
+Park is durable. Perf can leak `oplus_security_guard` `.text` (page-off `0x3e8`). `g_boot_state` is 1 byte at `.text+0x3000`. Writing that **module VA** KPs (`STRICT_MODULE_RWX`). Physmap punch needs an 8-byte kernel read of `swapper_pg_dir` (P0 `ffffff802a491000`). kprobe/watchpoint/kptr all failed for that read.
 
 ---
 
 ## Policy (do not violate)
 
-- No second GhostLock process on a park boot (**Z5**).
+- No second GhostLock on a park boot (**Z5**). Permissive can persist after the process dies.
 - No 8-byte NULL into `selinux_state` (**Z14**).
-- No spray overlay / no wrap of `ffffff87/88/89` → P0 (**Z23, Z28** pre-select KP).
-- No `fire_mode.ps1` (CRLF). Unix LF runner only.
-- One data punch after park (**Z26 W3** KP).
-- No JoinChang #31 post. No live git spam. Push only if user asks.
+- No spray after park. No wrap `ffffff87/88/89` → P0 (**Z23, Z28**).
+- One data punch after park (**Z26** third walk KP).
+- Unix LF runners only. No `fire_mode.ps1`.
+- No kptr VALUE `0xffffff8100000000` (**Z44** live DRAM).
+- No GBOOT punch to the **module VA** (**Z47** RO page).
+- Do not fire on boots ≲ 2 min.
+- After **kernel panic / softboot: WiFi ADB `192.168.1.108:5555` first** (USB often dead). Do not USB-PnP.
+- After clean `adb reboot` / ColorOS 15s: USB `596666e9` usually returns; 5555 dead until Shizuku.
+- No JoinChang #31 post. Push only if asked.
 
 ---
 
-## Where uid0 actually is
+## Next fire (fresh boot, uptime ≳ 2 min, **one** process)
 
-Park is the product. Leak is **PMU type=8 `inst_retired`, x28** (unique, 64-aligned). **Z26:** `*(x28+0x790)` changed `comm` → that object is `task_struct`.
-
-`*(task+0x780)=init_cred` **walks alive** (Z25, Z27, Z29) but **uid stays 2000**: `/proc/status` reads **real_cred +0x778**; child never answers `getuid()` (pipe 9999). BSS-zero cred panics (Z22/Z24).
-
-**Next fire (fresh boot, uptime ≳ 2 min, one process):**
+Need **P0(`g_boot_state`)** then:
 
 ```
 MODE4_ONLY=1 MODE4_SLIDE_ZERO=1 DATAONLY_TARGET=0x2a793c8
-MODE4_SWAP_NOCFI=1 MODE4_UID0=1
+MODE4_SWAP_NOCFI=1 MODE4_UID0=1 MODE4_UID0_GBOOT=1
+CORE_SEL=7
 ```
 
-Push `ghostlock-cph2521` → `/data/local/tmp/gl_uid0` + `gl_run_uid0.sh`.
+Push `ghostlock-cph2521` → `/data/local/tmp/gl_uid0` + Unix LF `gl_run_gboot.sh`.
 
-Code change still needed in tree if not already: **one** store `*(x28+TASK_REAL_CRED_OFF=0x778)=init_cred` (or parent x28 if it is already `ffffff80` P0 — then `getuid()` in-process). Prefer raw x28. **Do not wrap.**
+Harvest already finds VA = hook_page + `0x3000`. **Do not store to that VA.** Store BSS|1 (`P0(0x02BB0000)|1`) to the **physmap alias**. If P0 is unknown, HOLD (Z48/Z49) — do not guess DRAM VALUEs.
 
-Success: `status_uid=0` or `getuid_after_store=0`. If the 15s ColorOS dialog appears after that, kernel still won — log and stop that boot.
+**AAR to try next (not done):** CFI-safe ashmem fops swap (`offsets.h` `*.cfi_jt`) + `pipe_physrw`, then walk `swapper_pg_dir` and write g_boot + cred through P0. Spray-free overlay only. Alternatively skip park: walk1 hook-off, walk2 cred, accept ColorOS 15s after uid0.
+
+Success: hook off (self-cred pselect returns) then `getuid()==0`. ColorOS 15s dialog after that is still a kernel win.
 
 ---
 
@@ -58,20 +55,21 @@ Success: `status_uid=0` or `getuid_after_store=0`. If the 15s ColorOS dialog app
 
 | | |
 |--|--|
-| WiFi | `192.168.1.108:5555` Shizuku 13.6 |
-| USB | `596666e9` |
+| WiFi | `192.168.1.108:5555` Shizuku 13.6 — **use after softboot/KP** |
+| USB | `596666e9` — classify/fire after clean reboot if 5555 is down |
 | Host | WinGet `platform-tools\adb.exe` |
-| After 15s ColorOS reboot | USB first; force-stop Shizuku if 5555 dead |
+| Last seen | boot `2687342b` Enforcing, USB up, **5555 refused** (Shizuku not bound). Ping `192.168.1.108` ok. |
 
 ---
 
 ## Do not reopen
 
-ION / PAD3 / dual-PI / swapped ashmem / `MODE4_ROOT` this cycle / JoinChang 6.12 `.write_iter` on 5.10.
+ION / PAD3 / dual-PI / swapped ashmem / `MODE4_ROOT` this cycle / JoinChang 6.12 `.write_iter` on 5.10 / kptr DRAM VALUE / module-VA GBOOT punch.
 
 ---
 
-## Logs
+## Logs / tools
 
-`logs/aarif_pull/Z15_plain_console.txt` … `Z29_cred_console.txt`  
-`tools/leak_probe.c` — PMU probe, not a second GhostLock.
+`logs/aarif_pull/Z43_*` … `Z49_gboot_ptwalk_console.txt` (gitignored).  
+`tools/modip_probe.c` — perf IP histogram, not a second GhostLock.  
+`tools/bp_probe.c` — kernel watchpoints EINVAL; user watchpoints work.

