@@ -1,0 +1,5 @@
+#!/system/bin/sh
+id > /data/local/tmp/ROOTED 2>&1
+echo 0 > /sys/fs/selinux/enforce 2>&1
+getenforce >> /data/local/tmp/ROOTED 2>&1
+dmesg | tail -5 >> /data/local/tmp/ROOTED 2>&1
