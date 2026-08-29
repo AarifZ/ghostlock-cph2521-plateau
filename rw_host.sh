@@ -27,11 +27,11 @@ for f in ghostlock-cph2521:gl_rw swap_probe:swap_probe slide_dec:slide_dec; do
 done
 MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI push rw_chain.sh /data/local/tmp/rw_chain.sh >/dev/null 2>&1 || \
 MSYS_NO_PATHCONV=1 "$ADB" -s $USB push rw_chain.sh /data/local/tmp/rw_chain.sh >/dev/null 2>&1
-dev "chmod 755 /data/local/tmp/gl_rw /data/local/tmp/swap_probe /data/local/tmp/slide_dec /data/local/tmp/rw_chain.sh; rm -f /data/local/tmp/rw_chain.log /data/local/tmp/ROOTED; echo READY"
+dev "tr -d '' < /data/local/tmp/rw_chain.sh > /data/local/tmp/rw_chain_lf.sh && chmod 755 /data/local/tmp/gl_rw /data/local/tmp/swap_probe /data/local/tmp/slide_dec /data/local/tmp/rw_chain_lf.sh; rm -f /data/local/tmp/rw_chain.log /data/local/tmp/ROOTED; echo READY"
 
 for att in $(seq 1 $MAX); do
   echo "== attempt $att =="
-  dev "nohup sh /data/local/tmp/rw_chain.sh >/dev/null 2>&1 & echo CHAIN_LAUNCHED"
+  dev "nohup sh /data/local/tmp/rw_chain_lf.sh >/dev/null 2>&1 & echo CHAIN_LAUNCHED"
 
   # poll chain log until chain ends or ROOTED appears (with transport recovery)
   for i in $(seq 1 200); do
