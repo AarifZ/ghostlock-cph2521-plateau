@@ -27,21 +27,22 @@ for f in ghostlock-cph2521:gl_rw swap_probe:swap_probe slide_dec:slide_dec; do
 done
 MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI push rw_chain.sh /data/local/tmp/rw_chain.sh >/dev/null 2>&1 || \
 MSYS_NO_PATHCONV=1 "$ADB" -s $USB push rw_chain.sh /data/local/tmp/rw_chain.sh >/dev/null 2>&1
-dev "tr -d '' < /data/local/tmp/rw_chain.sh > /data/local/tmp/rw_chain_lf.sh && chmod 755 /data/local/tmp/gl_rw /data/local/tmp/swap_probe /data/local/tmp/slide_dec /data/local/tmp/rw_chain_lf.sh; rm -f /data/local/tmp/rw_chain.log /data/local/tmp/ROOTED; echo READY"
+dev "tr -d '
+' < /data/local/tmp/rw_chain.sh > /data/local/tmp/rw_chain_lf.sh && chmod 755 /data/local/tmp/gl_rw /data/local/tmp/swap_probe /data/local/tmp/slide_dec /data/local/tmp/rw_chain_lf.sh; rm -f /data/local/tmp/rw_chain.log /data/local/tmp/ROOTED; echo READY"
 
 for att in $(seq 1 $MAX); do
   echo "== attempt $att =="
-  dev "nohup sh /data/local/tmp/rw_chain_lf.sh >/dev/null 2>&1 & echo CHAIN_LAUNCHED"
+  dev "rm -f /data/local/tmp/rw_chain.log /data/local/tmp/CHAIN_DONE /data/local/tmp/probe_out.txt; nohup sh /data/local/tmp/rw_chain_lf.sh >/dev/null 2>&1 & echo CHAIN_LAUNCHED"
 
   # poll chain log until chain ends or ROOTED appears (with transport recovery)
   for i in $(seq 1 200); do
-    OUT=$(dev "tail -2 /data/local/tmp/rw_chain.log 2>/dev/null; test -f /data/local/tmp/ROOTED && echo HAVE_ROOT")
+    OUT=$(dev "test -f /data/local/tmp/CHAIN_DONE && echo CHAIN_DONE; test -f /data/local/tmp/ROOTED && echo HAVE_ROOT; tail -1 /data/local/tmp/rw_chain.log 2>/dev/null")
     if echo "$OUT" | grep -q HAVE_ROOT; then
       echo "*** ROOTED ***"
       dev "cat /data/local/tmp/ROOTED; cat /data/local/tmp/probe_out.txt | tail -20"
       exit 0
     fi
-    if echo "$OUT" | grep -qE "chain ends|probe exit"; then
+    if echo "$OUT" | grep -q CHAIN_DONE; then
       echo "chain finished:"
       dev "cat /data/local/tmp/rw_chain.log; echo ----; tail -25 /data/local/tmp/probe_out.txt 2>/dev/null"
       break

