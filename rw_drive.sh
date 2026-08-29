@@ -4,13 +4,13 @@
 # -> poll HOLD marker -> swap_probe v4 (collapse + root chain).
 # Usage: ./rw_drive.sh [max_cycles]
 ADB="/c/Users/LENOVO/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe"
-SER=192.168.1.108:5555
+SER=${ADB_SERIAL:-192.168.1.108:5555}
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 MAX=${1:-10}
 
 adb() { MSYS_NO_PATHCONV=1 "$ADB" -s "$SER" "$@"; }
 
-"$ADB" connect $SER >/dev/null 2>&1
+MSYS_NO_PATHCONV=1 "$ADB" connect $SER >/dev/null 2>&1
 adb shell "mkdir -p /data/local/tmp" >/dev/null 2>&1
 adb push ghostlock-cph2521 /data/local/tmp/gl_rw >/dev/null 2>&1
 adb push swap_probe /data/local/tmp/swap_probe >/dev/null 2>&1
