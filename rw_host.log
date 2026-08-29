@@ -2,26 +2,3 @@
 READY
 == attempt 1 ==
 CHAIN_LAUNCHED
-chain finished:
-19:03:26 chain start
-19:06:36 O-fire exit=0
-19:06:36 slide=0x2476a00000
-19:06:36 N-fire pid=6945
-19:09:41 N-fire exited early
-19:09:41 NO HOLD (walk miss) — chain ends
-----
-attempt 1 done — settling 120s
-== attempt 2 ==
-CHAIN_LAUNCHED
-chain finished:
-19:03:26 chain start
-19:06:36 O-fire exit=0
-19:06:36 slide=0x2476a00000
-19:06:36 N-fire pid=6945
-19:09:41 N-fire exited early
-19:09:41 NO HOLD (walk miss) — chain ends
-19:11:42 chain start
-----
-attempt 2 done — settling 120s
-== attempt 3 ==
-CHAIN_LAUNCHED
