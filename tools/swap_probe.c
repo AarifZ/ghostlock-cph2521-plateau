@@ -105,8 +105,7 @@ static int open_ashmem_alias(void) {
     if (stat(path, &st) != 0 || st.st_rdev != base.st_rdev) continue;
     fd = open(path, O_RDWR | O_CLOEXEC);
     if (fd >= 0) {
-      printf("  ashmem alias: %s fd=%d
-", path, fd);
+      printf("  ashmem alias: %s fd=%d\n", path, fd);
       break;
     }
   }
