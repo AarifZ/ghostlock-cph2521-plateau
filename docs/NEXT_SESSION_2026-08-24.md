@@ -1,5 +1,7 @@
 # Next session pickup — 2026-08-24 (GBOOT / kevent)
 
+> **SUPERSEDED 2026-08-29.** Read `docs/NEXT_SESSION_2026-08-29.md` + `docs/GLM_HANDOFF_PICKUP_2026-08-29.md`. This file’s “next fire is GBOOT physmap” is stale: leaf-NULL unhook and Z33 child uid0 landed later; ZI-as-routed is banned; do not second-process after a walk.
+
 **Read first:** this file, then `docs/Z49_GBOOT_CHECKPOINT_2026-08-24.md`, then `docs/Z29_UID0_CHECKPOINT_2026-08-24.md` (x28/cred offsets still valid), then `docs/Z15_SELINUX_PLAIN_PARK_2026-08-23.md`.  
 **Supersedes** the earlier “next fire is self-cred” text in this filename. Self-cred still SIGKILLs until the OPPO sys_exit hook is off.
 

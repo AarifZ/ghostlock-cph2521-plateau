@@ -1,6 +1,9 @@
 # GhostLock CPH2521 — agent / lab context (pointer)
 
-**Current checkpoint (progress + open blocker):**  
+**Current pickup (2026-08-29):**  
+[`docs/NEXT_SESSION_2026-08-29.md`](docs/NEXT_SESSION_2026-08-29.md) · [`docs/GLM_HANDOFF_PICKUP_2026-08-29.md`](docs/GLM_HANDOFF_PICKUP_2026-08-29.md) · [`docs/COLOROS_POPUP_VS_ROOT_2026-08-29.md`](docs/COLOROS_POPUP_VS_ROOT_2026-08-29.md) · [`docs/HANDOFF_2026-08-29.md`](docs/HANDOFF_2026-08-29.md)
+
+**Older checkpoint (progress + open blocker, historical):**  
 [`CPH2521_CHECKPOINT_2026-08-16.md`](CPH2521_CHECKPOINT_2026-08-16.md)
 
 **Plateau-only freeze (2026-08-02):**  
@@ -8,7 +11,7 @@
 
 **Boot image (zip):** `assets/CPH2521_boot.img.zip`
 
-**Branch:** `research/cph2521-zero-name-standalone`
+**Branch:** `research-master` only.
 
 ### Hard rules (unchanged)
 

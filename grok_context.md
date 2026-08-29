@@ -2,15 +2,31 @@
 
 **Purpose:** Full context for a collaborating agent (stronger coding/RE focus) working **with** Grok Build on this repo.  
 **Author of this file:** Grok 4.5 (xAI Build TUI session)  
-**Date:** 2026-08-24 01:00 — ColorOS 15s warning + uid0 x28 checkpoint  
+**Date:** 2026-08-29 — research + GLM handoff (ColorOS popup vs root)  
 **Repo workspace:** `C:\Users\LENOVO\Desktop\HILY installer\Oppo\ghostlock-oneplus`  
-**Active branch:** `research-master` (Z15 park + uid0 x28 path uncommitted-at-handoff)
+**Active branch:** `research-master` (LEAF-NULL / user-PMU / ZI / persist **uncommitted**)
 
-> **Read first:** `docs/NEXT_SESSION_2026-08-24.md` + `docs/Z29_UID0_CHECKPOINT_2026-08-24.md`. Then Z15 park. Issue #31: this file §3b.  
-> ColorOS dialog (15s restart after park) is **userspace**, not KP — screenshot in `logs/aarif_pull/Z29_coloros_security_warning.jpg`.  
-> **Do not** thrash MISC-only-left or dual-PI without a new theory.  
+> **Read first (2026-08-29):** `docs/NEXT_SESSION_2026-08-29.md` + `docs/GLM_HANDOFF_PICKUP_2026-08-29.md` + `docs/COLOROS_POPUP_VS_ROOT_2026-08-29.md` + `docs/HANDOFF_2026-08-29.md`.  
+> ColorOS 15s dialog is **userspace**. StdSP disable **was tried** (Z33 child uid0, no popup, still ~2 min reboot). Settings toggle **not** tried. Not a path to KSU by itself.  
+> **Do not** fire `MODE4_ZI` as routed. **Do not** second GhostLock after a walk. **Do not** fire on boots ≲ 2 min.  
 > **Do not** auto-reboot loops — phone overheated from a bad retry script.  
-> **Issue #31:** https://github.com/JoinChang/ghostlock-oneplus/issues/31 — JoinChang replied 2026-08-21 (see §3b).
+> **Issue #31:** https://github.com/JoinChang/ghostlock-oneplus/issues/31 — owner 2026-08-21; our update comment 5456301814 (2026-08-28); no further reply.
+
+---
+
+## 0. UPDATE 2026-08-29 (current scoreboard)
+
+| Goal | Status |
+|------|--------|
+| Park SELinux Permissive | **Yes** (Z15 PLAIN-STORE) |
+| Kernel child uid 0 | **Yes ~2 min** (Z33, StdSP off, no 15s popup) |
+| ADB/shell `getuid()==0` logged | **Unconfirmed** (24c41c5a walk ret=5, console truncated) |
+| Usable / persistent / KernelSU root | **No** |
+| ColorOS popup “turn off detection → root?” | StdSP disable tried; Settings toggle not tried; **not sufficient** |
+
+Binary `ghostlock-cph2521` **214880**. Git tip `ea1e73f`. Last device: post-ZI-2 KP, boot `34b02354` young — **do not fire until settled**.
+
+This file below §1 is **historical** (2026-08-24). Prefer the 2026-08-29 docs for next fire.
 
 ---
 
@@ -334,7 +350,7 @@ git pull plateau research-master
 
 ---
 
-*End of handoff. Update this file when scoreboard changes materially.*
+*End of 2026-08-24 body. Current pickup is `docs/NEXT_SESSION_2026-08-29.md` / `docs/GLM_HANDOFF_PICKUP_2026-08-29.md`.*
 
 ---
 
