@@ -101,3 +101,65 @@ no adb (19:43:07); reconnecting
 no adb (19:43:29); reconnecting
 no adb (19:43:54); reconnecting
 === CYCLE 6 === 19:44:14
+O-fire: boot_id=8986c17a-5637-4448-b2ac-5f57148eafd8 uptime=864
+oracle miss (NOT-ORACLE); re-roll
+=== CYCLE 7 === 19:48:06
+O-fire: boot_id=8986c17a-5637-4448-b2ac-5f57148eafd8 uptime=1108
+oracle miss (NOT-ORACLE); re-roll
+=== CYCLE 8 === 19:52:10
+O-fire: boot_id=661fe7b9-daff-ffff-e0a8-8d2a80ffffff uptime=1159
+SLIDE=0x1aafe00000 (redirect live)
+N-fire no HOLD (uptime 1159 -> 1355); re-roll
+=== CYCLE 9 === 19:57:02
+redirect ALREADY LIVE (slide=0x1aafe00000) — straight to N-fire
+SLIDE=0x1aafe00000 (redirect live)
+adb.exe: device offline
+runner missing: 
+no adb (19:59:47); reconnecting
+no adb (20:00:28); reconnecting
+no adb (20:00:51); reconnecting
+no adb (20:01:13); reconnecting
+no adb (20:01:36); reconnecting
+no adb (20:01:58); reconnecting
+no adb (20:02:21); reconnecting
+no adb (20:02:43); reconnecting
+no adb (20:03:06); reconnecting
+no adb (20:03:28); reconnecting
+no adb (20:03:51); reconnecting
+no adb (20:04:13); reconnecting
+no adb (20:04:36); reconnecting
+no adb (20:04:58); reconnecting
+no adb (20:05:21); reconnecting
+no adb (20:05:44); reconnecting
+no adb (20:06:06); reconnecting
+no adb (20:06:29); reconnecting
+no adb (20:06:51); reconnecting
+no adb (20:07:14); reconnecting
+no adb (20:07:36); reconnecting
+no adb (20:07:58); reconnecting
+no adb (20:08:20); reconnecting
+no adb (20:08:46); reconnecting
+no adb (20:09:08); reconnecting
+no adb (20:09:31); reconnecting
+no adb (20:09:53); reconnecting
+no adb (20:10:15); reconnecting
+no adb (20:10:38); reconnecting
+no adb (20:11:00); reconnecting
+no adb (20:11:22); reconnecting
+no adb (20:11:45); reconnecting
+no adb (20:12:07); reconnecting
+no adb (20:12:30); reconnecting
+no adb (20:12:52); reconnecting
+no adb (20:13:34); reconnecting
+no adb (20:14:15); reconnecting
+no adb (20:14:56); reconnecting
+no adb (20:15:22); reconnecting
+no adb (20:15:44); reconnecting
+no adb (20:16:07); reconnecting
+no adb (20:16:29); reconnecting
+=== CYCLE 10 === 20:16:49
+O-fire: boot_id=661f278a-ddff-ffff-e0a8-8d2a80ffffff uptime=158
+SLIDE=0x1d80200000 (redirect live)
+adb.exe: device offline
+runner missing: 
+no root after 10 cycles

