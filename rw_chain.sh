@@ -8,7 +8,7 @@ rm -f $D/CHAIN_DONE
 log() { echo "$(date +%H:%M:%S) $*" >> $L; }
 
 # single-instance: never run two chains (concurrent walks KP)
-if pgrep -f gl_rw >/dev/null 2>&1 || pgrep -f rw_chain >/dev/null 2>&1; then
+if pgrep -f gl_rw >/dev/null 2>&1; then
   log "chain abort: another instance running"
   touch $D/CHAIN_DONE
   exit 1
