@@ -1974,6 +1974,14 @@ static void uid0_mute_coloros(void) {
  * MODE4_NULL_STORE: W1 was leaf-NULL *sys_exit.funcs=0, not park. Skip
  * harvest/gboot and go straight to cred so the hook-off window is used. */
 static int uid0_cred_walk(void) {
+  if (env_flag("UID0_DIRECT", 0)) {
+    /* Two-process mode: process 1 already did W1 (guard unhook). This
+     * process goes straight to the punch — its FIRST walk stores. */
+    pr_success("UID0_DIRECT: straight to cred punch (walk #1 of this proc)\n");
+    durable_stage("uid0_direct_enter");
+    live_sync_log("UID0", "direct_punch");
+    goto uid0_cred_punch;
+  }
   if (env_flag("MODE4_NULL_STORE", 0)) {
     pr_success("UID0: leaf-NULL walk lived — cred next, skip park/harvest\n");
     durable_stage("uid0_hookoff_ok");
