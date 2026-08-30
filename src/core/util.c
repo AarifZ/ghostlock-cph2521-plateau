@@ -111,48 +111,13 @@ int uid0_child_status_landed(void) {
   char *u = strstr(buf, "Uid:");
   if (!u)
     return 0;
-  /* any Uid field != 2000 => a real_cred/cred store landed */
-  for (const char *q = u + 4; q && *q && *q != '\n'; q++) {
-    if (q[0] == '2' && q[1] == '0' && q[2] == '0' && q[3] == '0')
-      continue;
-    if (*q >= '0' && *q <= '9')
-      return 1; /* a digit sequence that is not 2000 */
-  }
-  return 0;
-}
-
-static int status_field(pid_t pid, const char *field, char *out, size_t n) {
-  char path[64];
-  snprintf(path, sizeof(path), "/proc/%ld/status", (long)pid);
-  int fd = open(path, O_RDONLY);
-  if (fd < 0)
-    return -1;
-  char buf[4096] = {0};
-  ssize_t r = read(fd, buf, sizeof(buf) - 1);
-  close(fd);
-  if (r <= 0)
-    return -1;
-  char *f = strstr(buf, field);
-  if (!f)
-    return -1;
-  size_t i = 0;
-  char *q = f + strlen(field);
-  while (*q && *q != '\n' && i + 1 < n)
-    out[i++] = *q++;
-  out[i] = 0;
-  return (int)i;
-}
-
-void uid0_log_landing_signals(const char *tag) {
-  long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
-  char ub[64] = {0}, cb[64] = {0};
-  status_field((pid_t)pid, "Uid:", ub, sizeof(ub));
-  status_field((pid_t)pid, "CapEff:", cb, sizeof(cb));
-  char lb[160];
-  snprintf(lb, sizeof(lb), "%s pid=%ld Uid=[%s] CapEff=[%s]", tag, pid, ub,
-           cb);
-  live_sync_log("UID0", lb);
-  pr_info("UID0 %s\n", lb);
+  /* sscanf tokenization — the earlier char-scan had an off-by-one that
+   * returned TRUE on a normal all-2000 line (every "landing" today was
+   * that false positive; landing-signals log proved it: Uid=2000x4). */
+  unsigned long a = 0, b = 0, c = 0, d = 0;
+  if (sscanf(u + 4, "%lu %lu %lu %lu", &a, &b, &c, &d) != 4)
+    return 0;
+  return (a != 2000UL || b != 2000UL || c != 2000UL || d != 2000UL);
 }
 
 int uid0_child_capeff_landed(void) {
