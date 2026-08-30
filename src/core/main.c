@@ -2271,7 +2271,7 @@ uid0_cred_punch:;
   {
     char cpath[64];
     snprintf(cpath, sizeof(cpath), "/proc/%d/status", (int)child);
-    char buf[512] = {0};
+    char buf[4096] = {0};
     int sfd = open(cpath, O_RDONLY);
     if (sfd >= 0) {
       (void)read(sfd, buf, sizeof(buf) - 1);
