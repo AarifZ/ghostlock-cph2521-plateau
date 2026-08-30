@@ -281,6 +281,9 @@ extern int g_swap_staged;
 /* uid0 landing-checked retry (PCKM00 lesson): set by uid0_cred_walk so the
  * pselect route loop can verify each attempt via the child's CapEff. */
 extern long g_uid0_child_pid;
+extern const uint64_t g_uid0_slot_candidates[];
+extern int g_uid0_slot_idx;
+extern uintptr_t g_uid0_task_base;
 extern char g_bootid_before[80];
 int bootid_changed(void);
 extern volatile int g_uid0_cred_landed;
