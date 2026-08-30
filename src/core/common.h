@@ -289,6 +289,7 @@ extern char g_bootid_before[80];
 int bootid_changed(void);
 extern volatile int g_uid0_cred_landed;
 int uid0_child_capeff_landed(void);
+int uid0_child_status_landed(void);
 int uid0_child_comm_landed(void);
 extern uint32_t *f_wait;
 extern uint32_t *f_pi_target;

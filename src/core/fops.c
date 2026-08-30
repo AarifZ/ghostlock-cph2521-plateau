@@ -2014,7 +2014,8 @@ void do_pselect_fake_lock_route(void) {
            * retry here before deciding. */
           int canary = env_flag("UID0_COMM_CANARY", 0);
           int landed = canary ? uid0_child_comm_landed()
-                              : (cred_mode ? uid0_child_capeff_landed()
+                              : (cred_mode ? (uid0_child_capeff_landed() ||
+                                              uid0_child_status_landed())
                                            : bootid_changed());
           if (landed) {
             route_verified = 1;

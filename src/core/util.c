@@ -85,6 +85,32 @@ int uid0_child_comm_landed(void) {
   return strcmp(buf, "gl_uid0_child") != 0;
 }
 
+int uid0_child_status_landed(void) {
+  if (g_uid0_child_pid <= 0)
+    return 0;
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/status", g_uid0_child_pid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return 0;
+  char buf[4096] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0)
+    return 0;
+  char *u = strstr(buf, "Uid:");
+  if (!u)
+    return 0;
+  /* any Uid field != 2000 => a real_cred/cred store landed */
+  for (const char *q = u + 4; q && *q && *q != '\n'; q++) {
+    if (q[0] == '2' && q[1] == '0' && q[2] == '0' && q[3] == '0')
+      continue;
+    if (*q >= '0' && *q <= '9')
+      return 1; /* a digit sequence that is not 2000 */
+  }
+  return 0;
+}
+
 int uid0_child_capeff_landed(void) {
   if (g_uid0_child_pid <= 0)
     return 0;
