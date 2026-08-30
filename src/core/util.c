@@ -57,6 +57,26 @@ volatile int g_uid0_cred_landed;
 /* Landing signal for the cred punch: /proc/<child>/status CapEff comes from
  * the SUBJECTIVE cred — a landed init_cred store flips it from all-zero to
  * full caps even while the child pipe is wedged. */
+int uid0_child_comm_landed(void) {
+  if (g_uid0_child_pid <= 0)
+    return 0;
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/comm", g_uid0_child_pid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return 0;
+  char buf[64] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0)
+    return 0;
+  buf[n] = 0;
+  for (ssize_t i = 0; i < n; i++)
+    if (buf[i] == '\n')
+      buf[i] = 0;
+  return strcmp(buf, "gl_uid0_child") != 0;
+}
+
 int uid0_child_capeff_landed(void) {
   if (g_uid0_child_pid <= 0)
     return 0;

