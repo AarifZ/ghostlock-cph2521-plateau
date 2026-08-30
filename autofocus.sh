@@ -27,9 +27,9 @@ for n in $(seq 1 $MAX); do
   # wait + read
   sleep 300
   con || { for w in $(seq 1 20); do sleep 25; con && break; done; }
-  R=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "cat /data/local/tmp/ROOTED_ID.txt 2>/dev/null; grep -E 'LANDED|getuid_after|WIN' /data/local/tmp/hkc.txt 2>/dev/null | tail -4; getenforce" 2>/dev/null | tr -d '\r')
+  R=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "cat /data/local/tmp/ROOTED_ID.txt /data/local/tmp/uid0_id.txt 2>/dev/null; grep -E 'LANDED|getuid_after|WIN' /data/local/tmp/hkc.txt 2>/dev/null | tail -4; getenforce" 2>/dev/null | tr -d '\r')
   echo "roll$n result:"; echo "$R"
-  echo "$R" | grep -q "uid=0\|WIN\|ROOT" && { echo "*** ROOT ROLL $n ***"; exit 0; }
+  echo "$R" | grep -q "uid=0\|WIN\|ROOT\|uid=0" && { echo "*** ROOT ROLL $n ***"; exit 0; }
   sleep 90
 done
 echo "no root in $MAX rolls"

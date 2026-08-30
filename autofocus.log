@@ -1,0 +1,18 @@
+roll1 fired at uptime=606 (15:16:12)
+roll1 result:
+[33m[*] [0mSTAGE write_proof_LANDED
+[33m[*] [0mCRED LANDED attempt=1/12 (nocfi arm)
+[33m[*] [0mPROOF uid0_cred_LANDED
+[33m[*] [0mUID0 getuid_after_store=2000 euid=2000 who=child_x28
+Enforcing
+roll2 fired at uptime=1008 (15:22:55)
+roll2 result:
+Enforcing
+roll3 fired at uptime=362 (15:29:37)
+roll3 result:
+[33m[*] [0mSTAGE write_proof_LANDED
+[33m[*] [0mCRED LANDED attempt=1/12 (nocfi arm)
+[33m[*] [0mPROOF uid0_cred_LANDED
+[33m[*] [0mUID0 getuid_after_store=2000 euid=2000 who=child_x28
+Enforcing
+roll4 fired at uptime=764 (15:36:22)
