@@ -16,3 +16,26 @@ roll3 result:
 [33m[*] [0mUID0 getuid_after_store=2000 euid=2000 who=child_x28
 Enforcing
 roll4 fired at uptime=764 (15:36:22)
+roll4 result:
+Enforcing
+roll5 fired at uptime=362 (15:43:04)
+roll5 result:
+[33m[*] [0mSTAGE write_proof_LANDED
+[33m[*] [0mCRED LANDED attempt=1/12 (nocfi arm)
+[33m[*] [0mPROOF uid0_cred_LANDED
+[33m[*] [0mUID0 getuid_after_store=2000 euid=2000 who=child_x28_p0
+Enforcing
+roll6 fired at uptime=764 (15:49:49)
+roll6 result:
+Enforcing
+roll7 fired at uptime=362 (15:56:30)
+roll7 result:
+[33m[*] [0mSTAGE write_proof_LANDED
+[33m[*] [0mCRED LANDED attempt=1/12 (nocfi arm)
+[33m[*] [0mPROOF uid0_cred_LANDED
+[33m[*] [0mUID0 getuid_after_store=2000 euid=2000 who=child_x28
+Enforcing
+roll8 fired at uptime=763 (16:03:14)
+roll8 result:
+
+autofocus.sh: line 38: unexpected EOF while looking for matching `"'
