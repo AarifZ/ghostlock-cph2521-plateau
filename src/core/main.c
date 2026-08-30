@@ -2264,6 +2264,7 @@ uid0_cred_punch:;
     prctl(PR_SET_NAME, "irq/0-kgsl", 0, 0, 0);
     g_uid0_slot_idx = 0;
     g_uid0_task_base = use_task;
+    g_uid0_check_self = (who[0] == 's');
     uintptr_t slot = use_task +
         (env_flag("UID0_COMM_CANARY", 0) ? 0x790
                                          : g_uid0_slot_candidates[0]);

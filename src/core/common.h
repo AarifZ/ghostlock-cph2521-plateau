@@ -285,6 +285,7 @@ extern const uint64_t g_uid0_slot_candidates[];
 extern const int g_uid0_slot_ncand;
 extern int g_uid0_slot_idx;
 extern uintptr_t g_uid0_task_base;
+extern int g_uid0_check_self;
 extern char g_bootid_before[80];
 int bootid_changed(void);
 extern volatile int g_uid0_cred_landed;

