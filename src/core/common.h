@@ -291,6 +291,7 @@ int bootid_changed(void);
 extern volatile int g_uid0_cred_landed;
 int uid0_child_capeff_landed(void);
 int uid0_child_status_landed(void);
+void uid0_log_landing_signals(const char *tag);
 int uid0_child_comm_landed(void);
 extern uint32_t *f_wait;
 extern uint32_t *f_pi_target;

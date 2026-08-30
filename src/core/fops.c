@@ -2017,6 +2017,8 @@ void do_pselect_fake_lock_route(void) {
                               : (cred_mode ? (uid0_child_capeff_landed() ||
                                               uid0_child_status_landed())
                                            : bootid_changed());
+          if (landed)
+            uid0_log_landing_signals("landing signals");
           if (landed) {
             route_verified = 1;
             pr_info("%s LANDED attempt=%d/%d (nocfi arm)\n",

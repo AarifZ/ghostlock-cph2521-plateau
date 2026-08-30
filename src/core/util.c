@@ -121,6 +121,40 @@ int uid0_child_status_landed(void) {
   return 0;
 }
 
+static int status_field(pid_t pid, const char *field, char *out, size_t n) {
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/status", (long)pid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return -1;
+  char buf[4096] = {0};
+  ssize_t r = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (r <= 0)
+    return -1;
+  char *f = strstr(buf, field);
+  if (!f)
+    return -1;
+  size_t i = 0;
+  char *q = f + strlen(field);
+  while (*q && *q != '\n' && i + 1 < n)
+    out[i++] = *q++;
+  out[i] = 0;
+  return (int)i;
+}
+
+void uid0_log_landing_signals(const char *tag) {
+  long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
+  char ub[64] = {0}, cb[64] = {0};
+  status_field((pid_t)pid, "Uid:", ub, sizeof(ub));
+  status_field((pid_t)pid, "CapEff:", cb, sizeof(cb));
+  char lb[160];
+  snprintf(lb, sizeof(lb), "%s pid=%ld Uid=[%s] CapEff=[%s]", tag, pid, ub,
+           cb);
+  live_sync_log("UID0", lb);
+  pr_info("UID0 %s\n", lb);
+}
+
 int uid0_child_capeff_landed(void) {
   long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
   if (pid <= 0)
