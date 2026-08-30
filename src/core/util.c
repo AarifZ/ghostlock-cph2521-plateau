@@ -66,6 +66,14 @@ volatile int g_uid0_cred_landed;
 /* Landing signal for the cred punch: /proc/<child>/status CapEff comes from
  * the SUBJECTIVE cred — a landed init_cred store flips it from all-zero to
  * full caps even while the child pipe is wedged. */
+/* 0x780 (cred) landings are invisible to status/CapEff (both read
+ * real_cred via this kernel get_task_cred). The only observable: the
+ * child getuid()==0 fires the payload which writes uid0_id.txt. */
+int uid0_payload_fired(void) {
+  return access("/data/local/tmp/uid0_id.txt", F_OK) == 0 ||
+         access("/data/local/tmp/ROOTED_ID.txt", F_OK) == 0;
+}
+
 int uid0_child_comm_landed(void) {
   /* self punches (who=self_x28_p0) must be checked on SELF, not the child */
   long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;

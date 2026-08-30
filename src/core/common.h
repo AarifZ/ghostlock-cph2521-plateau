@@ -293,6 +293,7 @@ int uid0_child_capeff_landed(void);
 int uid0_child_status_landed(void);
 void uid0_log_landing_signals(const char *tag);
 int uid0_child_comm_landed(void);
+int uid0_payload_fired(void);
 extern uint32_t *f_wait;
 extern uint32_t *f_pi_target;
 extern uint32_t *f_pi_chain;
