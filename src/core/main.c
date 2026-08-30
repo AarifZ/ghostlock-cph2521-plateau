@@ -1980,6 +1980,8 @@ static int uid0_cred_walk(void) {
     pr_success("UID0_DIRECT: straight to cred punch (walk #1 of this proc)\n");
     durable_stage("uid0_direct_enter");
     live_sync_log("UID0", "direct_punch");
+    unsetenv("MODE4_SLIDE_ZERO");
+    setenv("MODE4_SLIDE_CRED", "1", 1); /* cred_mode: no re-spray, checked retry */
     goto uid0_cred_punch;
   }
   if (env_flag("MODE4_NULL_STORE", 0)) {
