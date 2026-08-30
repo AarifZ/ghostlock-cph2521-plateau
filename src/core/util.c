@@ -120,6 +120,30 @@ int uid0_child_status_landed(void) {
   return (a != 2000UL || b != 2000UL || c != 2000UL || d != 2000UL);
 }
 
+void uid0_log_landing_signals(const char *tag) {
+  long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/status", pid);
+  char ub[64] = {0}, cb[64] = {0};
+  int fd = open(path, O_RDONLY);
+  if (fd >= 0) {
+    char buf[4096] = {0};
+    if (read(fd, buf, sizeof(buf) - 1) > 0) {
+      char *f = strstr(buf, "Uid:");
+      if (f) { char *q = f + 4; size_t i = 0;
+        while (*q && *q != 10 && i + 1 < sizeof(ub)) ub[i++] = *q++; }
+      f = strstr(buf, "CapEff:");
+      if (f) { char *q = f + 7; size_t i = 0;
+        while (*q && *q != 10 && i + 1 < sizeof(cb)) cb[i++] = *q++; }
+    }
+    close(fd);
+  }
+  char lb[160];
+  snprintf(lb, sizeof(lb), "%s pid=%ld Uid=[%s] CapEff=[%s]", tag, pid, ub, cb);
+  live_sync_log("UID0", lb);
+  pr_info("UID0 %s", lb);
+}
+
 int uid0_child_capeff_landed(void) {
   long pid = g_uid0_check_self ? (long)getpid() : g_uid0_child_pid;
   if (pid <= 0)
