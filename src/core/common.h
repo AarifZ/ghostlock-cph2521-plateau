@@ -282,6 +282,7 @@ extern int g_swap_staged;
  * pselect route loop can verify each attempt via the child's CapEff. */
 extern long g_uid0_child_pid;
 extern const uint64_t g_uid0_slot_candidates[];
+extern const int g_uid0_slot_ncand;
 extern int g_uid0_slot_idx;
 extern uintptr_t g_uid0_task_base;
 extern char g_bootid_before[80];

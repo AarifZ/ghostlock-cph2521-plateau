@@ -2267,7 +2267,7 @@ uid0_cred_punch:;
     uintptr_t slot = use_task +
         (env_flag("UID0_COMM_CANARY", 0) ? 0x790
                                          : g_uid0_slot_candidates[0]);
-    uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0")
+    uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
                           ? "child_comm_canary"
                           : (self ? "self_cred" : "child_cred"));
     uid0_kill_watchers(watch, nw);

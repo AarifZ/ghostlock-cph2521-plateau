@@ -2033,9 +2033,7 @@ void do_pselect_fake_lock_route(void) {
                * the aimed slot — a miss means the SLOT is wrong for this
                * build. Advance to the next candidate; the next attempt
                * rebuilds the fdset from pselect_custom_target. */
-              size_t ncand = sizeof(g_uid0_slot_candidates) /
-                             sizeof(g_uid0_slot_candidates[0]);
-              if ((size_t)g_uid0_slot_idx + 1 < ncand) {
+              if (g_uid0_slot_idx + 1 < g_uid0_slot_ncand) {
                 g_uid0_slot_idx++;
                 pselect_custom_target =
                     g_uid0_task_base +

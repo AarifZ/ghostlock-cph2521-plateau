@@ -38,6 +38,7 @@ long g_uid0_child_pid;
  * build. Candidates: Z29 family + runtime_struct_offsets family. */
 const uint64_t g_uid0_slot_candidates[] = {0x900, 0x8F8, 0x780, 0x778,
                                            0x798, 0x788};
+const int g_uid0_slot_ncand = 6;
 int g_uid0_slot_idx;
 uintptr_t g_uid0_task_base;
 char g_bootid_before[80];
