@@ -961,7 +961,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
               tree_pc = (ztgt - 8) & ~3ULL;
-              tree_pc |= 1ULL; /* black — reduce rebalance pressure */
+              /* RED parent — W1's proven choice: erasing a red node
+               * needs NO rebalance. The black variant (|1) triggers
+               * ____rb_erase_color walking the fake parent's children
+               * (cred pointers) — chains R/S/T KP'd there. */
               tree_r = val;
               tree_l = 0;
               pi_parent = 0;
