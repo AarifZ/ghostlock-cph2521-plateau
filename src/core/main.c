@@ -2853,7 +2853,8 @@ int run_exploit(int argc, char **argv) {
                     env_flag("MODE4_SLIDE_ZERO", 0) ||
                     env_flag("MODE4_SLIDE_VERIFY", 0) ||
                     env_flag("MODE4_SLIDE_SWAP", 0) ||
-                    env_flag("MODE4_ROOT", 0);
+                    env_flag("MODE4_ROOT", 0) ||
+                    env_flag("UID0_DIRECT", 0);
   if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0) ||
       env_flag("MODE4_SLIDE_VERIFY", 0) ||
       env_flag("MODE4_SLIDE_SWAP", 0) ||
