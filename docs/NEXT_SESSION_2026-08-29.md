@@ -1,5 +1,7 @@
 # Next session pickup — 2026-08-29
 
+> **SUPERSEDED 2026-09-12.** Read `docs/NEXT_SESSION_2026-09-12.md` and `docs/GLM_HANDOFF_PICKUP_2026-09-12.md`. Exact Z33 KPd; do not use this file’s next-fire. WiFi IP below was patched to `192.168.1.2`.
+
 **Read first:** this file, then `docs/COLOROS_POPUP_VS_ROOT_2026-08-29.md`, then `docs/GLM_HANDOFF_PICKUP_2026-08-29.md` / `docs/HANDOFF_2026-08-29.md`. Older: `docs/Z49_GBOOT_CHECKPOINT_2026-08-24.md`, `docs/Z29_UID0_CHECKPOINT_2026-08-24.md`, `docs/Z15_SELINUX_PLAIN_PARK_2026-08-23.md`.
 
 **This file supersedes** `docs/NEXT_SESSION_2026-08-24.md` (GBOOT-as-next-fire is stale).
@@ -53,7 +55,7 @@ After ZI-2 KP (`zi_3c325838_bss_kp.txt`): boot **`34b02354`**, young (~50s), ADB
 
 | | |
 |--|--|
-| WiFi | `192.168.1.108:5555` Shizuku 13.6 — **use after softboot/KP** |
+| WiFi | `192.168.1.2:5555` Shizuku (was `192.168.1.108`) — **use after softboot/KP** |
 | USB | `596666e9` — classify/fire after clean reboot if 5555 is down |
 | Host adb | WinGet `platform-tools\adb.exe` (not Desktop platform-tools) |
 

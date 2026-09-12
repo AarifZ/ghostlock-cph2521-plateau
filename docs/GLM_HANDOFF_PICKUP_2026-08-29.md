@@ -1,5 +1,7 @@
 # GLM handoff pickup — 2026-08-29
 
+> **SUPERSEDED 2026-09-12.** Read `docs/GLM_HANDOFF_PICKUP_2026-09-12.md`. Exact Z33 KPd; hookcred as written falls through to the child; mute skip below is already fixed in tree.
+
 You are picking up GhostLock on **CPH2521** from Grok. The 2026-08-23 GLM pickup (`docs/GLM_HANDOFF_PICKUP_2026-08-23.md`) is **stale** for next-fire (it still says `fire_mode.ps1`, UMH/modprobe, two-fire oracle→swap). Read **this file first**, then `docs/NEXT_SESSION_2026-08-29.md`, then `docs/COLOROS_POPUP_VS_ROOT_2026-08-29.md`, then `docs/HANDOFF_2026-08-29.md`.
 
 **Do not fire** until the boot is ≳ 2 min old and ADB is stable. Last device state: post-ZI-2 kernel panic, boot `34b02354`, young, ADB flaky.

