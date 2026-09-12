@@ -57,3 +57,19 @@ then G+payload fires → ROOTED.
   RESULT UNREAD, on /data/local/tmp/hkc.txt when device returns
 GRIND STATE: 2 honest misses + 2 unknowns. Next session: read FL4,
 keep rolling the SPRAYLOCK config. Each roll ~8min (fire+reboot+settle).
+
+## FLIP GRIND COMPLETE LOG (both configs)
+
+SPRAY_LOCK config (init_task+0x878 lock): FL5 = 3 honest misses, DEVICE
+SURVIVED whole fire (disarm working — same-boot re-roll proven possible).
+Z33-geometry config (bss_tail default overlay): FL7 = W1 crash.
+Full tally: FL3 W1✗, FL4 punch-walk✗, FL5 3-miss SURVIVE, FL6 W1✗,
+FL7 W1✗. Landing: 0/12 honest attempts (both configs). W1 running cold
+(1/5 this stretch vs ~50% historical).
+
+NOTE: Z33's single historical win used bss_tail + 08-24-era binary.
+0/12 honest now — either genuinely cold dice (P≈0.25^12≈tiny... more
+likely landing rate <25% per attempt in current binary) or the current
+SLIDE_CRED stamp differs subtly from the 08-24 one that won. NEXT
+SESSION diff the Z33-era stamp (git log src/core/fops.c Aug 24) vs
+current — the winning geometry is in git history.
