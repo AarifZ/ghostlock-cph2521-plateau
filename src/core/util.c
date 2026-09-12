@@ -136,7 +136,10 @@ int uid0_child_comm_landed(void) {
   for (ssize_t i = 0; i < n; i++)
     if (buf[i] == '\n')
       buf[i] = 0;
-  int diff = strcmp(buf, "gl_uid0_child") != 0;
+  /* self mode: the punch block renames self to irq/0-kgsl BEFORE the
+   * route — comparing against gl_uid0_child would false-positive. */
+  const char *baseline = g_uid0_check_self ? "irq/0-kgsl" : "gl_uid0_child";
+  int diff = strcmp(buf, baseline) != 0;
   if (diff) {
     char lb[96];
     snprintf(lb, sizeof(lb), "canary comm now=[%.24s] (landed=%d)", buf, diff);
