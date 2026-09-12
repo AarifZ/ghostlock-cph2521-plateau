@@ -299,6 +299,7 @@ int uid0_payload_fired(void);
 extern int g_uid0_cmd_w;
 extern int g_uid0_uid_r;
 uint32_t uid0_child_getuid_query(void);
+uint32_t uid0_child_status_uid(void);
 extern uint32_t *f_wait;
 extern uint32_t *f_pi_target;
 extern uint32_t *f_pi_chain;

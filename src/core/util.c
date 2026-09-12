@@ -86,7 +86,33 @@ uint32_t uid0_child_uid_beacon(void) {
   return u;
 }
 
+/* SIGPIPE-immune child status: /proc/<pid>/status Uid (real_cred,
+ * the PROVEN landing signal — 0x778 store flips it even when the
+ * child dies before answering the pipe). Returns first Uid field. */
+uint32_t uid0_child_status_uid(void) {
+  if (g_uid0_child_pid <= 0)
+    return 9992;
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/status", g_uid0_child_pid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return 9991; /* child GONE — dead at/after the punch */
+  char buf[4096] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0)
+    return 9990;
+  char *u = strstr(buf, "Uid:");
+  if (!u)
+    return 9989;
+  unsigned long a = 0;
+  if (sscanf(u + 4, "%lu", &a) != 1)
+    return 9988;
+  return (uint32_t)a;
+}
+
 uint32_t uid0_child_getuid_query(void) {
+  signal(SIGPIPE, SIG_IGN); /* dead child => EPIPE not process death */
   /* Self cred punch: getuid() is the only honest 0x780 signal. Status/CapEff
    * and the child beacon stay 2000 (vendor get_task_cred reads real_cred). */
   if (g_uid0_check_self)

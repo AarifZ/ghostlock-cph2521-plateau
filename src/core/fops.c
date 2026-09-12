@@ -2241,8 +2241,16 @@ void do_pselect_fake_lock_route(void) {
             pr_info("%s uid query attempt=%d -> %u getuid=%u\n",
                     g_uid0_check_self ? "self" : "child", route_attempt, cq,
                     (unsigned)getuid());
+          uint32_t st = 9999;
+          if (cred_mode && !canary) {
+            st = uid0_child_status_uid();
+            pr_info("child /proc status Uid=%u (9991=dead child — "
+                    "punch may have LANDED)\n", st);
+          }
           int landed = canary ? uid0_child_comm_landed()
-                              : (cred_mode ? (cq == 0 || uid0_payload_fired() ||
+                              : (cred_mode ? (cq == 0 || st == 0 ||
+                                              st == 9991 /* dead=landed+crippled */ ||
+                                              uid0_payload_fired() ||
                                               (uint32_t)getuid() == 0)
                                            : bootid_changed());
           if (cred_mode && (cq == 0 || (uint32_t)getuid() == 0)) {
