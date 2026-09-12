@@ -46,3 +46,14 @@ W1 flip (~50%) × trigger flip (sched_setattr ~90%) × landing flip (?% —
 may be near 100% given the SIGPIPE evidence) — roll the SPRAYFLIP config
 until all three align; the status-Uid line will say 0 or 9991 on a win,
 then G+payload fires → ROOTED.
+
+## FLIP GRIND LOG (context-exhausted mid-grind)
+
+- HONEST 2: 3 honest attempts, 3 misses (child alive, status Uid 2000) —
+  landing rate is the old lottery, NOT near-100% (the SIGPIPE deaths were
+  the zero-page ezp killing the child, not proof of landing)
+- FL3: W1 walk crash (coin lost)
+- FL4: fired; device dropped post-fire (Shizuku dead after reboot) —
+  RESULT UNREAD, on /data/local/tmp/hkc.txt when device returns
+GRIND STATE: 2 honest misses + 2 unknowns. Next session: read FL4,
+keep rolling the SPRAYLOCK config. Each roll ~8min (fire+reboot+settle).
