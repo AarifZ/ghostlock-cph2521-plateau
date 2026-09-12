@@ -1000,6 +1000,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                       (unsigned long long)stack_lock);
               goto stack_words_done;
             }
+            if (g_resurge_stage == 0) {
             /*
              * *task.cred = init_cred.
              * Default (09-12): park-class only-left PLAIN-STORE
@@ -1072,6 +1073,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                       (unsigned long long)tree_r,
                       (unsigned long long)tree_l);
             }
+            } /* resurge_stage==0 guard */
           } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
             /*
              * W1 selinux_state PLAIN-STORE (not 8-byte NULL).
