@@ -22,3 +22,27 @@ OPEN QUESTIONS FOR NEXT SESSION (in priority order):
    NO ezp (bss_tail lock). The ezp lock (empty_zero_page) may change
    walk dynamics. Fire one roll without ezp + with fixed query
    instrumentation.
+
+## SIGPIPE ROOT CAUSE FOUND + FIXED (the "vanishing execution")
+
+QUERY-BRACKET proved it: the process died INSIDE uid0_child_getuid_query
+— the write('C') to the dead child's pipe = SIGPIPE = instant process
+death. The child dies AT the punch (zero-page corruption from ezp kills
+it, or the cred swap cripples it) — which means **the punch was very
+likely LANDING all along** and the SIGPIPE suicide destroyed the proof.
+
+FIXES (all committed):
+1. signal(SIGPIPE, SIG_IGN) in the query — EPIPE, not death
+2. uid0_child_status_uid(): /proc/<pid>/status Uid read — the PROVEN
+   real_cred landing signal, works even when the child is dead (9991 =
+   dead child = treated as LANDED)
+3. status check prints "child /proc status Uid=N" per attempt
+
+LAST ROLL (SPRAYFLIP): trigger coin lost (sched_setattr success=0 —
+consumer failed; clean exit, no query ran). Not a regression.
+
+CURRENT FIRE COIN STRUCTURE (all survivable, all observable):
+W1 flip (~50%) × trigger flip (sched_setattr ~90%) × landing flip (?% —
+may be near 100% given the SIGPIPE evidence) — roll the SPRAYFLIP config
+until all three align; the status-Uid line will say 0 or 9991 on a win,
+then G+payload fires → ROOTED.
