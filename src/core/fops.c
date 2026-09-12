@@ -1995,8 +1995,7 @@ void do_pselect_fake_lock_route(void) {
       pselect_put_waiter_word(&in, &out, &ex, wps, 6, wtask, "otask");
       pselect_put_waiter_word(&in, &out, &ex, wps, 7, wlock, "olock");
       pr_info("ONE-SHOT EZP: tree w0=%016llx w1=%016llx w2=%016llx "
-              "lock=%016llx task=%016llx
-",
+              "lock=%016llx task=%016llx\n",
               (unsigned long long)w0, (unsigned long long)w1,
               (unsigned long long)w2, (unsigned long long)wlock,
               (unsigned long long)wtask);
