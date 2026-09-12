@@ -2229,7 +2229,14 @@ void do_pselect_fake_lock_route(void) {
                     "next attempt writes\n", route_attempt);
             goto settle_skip;
           }
+          pr_info("QUERY-BRACKET enter cred_mode=%d cmd_w=%d uid_r=%d "
+                  "child_pid=%ld\n",
+                  cred_mode, g_uid0_cmd_w, g_uid0_uid_r,
+                  (long)g_uid0_child_pid);
+          fflush(stdout);
           uint32_t cq = cred_mode ? uid0_child_getuid_query() : 9999;
+          pr_info("QUERY-BRACKET exit cq=%u\n", cq);
+          fflush(stdout);
           if (cred_mode)
             pr_info("%s uid query attempt=%d -> %u getuid=%u\n",
                     g_uid0_check_self ? "self" : "child", route_attempt, cq,
