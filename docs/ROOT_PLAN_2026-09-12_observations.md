@@ -73,3 +73,37 @@ likely landing rate <25% per attempt in current binary) or the current
 SLIDE_CRED stamp differs subtly from the 08-24 one that won. NEXT
 SESSION diff the Z33-era stamp (git log src/core/fops.c Aug 24) vs
 current — the winning geometry is in git history.
+
+## 09-13 SESSION: PRIO-WORD REGRESSION FOUND + FIXED (the history diff paid off)
+
+Git diff 37b9bea (Z33 win, 08-24 01:14) vs current found the ONE effective
+stamp difference: the Z33-era words writer HARDCODED word8 (waiter prio) = 0.
+93473c5 (08-29 17:29) changed it to emit stack_prio(=3) — every walk since
+ran prio=3; ALL Z-era walks (Z25-Z33, incl. the win) ran prio=0. Confirmed
+on-device: park2.txt 09-12 shows "pselect place ... prio=0000000000000003".
+FIX: stack_prio 3→0 in SLIDE_CRED + both SLIDE_ZERO branches (committed).
+
+BUILD DEFINES RECOVERED (were lost): the committed binary was built with
+  -DGHOSTLOCK_KERNEL_5_10 -DKIMAGE_TEXT_BASE=0xffffffc008000000
+(target.h defaults are wrong alone → 214896-byte binary missing whole 5.10
+stamp paths; correct build = 232168 bytes, string parity verified).
+Full build line is in Makefile comments now.
+
+FIRES TODAY:
+- PARKW1 (prio=3, park-first): park walk KP (boot died after consumer punch).
+- prio0 park-first (hk49290): prio=0 CONFIRMED on device ("prio=...0000") —
+  park walk STILL KP'd (died after "consumer punch tid sched_ret=0"). Park
+  walk now ~6 straight KP regardless of prio.
+- Z33_logcat.txt re-read: the winning run ran UNDER PERMISSIVE (avc
+  permissive=1 from gl_uid0 doing syslog_read at 01:48:29, alive past
+  01:49:47; child pid 22522). Console log of the winning walk is lost.
+- DIRECT punch fired (hq49860): UID0_DIRECT=1 + INITTASK=1 + prio=0, first
+  walk = cred punch (no park). RESULT UNREAD — device rebooted during/after
+  the fire, adbd tcpip did not survive reboot (WiFi up, 5555 refused).
+  Read /data/local/tmp/hq49860.txt when USB bootstrap restores adb.
+
+NEXT: user plugs USB briefly → adb tcpip 5555 → read hq49860.txt. If
+LANDED/ROOTED → done. If punch-walk KP → direct walks are cold too, rethink
+ghost state (park-first may be load-bearing for punch geometry). If honest
+miss → prio was not the (only) gap; next diff = fdset rebuild/attempt
+machinery vs Z33 era.

