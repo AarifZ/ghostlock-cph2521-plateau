@@ -1978,7 +1978,7 @@ void do_pselect_fake_lock_route(void) {
      * write = only-right (parent=target-8, child=value, rotating lock).
      */
     if (!g_resurge_stage && env_flag("MODE4_SLIDE_CRED", 0) &&
-        env_flag("UID0_EZP", 0)) {
+        env_flag("UID0_EZP", 0) && !env_flag("UID0_SPRAY_LOCK", 0)) {
       /* ONE-SHOT + empty_zero_page: the 08-30 canary proved one-shot
        * stores LAND; the bss_tail lock was poisoning init_pg_dir AFTER
        * the store (the crash was post-write, not the erase). Keep the

