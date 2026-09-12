@@ -281,6 +281,8 @@ extern int g_swap_staged;
 /* uid0 landing-checked retry (PCKM00 lesson): set by uid0_cred_walk so the
  * pselect route loop can verify each attempt via the child's CapEff. */
 extern long g_uid0_child_pid;
+extern int g_resurge_stage;
+extern int g_resurge_rot;
 extern const uint64_t g_uid0_slot_candidates[];
 extern const int g_uid0_slot_ncand;
 extern int g_uid0_slot_idx;
