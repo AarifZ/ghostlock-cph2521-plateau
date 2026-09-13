@@ -445,3 +445,25 @@ Remaining viable endgames:
    (fire-1's WRITE_PROOF-poisoning could also explain the old stall — the
    old CRED_PI binary predates the stale-env/ordering fixes)
 2. ORACLE_CAPS (never touches +0x780: mutate ORIGINAL cred capability words)
+
+## 09-14: CRED_PI-L0 fire (fl011309) — KERNEL PANIC; +0x780 pi-erase family CLOSED
+
+User-approved. Stamp perfect in log (`stack CRED_PI-L0: pi *child+0x780 =
+cred_copy main=0`, prio=0, placements OK). Walk panicked — bootreason
+EXPLICIT: `kernel_panic,oops:_fatal_exception`. Device recovered by itself.
+
+Final pi-erase matrix (ghost carrier, live pi channel):
+- left-pi/store-1 @ prio=1: clean walk, erase never fires (no store)
+- left-pi/store-1 @ prio=0: KERNEL PANIC (prio=0 makes ghost top → walk
+  goes deeper into real-kernel paths: init_task prio adjust / wake)
+- right-pi/store-2 @ prio=0: panic 5/5 across two carriers
+
+**The +0x780 subjective-cred slot is unreachable by every pi-erase form:
+non-top = no store, top = panic, store-2 = panic. Door CLOSED.**
+
+Per user instruction → moved to ORACLE_CAPS (never touches +0x780):
+walk-1 SLIDE-oracle reads [real_cred, subj_cred] via boot_id redirect
+(proven machinery); walk-2 PLAIN-STORE writes init_cred's pointer VALUE
+into subj_cred+0x30 (cap_effective) — proven-surviving shape, historical
+side-effect (init_cred+8 suid bits, Z33) already survived once. Child
+setuid(0) with giant cap mask → fresh clean root cred.
