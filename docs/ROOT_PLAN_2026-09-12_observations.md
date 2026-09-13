@@ -411,3 +411,37 @@ pushed to /data/local/tmp/gl_jc2. Device healthy (up ~1h51m at push).
 **Awaiting user fire approval** — single fire, env:
 UID0_DIRECT=1 UID0_JC2=1 UID0_QUIET_CHILD=1 UID0_PUR_SPIN=1
 UID0_NO_SYNCLOG=1 KPHYS=0xa8000000 CORE_SEL=7
+
+## 09-14: JC2 fire-2 (fl010034) — store-2 form DISPROVEN on this kernel (5/5 KP)
+
+Both fire-1 fixes confirmed working in the log: `shift=-2` printed, mode-2 armed
+before spray (no mode4 inert line), spray geometry correct
+(`JC2 spray base=... w0=...`, punch pc=child+0x778 right=init_cred).
+Device REBOOTED at the walk (~60-90s in), bootreason "reboot".
+
+The `pselect LOCK/TASK MISPLACE` warnings are FALSE ALARMS: the audit
+(fops.c ~2195) reads out[1]/out[2] = the LEGACY word map (task@w8/lock@w9);
+compact stamps (task@w6/lock@w7, all recent fires) legitimately read prio/
+deadline = 0 there. Placement matches the proven CRED_PI-L0 layout.
+
+**Verdict — connection to chains V-Y (08-31):** our own code comment
+("GLM 08-31 only-right (parent=slot-8, right=init_cred) KPd 4/4 — one-child
+erase rebalances through task_struct") is the SAME geometry JoinChang mode-2
+uses. Fire-2 ran it via the heap-W0 carrier instead of the ghost-pi words:
+same KP. **The store-2/__rb_change_child form at task_struct targets
+deterministically panics this kernel — 5/5 across two carriers.** This is
+why JoinChang's table marks CPH2521 "pending device test": the mode-2 form
+does not transfer to this 5.10 vendor build. Upstream mode-2 is closed.
+
+**Matrix after fire-2 (pi-erase write family, ghost carrier):**
+- left-pi (store-1, child=target) @ prio=1: clean walk, no store
+- right-pi (store-2, parent=target-8) @ prio=0: WALK CRASH (V-Y + fire-2: KP 5/5)
+- left-pi @ prio=0: STALLED pre-walk — never got a clean result (open cell)
+- store-1 with parent-on-our-page (fire-6 shape): SURVIVES + LANDS (misc.fops,
+  real_cred+0x778 ~100%) — the only proven write family on this device
+
+Remaining viable endgames:
+1. CRED_PI-L0 retry (left-pi prio=0) with the pre-walk stall diagnosed
+   (fire-1's WRITE_PROOF-poisoning could also explain the old stall — the
+   old CRED_PI binary predates the stale-env/ordering fixes)
+2. ORACLE_CAPS (never touches +0x780: mutate ORIGINAL cred capability words)
