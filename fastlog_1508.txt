@@ -1,0 +1,19 @@
+roll1: FIRED r92360 up=144 15:09:21
+roll1: dropped
+roll2: FIRED r92594 up=82 15:13:15
+roll2 RESULT: 261
+roll3: FIRED r92671 up=262 15:14:31
+roll3 RESULT: 337
+roll4: FIRED r92747 up=338 15:25:40
+roll4: dropped
+roll5: FIRED r93564 up=93 15:29:28
+roll5 RESULT: 265
+roll6: FIRED r93644 up=265 15:30:44
+roll6 RESULT: 343
+roll7: FIRED r93722 up=344 15:32:03
+roll7 RESULT: 421
+roll8: FIRED r93800 up=421 15:33:22
+roll8: dropped
+roll9: FIRED r98545 up=4197 16:52:26
+roll9 RESULT: 55
+roll10: FIRED r98778 up=56 16:56:19
