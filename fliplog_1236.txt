@@ -8,3 +8,5 @@ roll2 RESULT: uid=2000 euid=2000 status=0
 roll3: FIRED fl84977 up=620
 roll3 RESULT: uid=2000 euid=2000 status=0
 134
+roll4: FIRED fl85640 up=615
+roll4 RESULT: 135

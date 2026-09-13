@@ -44,6 +44,7 @@ const uint64_t g_uid0_slot_candidates[] = {0x780, 0x788, 0x778, 0x780,
 const int g_uid0_slot_ncand = 6;
 int g_uid0_slot_idx;
 uintptr_t g_uid0_task_base;
+long g_cred2_lock_shift; /* DOUBLE stage2: rotate stamp lock off bss_tail (stage1 dequeue poisons it) */
 int g_uid0_check_self;
 char g_bootid_before[80];
 

