@@ -491,7 +491,11 @@ void run_main_route_threads(void) {
   /* Stop the consumer so a later in-process walk (UID0 cred) does not
    * double-punch. Owner stays blocked; waiter has set route_done. */
   atomic_store(&punch_consume_stop, 1);
-  pthread_join(consumer, NULL);
+  /* 09-13: the consumer can wedge post-setattr (same class as the
+   * waiter wedge — the walk ran in its context). Joining it hung the
+   * whole flow after the route_done timeout (fl91387: log stopped at
+   * TIMEOUT, no DISARM/flip/grace ever ran). Detach all three. */
+  pthread_detach(consumer);
   pthread_detach(waiter);
   pthread_detach(owner);
 }

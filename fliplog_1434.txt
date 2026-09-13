@@ -1,3 +1,5 @@
 roll1: uptime=155 wait 465s
 roll1: FIRED fl90723 up=621
 roll1 RESULT: 135
+roll2: FIRED fl91387 up=616
+roll2 RESULT: 737
