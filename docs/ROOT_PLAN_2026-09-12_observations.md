@@ -117,3 +117,24 @@ Theory: fresh boot = heavy futex/PI traffic from init/services pollutes
 the ghost's stale tree -> erase rebalances through foreign nodes -> KP.
 Settled boot = quiet PI state -> clean walk. Flip loop was firing at
 uptime 140s (self-feeding KP loop) — RAISED to 600s minimum settle.
+
+## 09-13 *** FIRST CHILD CRED LANDING OF THE EZP FLOW *** (hu76494)
+
+Park-first + ONE-SHOT EZP + child_piped + UID0_SLOT=0x778 + prio=0:
+- Park W1 LIVED (enforce=0 written — first park survival today, 2/8)
+- ONE-SHOT EZP override: lock=ezp+0x100 task=ezp+0x800 tree=child+0x778
+- **CRED LANDED attempt=1/1**: child Uid=[0 0 4294967176 0]
+  CapEff=000001ffffffffff (FULL CAPS) — suid field holds pointer bits
+  (the change_child second store into init_cred+8 region, Z33 signature)
+- UID0 WIN stage reached; G written to uid0_go + piped to child
+- **BLOCKER: child unresponsive (query 9999) — dead/zombie from zero-page
+  poison seconds after landing; status Uid=0 persists as corpse. The ezp
+  lock's wait_lock manipulation writes poison the zero page EVEN ON A
+  HIT.** Box rebooted ~2min after (known ezp cost).
+- Slot matrix today: 0x778 ezp = LANDS (child dies of poison);
+  0x780 ezp = clean miss (ht75756, child responsive 2000);
+  0x780 direct-bss = 3 clean misses; Z33 0x780 bss-after-park = the only
+  LIVING uid-0 child ever (beacon wrote uid 0 for ~2min, no zero-page).
+CONCLUSION: the payload needs a LIVE uid-0 child → the bss punch after a
+living park (Z33 replay) is the winning configuration. Park coin ~25-40%
+per fire; re-roll until it lives, then the punch is walk-2 Z33 geometry.

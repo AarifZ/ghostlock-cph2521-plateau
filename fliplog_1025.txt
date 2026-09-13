@@ -1,0 +1,2 @@
+roll1: FIRED fl75325 up=6054
+roll1 RESULT: 6174
