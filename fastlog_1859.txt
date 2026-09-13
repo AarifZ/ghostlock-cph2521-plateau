@@ -1,0 +1,11 @@
+roll1: FIRED r06190 up=963 18:59:56
+roll1 RESULT: 1045
+roll2: FIRE FAILED after retries
+roll3: FIRED r06502 up=93 19:05:08
+roll3 RESULT: 266
+roll4: FIRE FAILED after retries
+roll5: FIRED r06816 up=93 19:10:22
+roll5 RESULT: 267
+roll6: FIRED r06898 up=267 19:11:43
+roll6: dropped
+roll7: FIRED r07131 up=88 19:15:37

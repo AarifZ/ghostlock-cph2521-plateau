@@ -1,0 +1,15 @@
+roll1: FIRE FAILED after retries
+roll2: FIRE FAILED after retries
+roll3: FIRE FAILED after retries
+roll4: FIRE FAILED after retries
+roll5: FIRE FAILED after retries
+roll6: FIRE FAILED after retries
+roll7: FIRE FAILED after retries
+roll8: FIRE FAILED after retries
+roll9: FIRE FAILED after retries
+roll10: FIRE FAILED after retries
+roll11: FIRE FAILED after retries
+roll12: FIRE FAILED after retries
+roll13: FIRE FAILED after retries
+roll14: FIRE FAILED after retries
+roll15: FIRE FAILED after retries
