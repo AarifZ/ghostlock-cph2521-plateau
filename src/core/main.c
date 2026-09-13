@@ -462,6 +462,7 @@ void run_main_route_threads(void) {
    * read /proc/<tid>/syscall from THIS thread (its stdout prints work)
    * and dump the select-path kernel SP. */
   int measured = 0;
+  int route_wait_ms = 0;
   while (!atomic_load(&route_done)) {
     if (!measured && atomic_load(&ss_measure_go)) {
       char pp[96], sb[256] = {0};
@@ -472,6 +473,18 @@ void run_main_route_threads(void) {
       measured = 1;
     }
     usleep(5000);
+    route_wait_ms += 5;
+    /* 09-13: post-erase the waiter can wedge INSIDE select forever
+     * (fl84313: stage-1 store landed, child payloaded, parent spun
+     * here — no DISARM, no stage-2, ghost later KPd the boot). The
+     * store already happened; abandon the join and let the flow
+     * continue to DISARM / stage-2. */
+    if (route_wait_ms >= 30000) {
+      pr_error("route_done wait TIMEOUT after %dms (waiter wedged "
+               "post-store) — abandoning join\n", route_wait_ms);
+      live_sync_log("UID0", "route_done_timeout");
+      break;
+    }
   }
   durable_stage("route_done_observed");
   /* Stop the consumer so a later in-process walk (UID0 cred) does not
