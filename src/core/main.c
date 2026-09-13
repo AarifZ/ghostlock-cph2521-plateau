@@ -2094,6 +2094,12 @@ static void uid0_mute_coloros(void) {
  * MODE4_NULL_STORE: W1 was leaf-NULL *sys_exit.funcs=0, not park. Skip
  * harvest/gboot and go straight to cred so the hook-off window is used. */
 static int uid0_cred_walk(void) {
+  /* Global for the whole punch flow: the quiet child CLOSES its pipe
+   * ends after auto-payloading (status-0 G), and the parent's later
+   * write("C") on that pipe is an instant SIGPIPE death with default
+   * disposition — it killed the flow before the DOUBLE block (09-13,
+   * fl83712: log truncated at uid0_after_store, no stage2). */
+  signal(SIGPIPE, SIG_IGN);
   if (env_flag("UID0_DIRECT", 0)) {
     /* Two-process mode: process 1 already did W1 (guard unhook). This
      * process goes straight to the punch — its FIRST walk stores. */
