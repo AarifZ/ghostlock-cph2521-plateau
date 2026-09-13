@@ -187,3 +187,65 @@ the miss-path doesn't kill the child mid-setuid.
 Remaining coin: the post-store waiter wedge (~50%/fire, intrinsic — the
 overlay corrupts select's own stack state; 2.5s bound + DISARM contain
 it). Loop is grinding DUALWRITE; stop condition ROOTED_ID.
+
+## 09-13 CLOSE-OF-DAY HANDOFF (the definitive state)
+
+### WHAT IS PROVEN (device-verified today)
+1. **0x780 (task->cred) is a FORTRESS**: direct stores 0/20 all eras; the
+   DUALWRITE geometry (pc=slot|red, l=init_cred) executed BOTH erase stores —
+   status=0xFFFFFF88 proved store-1 corrupted init_cred.uid through
+   real_cred=init_cred — yet child_wake.txt showed `setuid=-1 errno=1` with
+   getuid=2000: the cred POINTER is actively restored by the vendor kernel.
+   Z33's historical "win" was a real_cred landing all along.
+2. **0x778 (real_cred) + 0x790 (comm) stores land reliably** in every
+   geometry (5/5, both walk-1 and walk-2, ezp/bss/direct).
+3. **Quiet child (UID0_QUIET_CHILD/UID0_PUR_SPIN)** survives landings: zero
+   syscalls during punch (shared-page flag; getuid+nanosleep fallback). The
+   mid-syscall wedge that killed every landed child is SOLVED.
+4. **ORACLE-CAPS pipeline works end-to-end** (a408971): walk-1 SLIDE-oracle
+   (MODE4_ORACLE_TGT=child_task+0x778 via boot_id redirect) survived,
+   readback executed, parse ran, plausibility gate correctly refused walk-2
+   when the store missed. Overlay now uses bss_tail+prio0 (proven class).
+   NOTE: the stamp's print text still says "lock=init_task+0x878" — stale
+   message only; the placed word is bss_tail (see "pselect place" line).
+
+### THE ENDGAME DESIGN (UID0_ORACLE_CAPS=1, built and firing)
+- walk-1: boot_id ctl_table.data := child_task+0x778 → read
+  /proc/sys/kernel/random/boot_id → 16 bytes = [real_cred, cred].
+- parse + plausibility (P0-range, 8-aligned, ≠task) — gate works.
+- walk-2: PLAIN store: *(&child->cred->cap_effective at subj_cred+0x30) =
+  init_cred pointer VALUE — the pointer bits are a giant capability mask
+  (CAP_SETUID bit7, CAP_SYS_ADMIN bit21, CAP_MAC_ADMIN…). The cred pointer
+  is untouched => nothing for the reverter to undo.
+- flag flip → child wakes → setuid(0) succeeds (CAP_SETUID) → clean root
+  cred → payload → ROOTED_ID + ksud late-load (KernelSU).
+- Remaining coins only: walk survive (~50%) × store land (~50%) ×2 walks.
+  3 oracle fires so far: 1 walk-survived (store missed), 2 walk-died.
+  THE LOOP (fastflip.sh, oracle config) grinds this — stop condition
+  ROOTED_ID.
+
+### OPERATIONAL LESSONS (all fixed in-tree)
+- pkill -f gl_uid0_child SIGTERMs its own shell (cmdline match) → pkill -x.
+- live_sync O_SYNC FUSE writes stalled flows for minutes → UID0_NO_SYNCLOG.
+- route_done join hang → 2.5s bound + detach all threads (wedge ~50% is
+  intrinsic: the overlay corrupts select's own stack).
+- /data rollback eats logs within ~75s → logs to /sdcard/Download/.
+- Two concurrent loops double-fire (ghost residue) → /tmp/fastflip.lock.
+- Hard-freeze (glowing screen): recover with power+volup+voldown held ~1-2min.
+- Stale-beacon false "misses": 0x780 landings are invisible to status; only
+  the child getuid/beacon or payload files are honest signals.
+
+### NEXT SESSION (in order)
+1. Check /data/local/tmp/ROOTED_ID + /sdcard/Download/a5*.txt / r*.txt tails
+   (the loop may have landed while unattended).
+2. If not: re-run ./fastflip.sh (oracle config already set) and let it grind;
+   each roll ~2-4min. Watch "ORACLE-CAPS parsed:" lines — a plausible
+   subj_cred (0xffffff80xxxxxxxx) followed by "child_capstore" and
+   child_wake.txt "setuid=0" = WIN.
+3. If walk-1 stores keep missing (bootid readback stays the stale
+   e0a8-8d2a80ffffff pattern): try prio/word variants on the SLIDE stamp,
+   or aim the oracle at a heap address the cred-class stamp has already
+   successfully written (task+0x778 itself) to isolate stamp-vs-target.
+4. Alternative if cap_effective offset differs: dump 0x30/0x38 both via two
+   oracle reads at subj_cred+0x20..0x40 first (the oracle can read ANY
+   kernel address now — use it to verify offsets before storing).
