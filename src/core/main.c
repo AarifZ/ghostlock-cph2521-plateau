@@ -479,7 +479,7 @@ void run_main_route_threads(void) {
      * here — no DISARM, no stage-2, ghost later KPd the boot). The
      * store already happened; abandon the join and let the flow
      * continue to DISARM / stage-2. */
-    if (route_wait_ms >= 5000) {
+    if (route_wait_ms >= 2500) { /* select TO=1.5s; residue KP hits ~2-5s post-store */
       pr_error("route_done wait TIMEOUT after %dms (waiter wedged "
                "post-store; select timeout is 1.5s) — abandoning join\n",
                route_wait_ms);
