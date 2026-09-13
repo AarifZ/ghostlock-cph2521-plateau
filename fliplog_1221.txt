@@ -1,0 +1,7 @@
+roll1: uptime=515 wait 105s
+roll1: FIRED fl82382 up=620
+roll1 RESULT: uid=2000 euid=2000 status=0
+740
+roll2: FIRED fl83044 up=1282
+roll2 RESULT: uid=2000 euid=2000 status=0
+73

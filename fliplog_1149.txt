@@ -1,0 +1,6 @@
+roll1: FIRED fl80377 up=1026
+roll1 RESULT: 140
+roll2: FIRED fl81041 up=621
+roll2 RESULT: 130
+roll3: FIRED fl81704 up=611
+roll3 RESULT: 62

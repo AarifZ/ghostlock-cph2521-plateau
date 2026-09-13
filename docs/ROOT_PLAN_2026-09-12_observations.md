@@ -138,3 +138,25 @@ Park-first + ONE-SHOT EZP + child_piped + UID0_SLOT=0x778 + prio=0:
 CONCLUSION: the payload needs a LIVE uid-0 child → the bss punch after a
 living park (Z33 replay) is the winning configuration. Park coin ~25-40%
 per fire; re-roll until it lives, then the punch is walk-2 Z33 geometry.
+
+## 09-13 EVENING — QUIET CHILD SOLVED THE WEDGE; DIRECT DOUBLE-PUNCH ERA
+
+1. UID0_QUIET_CHILD: child spins getuid+usleep ONLY (cred-inert) after
+   perf self-leak (fd closed). RESULT: 0x778 landing SURVIVED by the
+   child — it auto-payloaded (status-0 auto-G), wrote ROOTED
+   ("uid=2000 euid=2000 status=0") and ran the full `id` as uid 2000.
+   THE MID-SYSCALL WEDGE IS SOLVED. Beacon/pwrite(O_SYNC)/poll were the
+   killers; Z33's child had none.
+2. DIRECT walk-1 0x778 LANDS (fl82382) — NO PARK NEEDED for the store.
+3. UID0_DOUBLE_PUNCH: stage1 0x778 (alive-checked) then stage2 0x780 on
+   the same child (stage2 IS walk-2 = Z33's winning walk position).
+   Roll1: stage1 landed, child payload ran, stage2 walk KP'd the boot
+   after (F13 double-walk pattern persists despite DISARM1).
+4. ROOTED-file semantics fixed: status-only wins write ROOTED with
+   uid=2000 — the loop now clears proof files per fire and stops only
+   on ROOTED_ID (subjective root). 
+5. Remaining gap: 0x780 subjective store 0/17 lifetime vs 0x778 4/4.
+   Every double-punch roll = stage1 (~certain) + stage2 (KP risk, then
+   the 0x780 coin). If stage-2 keeps KP'ing: add inter-stage settle or
+   route the second punch through a fresh process targeting the same
+   child (needs leak-by-pid).
