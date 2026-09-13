@@ -249,3 +249,39 @@ it). Loop is grinding DUALWRITE; stop condition ROOTED_ID.
 4. Alternative if cap_effective offset differs: dump 0x30/0x38 both via two
    oracle reads at subj_cred+0x20..0x40 first (the oracle can read ANY
    kernel address now — use it to verify offsets before storing).
+
+## 09-13 STRATEGY RESET (user directive) — single-fire discipline, ashmem path
+
+BANS IN EFFECT: no automated loops, 1 fire per run, no re-fire after a KP
+without a geometry fix, oracle-caps/dualwrite chains abandoned, no direct
+task->cred / cred+N stores.
+
+### WALK-1 PANIC ANALYSIS (deterministic, from kallsyms_fresh.txt)
+The PI walk writes the fake lock's rt_mutex fields: wait_lock spinlock
+(+0x0), waiters root (+0x8), leftmost (+0x10), owner (+0x18).
+- fake_lock = init_task+0x878 (park/oracle overlay): those writes land in
+  LIVE init_task fields => deterministic corruption => the park/oracle KP
+  cluster. DO NOT USE THIS LOCK.
+- fake_lock = bss_tail 0x02BB9D00: PAST __bss_stop (0xabb9bcc) — dead
+  linker padding to init_pg_dir => writes mostly harmless => cred walks
+  survived more. Still not guaranteed-zero; superseded by the sprayed page.
+- fake_lock = SPRAYED page +0xE80 (SLIDE_SWAP geometry): our own zeroed
+  page; LOCK_EMPTY mode zeroes +0/+8/+10/+18; fake_task at +0x1280 zeroed
+  (dead-end); table at +0x0..0x100. NO overlaps. This is the safe class
+  (08-30 SPRAY_LOCK canary: landed + survived 1425s).
+FIX APPLIED: SLIDE_SWAP stamp stack_prio 3 -> 0 (all-day evidence: prio-0
+walks survived, prio-3 KP'd). Clone precedence: explicit MODE4_CLONE_FOPS
+now yields the pure replica (no armed .write).
+
+### THE SINGLE TEST FIRE (built, NOT fired — awaiting user confirmation)
+env: MODE4_ONLY=1 MODE4_SLIDE_SWAP=1 MODE4_CLONE_FOPS=1 MODE4_LOCK_EMPTY=1
+     UID0_NO_SYNCLOG=1 KPHYS=0xa8000000 CORE_SEL=7
+action: one walk -> *(&ashmem_misc.fops) = fake_fops where fake_fops is a
+     bit-exact replica of the real ashmem_fops (real .cfi_jt stubs from
+     offsets.h: open 0x01831488, ioctl 0x01837928, compat 0x01837930,
+     splice_read 0x01822B58, llseek/read_iter etc.).
+semantics: NO-OP swap — if the box stays healthy and ashmem traffic works,
+     this PROVES (a) walk-1 stability on the sprayed geometry, (b) the
+     fops pointer swap lands, (c) CFI accepts our table through .cfi_jt.
+next (separate approved fire only): CLONE_CFG table (clone + .write =
+     configfs_write JT) -> kernel_write_data -> splice/physrw or UMH.

