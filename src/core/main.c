@@ -1766,8 +1766,7 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
           if (wf >= 0) {
             char wb[128];
             int wn = snprintf(wb, sizeof(wb),
-                              "wake setuid=%d errno=%d getuid=%u euid=%u
-",
+                              "wake setuid=%d errno=%d getuid=%u euid=%u\n",
                               su, se, gu, (uint32_t)geteuid());
             if (wn > 0) (void)write(wf, wb, (size_t)wn);
             close(wf);
