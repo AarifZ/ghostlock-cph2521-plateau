@@ -5,6 +5,10 @@ WIFI=192.168.1.2:5555
 cd "$(dirname "$0")"
 MAX=${1:-30}
 OUT=fastlog_$(date +%H%M).txt
+LOCK=/tmp/fastflip.lock
+if [ -e "$LOCK" ] && kill -0 $(cat "$LOCK" 2>/dev/null) 2>/dev/null; then echo "another loop alive"; exit 1; fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
 con() { MSYS_NO_PATHCONV=1 "$ADB" connect $WIFI >/dev/null 2>&1; MSYS_NO_PATHCONV=1 "$ADB" devices 2>/dev/null | grep -q "$WIFI.*device"; }
 for n in $(seq 1 $MAX); do
   for w in $(seq 1 75); do con && break; sleep 8; done
