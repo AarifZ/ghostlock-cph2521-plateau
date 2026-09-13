@@ -273,6 +273,12 @@ void live_sync_log(const char *tag, const char *msg) {
                    tag ? tag : "LOG", msg ? msg : "?", (int)getpid());
   if (n <= 0)
     return;
+  /* O_SYNC FUSE writes stalled the whole punch flow for minutes after
+   * system churn (post-timeout stall: flow never reached stage-2 — the
+   * 100s fire budget was eaten by sync sdcard writes). Skip entirely;
+   * the loop's stdout redirect captures everything. */
+  if (env_flag("UID0_NO_SYNCLOG", 0))
+    return;
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
     int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND | O_SYNC, 0644);
     if (fd < 0)
