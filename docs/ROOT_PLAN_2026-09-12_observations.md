@@ -160,3 +160,30 @@ per fire; re-roll until it lives, then the punch is walk-2 Z33 geometry.
    the 0x780 coin). If stage-2 keeps KP'ing: add inter-stage settle or
    route the second punch through a fresh process targeting the same
    child (needs leak-by-pid).
+
+## 09-13 NIGHT — THE 0x780 VERDICT + DUALWRITE ENDGAME
+
+**CANARY DISCRIMINATOR (fl89650):** stage-2 walk aimed at comm (+0x790)
+with rotated lock: comm_landed=1, child alive, no reboot. With 0x778 at
+5/5 and 0x790 landing in both walk-1 and walk-2 positions: **task->cred
+(0x780) is SPECIFICALLY vendor-protected — direct stores never land
+(0/20 all-time; Z33's historical "win" was itself a real_cred/status
+landing, per the in-code Z33 comment).**
+
+**DUALWRITE GEOMETRY (the way around it):** the erase does TWO stores.
+Store-1: *tree_l = pc. Store-2 (__rb_change_child): writes tree_l into
+*(pc+8) — ALWAYS lands (the historical suid pointer-bits WERE store-2).
+Invert the stamp: tree_pc = task+0x778|red, tree_l = init_cred:
+- store-1: *init_cred = task+0x778  (usage→huge=never freed; uid garbage
+  — CAPS SURVIVE FULL)
+- store-2: *(task+0x778+8) = init_cred  → **task->cred = init_cred via
+  the unblocked path**
+Then the pur-spin child wakes, setuid(0) (CAP_SETUID from the full cap
+set) mints a CLEAN root cred, payload runs → ROOTED_ID + KSU.
+Confirmed live on device (i390054 stamp print: pc=slot|1, l=init_cred).
+Flow hardened: flag-flip grace (3s) + uid0_payload_fired() in WIN so
+the miss-path doesn't kill the child mid-setuid.
+
+Remaining coin: the post-store waiter wedge (~50%/fire, intrinsic — the
+overlay corrupts select's own stack state; 2.5s bound + DISARM contain
+it). Loop is grinding DUALWRITE; stop condition ROOTED_ID.
