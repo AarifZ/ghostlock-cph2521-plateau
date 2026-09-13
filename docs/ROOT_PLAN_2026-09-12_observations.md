@@ -368,3 +368,46 @@ perf/leak phase on this boot). MATRIX STANDS:
 - right-pi @ prio=0: walk crash
 - left-pi  @ prio=0: no data (stall)
 Per agreement: no more fires without external input. Repo clean at 63e7358.
+
+## 09-14 (early): JoinChang repo read + JC2 build (commit 1c2120c)
+
+**Upstream (github.com/JoinChang/ghostlock-oneplus) findings — the "word"
+suggestion the user flagged:**
+- CPH2521 in their device table = "Offsets Extracted (pending device test)"
+  — they never fired on our device either; we are the testers.
+- 5.10 OPLUS: waiter word=0, SHIFT=0 (their table) — matches our verified
+  compact map. (Our device-measured shift=-2 placement = words 2-9 land at
+  global 0-7; their words_compact stamps exactly words 2-9, consistent.)
+- **Their mode-2 (cred write) NEVER puts write geometry on the ghost stack
+  stamp.** words_compact = {2:0, 3:0, 4:0, 5:0, 6:fake_task, 7:fake_lock,
+  8:0, 9:0} — pure carrier. Words 0/1 keep the original sole-waiter 0/0.
+- Write geometry on the SPRAYED W0 heap waiter: W0.pi = {pc=target-8,
+  right=REAL init_cred (data_addr), left=0}; W0.tree = {1,0,0} inert root
+  of fake_lock->waiters; fake_task->pi_waiters = NULL for mode!=4.
+- Trigger decoded: unlock's mark_wakeup_next_waiter takes W0 as top waiter
+  (leftmost forced) -> rt_mutex_dequeue_pi(current, W0) -> rb_erase(W0.pi)
+  Case 1a: store-1 *(init_cred+0)=pc (usage = huge refcount — harmless,
+  their comment confirms), store-2 __rb_change_child at parent+8:
+  ***(child_task+0x780) = init_cred**. No rebalance (child-present case).
+- Their W2 targets a fork()'d child blocked in read(); child verifies with
+  plain getuid() — NO setuid() dependency. Task leak via perf register
+  sampling (SP_EL0=current on arm64) — we keep our proven x28/child_self
+  leak instead (perf EACCES from shell on CPH).
+
+**Why our fork could never fire mode 2 before:** pselect_custom_write==2
+fell into a LEGACY-word-map stamp fallback (task@8/lock@9) — wrong layout
+for our compact waiter (task@6/lock@7). Fixed: MODE4_JC2 benign-carrier
+compact branch (fops.c) + UID0_JC2 punch driver (main.c).
+
+**Differs from all 22+ failed +0x780 attempts:**
+- store-2 (__rb_change_child parent+8) instead of store-1 (child pc store)
+- geometry on our sprayed heap page, not the ghost stack (augmented-callback
+  inputs fully controlled — addresses the 3-model concern)
+- value = REAL init_cred (usage corruption tolerable), not the Image copy
+- child getuid detector, no setuid-before-read race
+
+**Build:** ghostlock-cph2521-jc2 (240696 B, md5 06b0e72d6d07ba465b02207520b10efc)
+pushed to /data/local/tmp/gl_jc2. Device healthy (up ~1h51m at push).
+**Awaiting user fire approval** — single fire, env:
+UID0_DIRECT=1 UID0_JC2=1 UID0_QUIET_CHILD=1 UID0_PUR_SPIN=1
+UID0_NO_SYNCLOG=1 KPHYS=0xa8000000 CORE_SEL=7
