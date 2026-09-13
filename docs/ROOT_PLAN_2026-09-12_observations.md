@@ -357,3 +357,14 @@ ALL historical pi-erase conclusions are INVALID (both bugs predate).
 3. JT map + gadget route remains the fallback (misc.fops swap chain is
    mechanically proven through fdset+walk; only the VALUE slot was
    never honestly verified — see fire-6 caveat).
+
+## 09-13 L0 MEASUREMENT (m120688): NULL RESULT
+Left-pi + prio=0: the flow STALLED pre-walk (log stops at 49 lines after
+the cred_copy spray print; killed by the 90s timeout; device healthy
+throughout — no KP, no reboot, no wake). No walk ran => no data for this
+matrix cell. A retry would likely reach the walk (transient stall, probably
+perf/leak phase on this boot). MATRIX STANDS:
+- left-pi  @ prio=1: clean walk, NO store (child_wake getuid=2000)
+- right-pi @ prio=0: walk crash
+- left-pi  @ prio=0: no data (stall)
+Per agreement: no more fires without external input. Repo clean at 63e7358.
