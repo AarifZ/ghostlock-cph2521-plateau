@@ -275,3 +275,109 @@ Both phases need ZERO writes to task->cred. The +0x780 war is over.
 - github.com/LSPosed/LSPromise + github.com/V4bel/dirtyfrag write-up
 - github.com/lokey0905/rootWithoutUnlockBootloaderList (ABL injection)
 - github.com/JoinChang/ghostlock-oneplus (our fork's base)
+
+---
+
+# ADDENDUM (same day, evening): multi-agent correlation — THE PLAN IS NOW EVIDENCE-CLOSED
+
+Three agents + device enumeration + offline checks. Sources: agent reports
+(cached /tmp/research/{jc,users}), upstream JoinChang @ fa877c4 source,
+JoinChang issues #9/#16/#21/#31/#44/#46/#50, RMG/IonStack docs, our fire
+ledger (1575 logs mined).
+
+## A. THE TWIN-DEVICE PROOF: 5.10.236-android12-9 IS ROOTABLE
+
+- **Galaxy Z Fold4 SM-F9360: SAME KMI as CPH2521 (5.10.236-android12-9),
+  waipio SoC family, kernel_phys_load=0xa8000000 — DEVICE-TESTED ROOT 3×**
+  (RMG docs/SM-F9360-F9360ZCSAIZF1.md; KSU "Working LKM Jailbreak mode").
+- Galaxy S22 Ultra 5.10.226: hardware-verified `uid=0 context=u:r:kernel:s0`
+  + KernelSU-Next insmod (sarabpal-dev/IonStack-S22U; QEMU harness).
+- Galaxy A53 5.10.237: rooted from PURE APP domain.
+- OnePlus 10 Pro (issue #16, same KMI as ours): JoinChang's pselect engine
+  KP's — but OUR fork already walks (shift=-2 overlay proven), so we are
+  past the point where that twin is stuck.
+
+## B. THE CONFIGFS-ON-5.10 BUG — AND THE FIX (source-verified)
+
+JoinChang commit 17b6ec4 (xperia1iv, 5.10): mainline 5.10
+`configfs_file_operations` uses **plain .read/.write**
+(configfs_read_file @ fops+0x10, configfs_write_bin_file @ +0x18) — NOT
+.read_iter/.write_iter (6.x-era). JoinChang's fake table points the _iter
+slots at iter-compiled functions → on 5.10 VFS either never dispatches or
+misdispatches → errno 22 / broken. OUR FORK INHERITED THE SAME TABLE.
+**Fix: point fake fops .read(+0x10)→configfs_read_file .cfi_jt stub and
+.write(+0x18)→configfs_write_bin_file .cfi_jt stub for 5.10.** New Image
+offsets to extract: both stubs + verify CFG_* configfs_buffer field
+offsets (upstream constants tuned for GKI 6.x 48-byte mutex; our 5.10
+needs BTF/disasm verification of struct configfs_buffer:
+{count@0,pos@8,page@16,ops@24,mutex@32,needs_read_fill@80,bin_buffer@88,
+bin_buffer_size@96,cb_max_size@100}).
+
+## C. THE UMH IS DEAD ON OUR DEVICE (config-verified) — replacement known
+
+CONFIG_STATIC_USERMODEHELPER=y PATH="" → call_usermodehelper_exec_async
+forces path="" → execve fails. Workqueue injection (umh_root.c) calls the
+same dead end. JoinChang issue #31's own conclusion: skip UMH entirely.
+Replacement endgame (NebuSec part III + issue #31 recipe):
+**configfs r/w → pipe_physrw → 1-byte enforcing=0 (no adjacent bytes) →
+ROOTGUARD unhook (sys_exit tracepoint funcs → probestub; we already
+landed the leaf-NULL variant) → walk init_task→child → patch cred FIELDS
+in place (uids=0, 5×caps=FULL, seccomp cleared, sid→kernel) → child
+executes .ghostlock_root.sh (ksud late-load already coded in main.c).**
+
+## D. WHY PREVIOUS ATTEMPTS STALLED (correlated, all cited in agent report)
+
+1. Selinux W1: SOLVED (Z15 value 0xffffff802abb0000 keeps `initialized`
+   byte ≠0; the 8-byte-NULL form zeroes it → SID flood → ~100s death —
+   independently confirmed by JoinChang fa877c4 on Xperia: __randomize_layout).
+2. Walk budget 2/boot: park+W2 max (Z5/Z26 3rd-walk KP). The new plan
+   needs **ONE walk total** (fops swap); everything after is userspace.
+3. Fire-6 ambiguity (errno 22 = configfs EINVAL vs unswapped): the honest
+   re-verification = canary write into OUR OWN PAGE + readback compare
+   (JoinChang try_cfi_stage step 1 — our fork has it) — unambiguous.
+4. Every landed fops swap clobbered fake_fops+0x08 (llseek) via
+   change_child: repair_fake_fops_llseek exists — must run right after.
+5. ROOTGUARD (oplus_root_check_post_handler sys_exit): the vivo vr.ko
+   Option-B pattern (funcs[].func → tracepoint probestub, address-
+   fingerprinted) is the clean surgical variant of our landed leaf-NULL.
+
+## E. THE CHAIN (every link cited; ONE walk; no cred-pointer writes)
+
+0. OFFLINE (no fire): extract configfs_read_file/configfs_write_bin_file
+   .cfi_jt stubs from our Image; verify configfs_buffer offsets vs our
+   kernel (BTF absent on our build → capstone on do_configfs_open/
+   configfs_write_bin_file disasm — same method as aristotle port §3).
+1. Walk 1: fops swap (fire-6 surviving form + JoinChang mode-4 W0 arming:
+   fake_task.pi_waiters root=leftmost=&W0.pi, W0.pi={pc=fake_fops(page),
+   right=&misc.fops, left=0}) → *(misc.fops)=fake_fops (aligned, no color
+   bit). prio=0, sprayed-page lock, shift=-2. [fire-6 + Z15 precedent]
+2. Userspace: open /dev/ashmem<boot_id> (fake .open=real ashmem_open;
+   fire-6's open SURVIVED — the only open-survivor ever), ASHMEM_SET_NAME
+   blob → configfs_buffer forged in asma->name.
+3. Canary write→readback on our page (honest swap proof).
+4. repair llseek; pipe_physrw install (code exists; drain64/reclaim16 +
+   kmalloc-2k gate + marker scan — JoinChang geometry).
+5. 1-byte enforcing=0; ROOTGUARD probe-redirect; task walk; cred FIELD
+   patch (uids/caps/seccomp/sid) — NebuSec Android-17 recipe verbatim.
+6. Child uid=0 → .ghostlock_root.sh → ksud late-load --kmi android12-5.10
+   (module build needed for non-GKI vermagic 5.10.236-android12-9-o-g74d…
+   — OPPO kernel source + KernelSU-next LKM, no-LTO per Z Fold4 lesson;
+   even without the module: durable root shell + permissive until reboot).
+
+## F. Fall-back ladder (if a rung fails, next rung — all userspace-verifiable)
+
+- configfs slots wrong → polygraphene 2-walk pipe-flag plan (bugreportd,
+  dumpstate page-cache overwrite; CONFIG_MODULES=y + NO MODULE_SIG
+  verified on device — unsigned .ko loadable once root).
+- pipe slab never lands → S22U "exp32" compat-child or SIGRETURN writer
+  (proven alternates on same-KMI-class devices).
+- ColorOS permissive death timer (15s–15min) → mute list (uid0_mute_
+  coloros) + do steps 4-6 immediately; park value keeps initialized≠0.
+
+## G. Confidence (per rung, evidence-weighted)
+
+swap walk+open survive 0.6 (1/1 fire-6) → configfs@5.10-fixed-slots 0.6
+(source-verified fix, untested offsets) → physrw 0.6 (code complete,
+twin-device proven, our slab unknown) → cred-field patch 0.9 (NebuSec-
+proven, no pointers) → **joint ≈ 0.2 first run, ≈ 0.5 within 3-4 runs**
+(independent verifiable rungs, each retry cheap after walk 1).
