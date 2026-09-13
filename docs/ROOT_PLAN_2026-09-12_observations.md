@@ -467,3 +467,38 @@ walk-1 SLIDE-oracle reads [real_cred, subj_cred] via boot_id redirect
 into subj_cred+0x30 (cap_effective) — proven-surviving shape, historical
 side-effect (init_cred+8 suid bits, Z33) already survived once. Child
 setuid(0) with giant cap mask → fresh clean root cred.
+
+## 09-14: ORACLE_CAPS fire (fl012612) — died at walk-1; intrinsic geometry flaw found
+
+User-approved after +0x780 door closed. Walk-1 (SLIDE oracle, tgt=child+0x778
+P0) stamped correctly, pselect entered → KP/reboot. This is the 3rd oracle
+walk-1 death (09-13: 2/2 with init_task+0x878; now bss_tail/prio0 variant).
+
+**Root cause (geometry, not config):** the oracle write needs
+tree_pc = VALUE = child+0x778 (so boot_id.data points at the cred pair) and
+tree_l = &ctl_table.data. The erase's store-2 (__rb_change_child) ALWAYS
+writes at parent+8 or parent+16 where parent = pc = child+0x778:
+- else-branch → *(child+0x780) = &ctl.data → THE FORTRESS SLOT (3/3 KP)
+- left-branch (needs *(child+0x788)==node) → unreachable
+Retarget +0x770 → store-2 hits *(child+0x778) — survivable BUT +0x778 is the
+second half of the read window [0x770,0x77f] → the oracle reads back its own
+store-2 garbage instead of real_cred. **Every window that contains the cred
+pair self-clobbers or fortress-hits: the oracle cannot read both cred
+pointers with this write primitive.** Walk-1 as designed is impossible.
+
+Remaining directions (design work, not config):
+- multi-step oracle: read task->stack ptr (task+0x18-ish window, +8 slot
+  junk-tolerant), then read the child's kernel stack where syscalls spill
+  the cred pointer (needs spill-offset discovery from Image)
+- or drop the oracle: capstore blind at real_cred+0x30 — but real_cred
+  address unknown without oracle; real==subj for a plain fork child, and
+  0x778 landings are survivable... real_cred VALUE could come from the
+  0x778-slot read: write 0x778 = &bootid_ctl (survivable) then READ boot_id
+  → window [0x778,0x787] FIRST HALF intact = real_cred ✓ and second half
+  clobbered (subj unknown — but real==subj for fork child, use real).
+  → ORACLE MK2: tgt stays +0x778 BUT pc=&ctl.data/child form flipped:
+  need store-1 to write 0x778 (not pc into child) — Case 2-left with
+  tree_l=child+0x778, tree_pc=&ctl... no, that writes 0x778=&ctl WITHOUT
+  redirecting boot_id. The redirect AND the 0x778 write are the SAME store.
+  MK2 is: accept status-fool-only window — real_cred readable via the
+  redirect window's first half IS the pc store target... (open design)
