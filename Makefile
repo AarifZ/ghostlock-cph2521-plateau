@@ -19,7 +19,8 @@ SRCS := \
 
 CFLAGS := -O2 -Wall -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function \
   -Isrc/core -Isrc/devices -DTARGET_CONFIG_H=\"target.h\" \
-  -DGHOSTLOCK_KERNEL_5_10 -DKIMAGE_TEXT_BASE=0xffffffc008000000ULL
+  -DGHOSTLOCK_KERNEL_5_10 -DKIMAGE_TEXT_BASE=0xffffffc008000000ULL \
+  -DPSELECT_WAITER_WORD_SHIFT=(-2)
 LDFLAGS := -fPIE -pie -pthread
 
 # CPH2521 defines baked into CFLAGS (2026-09-13, recovered from the shipped

