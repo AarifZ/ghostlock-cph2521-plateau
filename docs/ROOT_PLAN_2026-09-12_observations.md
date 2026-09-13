@@ -107,3 +107,13 @@ LANDED/ROOTED → done. If punch-walk KP → direct walks are cold too, rethink
 ghost state (park-first may be load-bearing for punch geometry). If honest
 miss → prio was not the (only) gap; next diff = fdset rebuild/attempt
 machinery vs Z33 era.
+
+## 09-13 UPTIME CORRELATION (stop firing on fresh boots)
+
+All KPs today were on boots < ~10 min old. The ONE surviving walk+store
+attempt (lived, missed, DISARMed, exited) was on a 5h-settled boot.
+FL5 yesterday (3 misses, device survived whole fire) was also settled.
+Theory: fresh boot = heavy futex/PI traffic from init/services pollutes
+the ghost's stale tree -> erase rebalances through foreign nodes -> KP.
+Settled boot = quiet PI state -> clean walk. Flip loop was firing at
+uptime 140s (self-feeding KP loop) — RAISED to 600s minimum settle.

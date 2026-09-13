@@ -1,0 +1,8 @@
+roll1: FIRED fl67934 up=144
+roll1 RESULT: 265
+roll2: FIRED fl68056 up=266
+roll2 RESULT: 140
+roll3: FIRED fl68239 up=140
+roll3 RESULT: 134
+roll4: uptime=135 wait 15s
+roll4: FIRED fl68439 up=135
