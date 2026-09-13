@@ -1,0 +1,3 @@
+roll1: uptime=121 wait 499s
+roll1: FIRED fl79972 up=620
+roll1 RESULT: 741

