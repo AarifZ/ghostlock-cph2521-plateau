@@ -285,3 +285,43 @@ semantics: NO-OP swap — if the box stays healthy and ashmem traffic works,
      fops pointer swap lands, (c) CFI accepts our table through .cfi_jt.
 next (separate approved fire only): CLONE_CFG table (clone + .write =
      configfs_write JT) -> kernel_write_data -> splice/physrw or UMH.
+
+## 09-13 LATE — MECHANISM WIN + ESCALATION RESEARCH STATE
+
+### FIRE 6 = THE WIN (t616616, commit b6b75e0)
+pi-only clean swap: WALK STABLE, SWAP HELD (aligned ptr), probe-open
+survived, pwrite REACHED configfs_write through OUR table's .write JT
+(errno=22 = configfs' own foreign-fd rejection = CFI ACCEPTED the call).
+Kernel R/W mechanism is live: *target = <controlled table ptr> + full
+fops table control with JT-only slots.
+
+### TODAY'S CRASH-ROOT-CAUSE LEDGER (all fixed, all deterministic)
+1. park/oracle lock init_task+0x878 -> spinlock writes in live task fields
+2. prio=3 walks -> prio=0
+3. black-parent rebalance -> red / all-zero main tree
+4. color bit |1 leaking into stored pointer -> pi-tree clean store
+5. FDSET WRITER BUG: words 3/4/5 hardcoded pi words to 0 — pi stamps
+   never reached the waiter (fire-5 zeroed misc.fops via NULL-parent
+   pi erase). THIS likely also invalidated every pi-erase-based fire
+   ever run (old "settle breaks writes" findings suspect).
+
+### ESCALATION RESEARCH (offline, Image extracted: kernel_Image.bin)
+- Image: PE/COFF arm64, .text VMA==file offset (base+0x10000 section);
+  disasm: NDK llvm-objdump.
+- __arm64_sys_getuid @0x1641c0: PLAIN task->cred(0x780)->uid read, NO
+  validation. Fallback global = overflowuid @0x27dfee0 (standard).
+- No vendor cred-guard/validate symbols in kallsyms; commit_creds tail
+  = standard put_cred. "Fortress" may partly be an artifact of the
+  pi-words bug (pi erases never executed in those fires).
+- CFI JT section at ~0x1820000+: JTs exist only for address-taken
+  functions; deltas non-uniform (getuid 0x16c10a0, getuid16 0x1583cc4)
+  -> build the JT map by pairing sorted *.cfi_jt symbols with their
+  functions from kallsyms (both orders match).
+
+### NEXT (research, then single approved fires)
+1. JT-map tool (kallsyms-paired) -> gadget menu for
+   .write(file,buf,count,pos) / .llseek(file,offset,whence) arg shapes.
+2. RE-TEST the 0x778+0x780 punch under the FIXED fdset writer — the
+   historical 0/20 may be pi-words-tainted; a verified child getuid
+   (not stale beacons) is the honest detector.
+3. Groomed x0 gadget hunt for commit_creds-shaped calls.
