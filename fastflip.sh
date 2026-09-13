@@ -7,7 +7,7 @@ MAX=${1:-30}
 OUT=fastlog_$(date +%H%M).txt
 con() { MSYS_NO_PATHCONV=1 "$ADB" connect $WIFI >/dev/null 2>&1; MSYS_NO_PATHCONV=1 "$ADB" devices 2>/dev/null | grep -q "$WIFI.*device"; }
 for n in $(seq 1 $MAX); do
-  for w in $(seq 1 30); do con && break; sleep 8; done
+  for w in $(seq 1 75); do con && break; sleep 8; done
   con || { echo "roll$n: gone" >> $OUT; break; }
   UP=$(MSYS_NO_PATHCONV=1 "$ADB" -s $WIFI shell "cut -d. -f1 /proc/uptime" 2>/dev/null | tr -d '\r')
   if [ -n "$UP" ] && [ "$UP" -lt 180 ] 2>/dev/null; then

@@ -11,3 +11,7 @@ roll5 RESULT: 337
 roll6: FIRED r98931 up=337 16:58:51
 roll6 RESULT: 412
 roll7: FIRED r99006 up=413 17:00:07
+roll7 RESULT: 488
+roll8: FIRED r99082 up=489 17:01:23
+roll8: dropped
+roll9: gone
