@@ -10,3 +10,9 @@ roll3 RESULT: uid=2000 euid=2000 status=0
 134
 roll4: FIRED fl85640 up=615
 roll4 RESULT: 135
+roll5: FIRED fl86305 up=618
+roll5 RESULT: uid=2000 euid=2000 status=0
+135
+roll6: FIRED fl86969 up=616
+roll6 RESULT: uid=2000 euid=2000 status=0
+737

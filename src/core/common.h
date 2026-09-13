@@ -288,6 +288,7 @@ extern const int g_uid0_slot_ncand;
 extern int g_uid0_slot_idx;
 extern uintptr_t g_uid0_task_base;
 extern long g_cred2_lock_shift;
+extern uintptr_t g_uid0_flag_page;
 extern int g_uid0_check_self;
 extern char g_bootid_before[80];
 int bootid_changed(void);

