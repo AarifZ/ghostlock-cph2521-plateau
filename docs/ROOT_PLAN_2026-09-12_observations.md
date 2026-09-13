@@ -325,3 +325,35 @@ fops table control with JT-only slots.
    historical 0/20 may be pi-words-tainted; a verified child getuid
    (not stale beacons) is the honest detector.
 3. Groomed x0 gadget hunt for commit_creds-shaped calls.
+
+## 09-13 FINAL STATE (context-exhausted — precise resume point)
+
+### THE PI CHANNEL NOW WORKS END-TO-END (first time ever)
+Root cause chain found and fixed live tonight: (1) fdset words 3/4/5
+hardcoded pi=0; (2) my CRED_PI branch was anchored into the RESURGE
+stage-2 block = DEAD CODE (never ran). After moving it into the live
+stage-0 chain, the debug fire r219140 showed the full chain:
+  stack CRED_PI: pi *slot = cred_copy
+  LAYOUT=COMPACT emit pi_parent=<cc> pi_left=<slot>
+  pselect place tree=0 pi=<cc> prio=0
+ALL historical pi-erase conclusions are INVALID (both bugs predate).
+
+### CRED_PI RESULT MATRIX (both fired, both analyzed)
+- LEFT-child pi (pi_left=slot): WALK CLEAN (no crash, full flow) but
+  child_wake getuid=2000 — store did not take. NOTE that fire ran with
+  prio=1 (branch forgot stack_prio=0).
+- RIGHT-child pi (pi_right=slot, prio=0, NULL-sibling design): the
+  WALK ITSELF crashed (r319322, pre-select, reboot).
+=> next analysis: why right-child pi erase crashes while left survives
+   (successor-path/augment difference?), and whether the left-form miss
+   was the prio=1 or the pi-dequeue never executing store-1. Consider:
+   instrument LEFT form at prio=0 FIRST (one fire, walk-proven class).
+
+### Resume checklist
+1. Left-pi + prio=0 single fire (the untested combination).
+2. If still no store: the pi dequeue path may not run store-1 for our
+   ghost at all — audit rt_mutex_dequeue/dequeue_pi call order in the
+   Image (which erase runs for a stale-hb-tree waiter).
+3. JT map + gadget route remains the fallback (misc.fops swap chain is
+   mechanically proven through fdset+walk; only the VALUE slot was
+   never honestly verified — see fire-6 caveat).
