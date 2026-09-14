@@ -371,7 +371,12 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * words 0/1 are NEVER left to the original linkage again. */
           {0, 0, "tree_pc"},
           {1, 0, "tree_right"},
-          {2, 0, "tree_left"},
+          /* root-case erase writes tree_left into fake_lock->waiters root —
+           * set it to W0 itself: the store re-writes the value already
+           * there (no-op) so W0 stays top-waiter and the W0.pi erase
+           * delivers the write. Zeroing it (roll 7) nulled the root and
+           * the proof missed with the device ALIVE. */
+          {2, (uint64_t)fake_w0, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
           {5, 0, "pi_left"},
