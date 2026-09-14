@@ -648,3 +648,32 @@ task=init_task choice (init_task pi_waiters empty path), or the erase
 fires but change_child/store-1 go somewhere unobserved (add the boot_id
 oracle as delivery detector — readback-based, no KP risk on the safe
 base).
+
+## TIGHTEN CAMPAIGN (rolls 11-15, disasm-driven) — FINAL
+
+- Roll 11: KP inside the self-leak (perf on corrupted waiter thread) →
+  leak moved to waiter entry (jc2l).
+- Roll 12: SURVIVED with all disasm gates green (owner=fake_task|1,
+  ghost.task = leaked waiter task 256/256 votes) — no store (chain exits
+  deeper).
+- Roll 13: swap geometry moved to the ghost's MAIN tree (the 0x1edddc
+  erase slot with positive execution proof) → KP (env missed
+  W0TASK_FAKE — the W0 wake on raw-KIMAGE init_task).
+- **Roll 14: THE DEEPEST RUN EVER — full surviving cycle:**
+  `consumer punch sched_ret=0 → pselect ret=5 calls=1 success=1 →
+  cfi probe → PROOF cfi_before_open` — the erase delivered (the cfi
+  stage only proceeds on detected redirect); **KP at the OPEN** of the
+  swapped node (the historical N11-N14 class).
+- Roll 15: fire-6 table attempt (SLIDE_SWAP stage1) — KP early (bootid
+  W0 override + high-alias page; walk variance persists on this
+  geometry).
+
+**Position after 15 rolls:** the walk is ~deterministic with the
+jc2m config (roll 14), the swap DELIVERS, and the remaining wall is
+the OPEN of the swapped fd — plus residual walk variance on some
+pages/targets. The open-KP needs the fire-6 table replicated CLEANLY
+(not via the SLIDE_SWAP target-override path that cost roll 15) — a
+small next build: clone the swap_stage1 table shape into the CLONE_CFG
+path (llseek=0/read=0/read_iter=ashmem/write=cfg_w) + keep WRITE_PROOF
+fops targeting. That is a one-branch change, and the next session
+starts one step from the canary.
