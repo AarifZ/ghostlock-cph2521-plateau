@@ -34,7 +34,7 @@
 /* ---------- module state ---------- */
 
 static int pr_drain_fds[PHYSRW_DRAIN_COUNT][2];
-static int pr_reclaim_fds[PHYSRW_RECLAIM_COUNT][2];
+int pr_reclaim_fds[PHYSRW_RECLAIM_COUNT][2];
 static int pr_pipes_ready;
 
 static uintptr_t pr_buf_base;       /* page within order-3 region where bufs live */

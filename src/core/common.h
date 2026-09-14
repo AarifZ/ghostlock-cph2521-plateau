@@ -363,6 +363,7 @@ extern int pipe_cache_slot_hit;
 extern uint64_t pipe_page_slab_cache[PIPE_CANDIDATE_PAGES];
 extern uint32_t pipe_page_type[PIPE_CANDIDATE_PAGES];
 extern uintptr_t pipebuf_page_base;
+extern int pr_reclaim_fds[16][2];
 extern uintptr_t pipebuf_addr;
 extern int pipebuf_pipe_idx;
 extern char physrw_readback[64];
