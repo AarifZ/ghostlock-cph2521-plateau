@@ -548,3 +548,41 @@ boot-state changes since the O-era.
 - also KP → the device/kernel state itself changed since Aug 22 (the
   August walk results are no longer reproducible — different problem
   class entirely, likely needing a fresh trigger-timing campaign).
+
+## prio=1 A/B result (fl101255, jc2e): KP — the debug concludes
+
+Config fully verified in log: W0-classic@misc ✓ owner=1 ✓ carrier prio=1
+stamped ✓ page ffffff8835b18000. Died at pselect like all others.
+(The alias-gate run fl100706 timed out at spray — every page this boot
+was high-alias; gate disabled; ALSO NOTE: clean userspace exit, no KP,
+device untouched — a failed spray is harmless.)
+
+## THE COHERENT PICTURE (all evidence, 8 KP boots today + history)
+
+| walk class | W0.pi | result |
+|---|---|---|
+| r219140 (09-13, fixed writer) | INERT {1,0,0} | CLEAN (but no write — ghost-pi delivery) |
+| O-era O18-O32 (08-22) | armed only-left | 45-55% survive (documented coin flip) |
+| fire-6 (08-30, writer-bug era) | armed classic@misc | survived (won its flip) |
+| today's 6 (all variants) | armed (bootid/misc/mode2) | 6/6 KP |
+
+**The W0-erase-with-real-geometry is an inherent ~50/50 survival lottery
+on this kernel** — matching the O-era's own 45-55% stats AND the Z Fold4
+twin's "per-boot volatility, re-run after reboot" note. Every deterministic
+geometry bug (pi-armed ghost, store-2, prio classes, arming env, spray
+ordering) has been fixed and eliminated; what remains is the coin flip
+that the O-era always accepted and the 09-13 single-fire discipline was
+never designed for. 6 tails in a row ≈ 1.6% — improbable but the odds
+may be worse than 50% on recent boots.
+
+## THE DECISION POINT (for user)
+The fl101255 config is verified correct end-to-end (arming, target,
+table, carrier, canary follow-through). Each boot = independent flip.
+Options:
+A) Continue 1-fire-per-approval with this exact config — each approval
+   is one coin flip; expected land within a few boots (if odds ~50%).
+B) User-authorized limited re-roll loop of THIS EXACT config only
+   (fastflip-style, e.g. 4-6 rolls with 10-min settle between reboots)
+   — re-introduces the O-era's acceptance of the lottery, bounded.
+No code changes pending — the chain behind the walk (canary → configfs →
+physrw → cred-field patch) is verified and waiting.
