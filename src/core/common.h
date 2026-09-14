@@ -56,7 +56,7 @@
 /* Defaults match verified 6.12 devices. CPH2521 (5.10) overrides via -D.
  * Quest IonStack (5.10.240): MM_STRUCT_SZ=0x400, MM_ORDER=2. */
 #ifndef MM_STRUCT_SZ
-#define MM_STRUCT_SZ 0x500
+#define MM_STRUCT_SZ 0x3c0 /* CPH2521 Image-verified (mm_cache_init mov w1,#0x3c0); q4q same-KMI verified 2026-09-14; was 6.x-default 0x500 = under-sprayed reclaim */
 #endif
 #ifndef MM_ORDER
 #define MM_ORDER 3
@@ -313,6 +313,7 @@ extern atomic_int owner_unlock_req;
 extern atomic_int owner_unlock_done;
 extern atomic_int requeue_done;
 extern atomic_int route_done;
+extern volatile long long g_select_start_us; /* wchan-guard: select() entry time */;
 extern atomic_int waiter_tid;
 extern atomic_int punch_consume_go;
 extern atomic_int punch_consume_stop;

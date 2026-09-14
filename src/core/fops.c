@@ -2303,6 +2303,12 @@ void do_pselect_fake_lock_route(void) {
       }
     }
     errno = 0;
+    {
+      struct timespec gs;
+      clock_gettime(CLOCK_MONOTONIC, &gs);
+      g_select_start_us = (long long)gs.tv_sec * 1000000LL +
+                          gs.tv_nsec / 1000;
+    }
     int ret = select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &timeout);
     int saved_errno = errno;
     pr_info("pselect post-select +%.0fms ret=%d\n", fops_elapsed_ms(&route_t0), ret);

