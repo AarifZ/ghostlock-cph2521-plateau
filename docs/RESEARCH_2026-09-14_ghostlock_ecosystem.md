@@ -721,3 +721,32 @@ canary via transient-arm read/write → g_swap_staged flow → physrw →
 1-byte selinux → ROOTGUARD probe-redirect → cred FIELD patch → root
 script. Every element cited: roll 14, fire 6, our disasm, JoinChang
 inherited code, NebuSec recipe.
+
+## ★ ROLL 21 (jc2p, 13:43) — THE BREAKTHROUGH RUN ★
+
+Config: quiet entry + MIDSTAMP UNLOCK + punch in-select + main-tree swap +
+stage1 table. DEVICE ALIVE THROUGHOUT (first boot in project history to
+survive a landed swap + open + configfs dispatch).
+
+FULL SEQUENCE ACHIEVED:
+- select returned clean (walk deterministic)
+- consumer punch sched_ret=0
+- ★ cfi_open_ok fd=767 — THE SWAPPED FD OPENED (2nd time ever, 1st with
+  full control) — misc_open → our table → ashmem_open JT ✓
+- ASHMEM_SET_NAME ioctl THROUGH the fake table: ret=0 ✓
+- pwrite → dispatched into configfs_write_bin_file → its OWN EINVAL (22)
+  = dispatch PROVEN (fork's QEMU doc: errno22 = configfs EINVAL, not kCFI)
+
+REMAINING: the -22 at disasm 0x6b1034 (tbnz on forged buffer/pos sign) →
+0x6b1128 (mov -22). One blob field encoding (pos / bin_buffer_size /
+cb_max_size at asma+0x60/0x64) needs the exact real-configfs shape.
+Iterate on LIVE boots — no reboot cost (HOLD keeps state, misses are
+clean errnos).
+
+THE SOLVED STACK (for the next session):
+MODE4_ONLY=1 MODE4_SLIDE_SWAP=1 WRITE_PROOF_TARGET=fops
+WRITE_PROOF_SHAPE=left MODE4_JC2=1 MODE4_JC2_MAIN=1
+MODE4_JC2_QUIET_ENTRY=1 MODE4_JC2_MIDSTAMP_UNLOCK=1
+MODE4_GHOST_PRIO=1 MODE4_OWNER_TASK=1 MODE4_W0TASK_FAKE=1
+PSELECT_SHIFT=0 SPRAY_ALIAS_MAX=0 FOPS_MAX_ATTEMPTS=24 KPHYS=0xa8000000
+UID0_NO_SYNCLOG=1 → gl_jc2p
