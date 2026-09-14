@@ -175,6 +175,13 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   int tid = (int)syscall(SYS_gettid);
   atomic_store(&waiter_tid, tid);
   /*
+   * JC2 self-task leak MUST run HERE — before the futex chain leaves the
+   * dangling pi_blocked_on (roll 11: leaking post-EDEADLK on this thread
+   * KP'd — perf's ctx-switch sampling walks the corrupted PI state).
+   * Cached; the stamp's later call is instant.
+   */
+  (void)jc2_self_task_leak();
+  /*
    * GhostLock three-futex deadlock (IonStack / A53):
    *   waiter holds f_pi_chain, sleeps WAIT_REQUEUE_PI(f_wait→f_pi_target)
    *   owner holds f_pi_target, blocks on f_pi_chain
