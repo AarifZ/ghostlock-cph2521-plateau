@@ -255,6 +255,24 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   if (quiet_entry) {
     while (!atomic_load(&requeue_done))
       sched_yield();
+    /*
+     * MID-STAMP UNLOCK (Quest3 step-3; roll 16/20 deaths = the fork's own
+     * "second-walker crash source"): place the stamp with a 0-timeout
+     * select (fdset copy lands regardless of fd validity), THEN release
+     * f_pi_chain — tears down the external PI walks (the owner's blocked
+     * chain) while OUR stamp governs the unlock's deboost walk (roll 17:
+     * survived 30min with this). Then the real route runs with the waiter
+     * blocked IN select for the consumer's controlled punch (roll 14's
+     * proven full cycle).
+     */
+    if (env_flag("MODE4_JC2_MIDSTAMP_UNLOCK", 0)) {
+      fd_set in2, out2, ex2;
+      prepare_pselect_fdsets(&in2, &out2, &ex2);
+      struct timeval tv0 = {0, 0};
+      select(PSELECT_ROUTE_NFDS, &in2, &out2, &ex2, &tv0);
+      errno = 0;
+      futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+    }
   } else {
     while (!atomic_load(&requeue_done))
       usleep(200);
