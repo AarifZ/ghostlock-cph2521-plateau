@@ -381,3 +381,55 @@ swap walk+open survive 0.6 (1/1 fire-6) → configfs@5.10-fixed-slots 0.6
 twin-device proven, our slab unknown) → cred-field patch 0.9 (NebuSec-
 proven, no pointers) → **joint ≈ 0.2 first run, ≈ 0.5 within 3-4 runs**
 (independent verifiable rungs, each retry cheap after walk 1).
+
+---
+
+# ADDENDUM 2: OFFLINE EXTRACTION COMPLETE (all verified, no rebuild needed)
+
+## Verified against our Image (kallsyms.txt + disasm of kernel_Image.bin)
+
+1. **Configfs stubs — already correct in offsets.h (mislabeled):**
+   - off_configfs_read_iter = 0x0182FCF8 = **configfs_read_bin_file.cfi_jt**
+   - off_configfs_bin_write_iter = 0x01830218 = **configfs_write_bin_file.cfi_jt**
+   (kallsyms: ffffffc00982fcf8/0x01830218 targets 0x6b0d0c/0x6b0f84)
+2. **Real table configfs_bin_file_operations @ RVA 0x21756a0** uses PLAIN
+   .read(+0x10)=read_bin stub, .write(+0x18)=write_bin stub — 5.10 style.
+   configfs_file_operations @ 0x2175580 likewise (.read/.write = the
+   non-bin variants). Our kernel HAS no _iter configfs dispatch.
+3. **Slot placement already correct in our binary**: put_fake_fops_table's
+   GHOSTLOCK_KERNEL_5_10 branch puts the stubs in FOPS_READ_OFF(0x10)/
+   FOPS_WRITE_OFF(0x18) under clone_cfg — the fix predates this session.
+4. **configfs_buffer layout VERIFIED from configfs_write_bin_file@0x6b0f84
+   + read_bin_file@0x6b0d0c disasm** (matches target.h constants exactly):
+   - mutex @ +0x20 (add x19,x24,#0x20 → mutex_lock)
+   - read_in_progress @ +0x54, write_in_progress @ +0x55
+   - needs_read_fill @ +0x50 (read fn: ldr w8,[x26,#0x50]; cbz → skip refill)
+   - bin_buffer @ +0x58 (88), bin_buffer_size @ +0x60 (96, ldrsw),
+     cb_max_size @ +0x64 (100, ldrsw)
+   - file->private_data @ file+0xd8 (fake .open=real ashmem_open ✓)
+   - Write bounds path `pos+count <=? bin_buffer_size → copy at
+     bin_buffer+pos` confirmed = the end_offset==bin_buffer_size trick.
+5. **KASLR slide=0 confirmed by our own landing history** (real_cred lands
+   100% at data_addr(KIMAGE+off) — impossible with nonzero slide). The old
+   gl_run_swap.sh KASLR_SLIDE=0x2892200000 was a miscalc; in-flow
+   leak_kernel_base cross-checks anyway.
+
+## Device-run plan (user executes when ready) — ONE process run:
+
+Env: MODE4_ONLY=1 MODE4_SLIDE_SWAP=1 MODE4_CLONE_CFG=1
+     KPHYS=0xa8000000 CORE_SEL=7 PSELECT_SHIFT=-2 UID0_NO_SYNCLOG=1
+Binary: /data/local/tmp/gl_jc2b (already on device, md5 a883b3a3...)
+MUST NOT set: UID0_DIRECT, MODE4_CRED_PI, MODE4_SLIDE_CRED,
+MODE4_SWAP_NOCFI (all divert to dead paths).
+
+Auto-flow after the swap walk: try_cfi_stage → canary write+readback
+(honest proof) → fops readback → boot_id restore → KASLR leak →
+install_pipe_physrw (probe strings verify) → install_child_root →
+UMH (fails: STATIC_UMH_PATH="") → fallback install_android_root
+(find_task_by_tgid → cred FIELD patches).
+
+Known 3rd-act risk: ROOTGUARD (oplus sys_exit hook) may SIGKILL the
+rooted child on exit unless g_boot_state flipped — if the chain lands
+but the child dies at exec, that is the NEXT targeted fix (Z49 g_boot_state
+work + vr.ko-style probe redirect via physrw). Even that outcome = first
+proven full primitive chain on this device.
