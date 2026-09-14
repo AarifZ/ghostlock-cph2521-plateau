@@ -617,3 +617,34 @@ fdset writer would burn 4 reboots for no new information).
 
 Remaining budget: 4 rolls — PARKED pending the writer swap or user
 direction. All findings committed.
+
+## 10-ROLL CAMPAIGN FINAL (rolls 7-10 = the breakthrough arc)
+
+- Roll 7 (jc2g, shift-0 full 10-word carrier, tree/pi zeros): **WALK
+  SURVIVED** — flow completed, device alive, proof missed (landed=0).
+  F9360 same-KMI alignment ("waiter qword 0 overlaps first fd-set
+  qword") CONFIRMED on our device. The August "-2" was a bug-era
+  misattribution — at -2 words landed 2 off and NOTHING we stamped ever
+  controlled the waiter; the "45-55% lottery" was our stamps scattered
+  across wrong fields.
+- Roll 8 (tree_left=W0 to preserve root): KP — the W0 top-waiter
+  processing stage is lethal (independent of W0.task: init_task raw VA
+  or fake_task P0 both die, rolls 8-9).
+- Roll 10 (jc2j: swap on ghost's OWN pi words, tree {0,0,0} root case):
+  **SURVIVED THE FULL FLOW** — cfi stage ran postwalk, process exited
+  cleanly, boot stayed usable. Swap did not land (cfi step=1 errno=22
+  wr=-1) — the ghost-pi erase didn't fire the store; delivery mechanics
+  remain to be diagnosed.
+
+**Campaign outcome: from 12 consecutive KPs to a deterministic surviving
+walk in 4 rolls.** The base is now: every waiter word controlled at
+shift=0, tree root-case harmless, full post-flow (canary/cfi ladder)
+executing on a live boot. Misses are CLEAN (no reboot cost) — iteration
+on delivery no longer burns boots.
+
+NEXT (no-roll work): diagnose why dequeue_pi(ghost) didn't run the
+stamped pi erase — candidates: the walk skips pi processing for our
+task=init_task choice (init_task pi_waiters empty path), or the erase
+fires but change_child/store-1 go somewhere unobserved (add the boot_id
+oracle as delivery detector — readback-based, no KP risk on the safe
+base).
