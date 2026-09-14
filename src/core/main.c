@@ -3476,8 +3476,14 @@ int run_exploit(int argc, char **argv) {
     const char *tgt_name = getenv("WRITE_PROOF_TARGET");
     if (env_flag("MODE4_SLIDE_ZERO", 0)) {
       tgt_name = "dataonly";
-    } else if (env_flag("MODE4_SLIDE_SWAP", 0)) {
-      tgt_name = "bootid"; /* target unused by stamp (stamp overrides) */
+    } else if (env_flag("MODE4_SLIDE_SWAP", 0) &&
+               !env_flag("MODE4_JC2", 0)) {
+      /* Legacy SLIDE_SWAP carried the write in its own stamp, so the
+       * W0 target was irrelevant. The JC2 stamp (fops.c:334) is a pure
+       * carrier — the W0 DOES use this target now. Respect
+       * WRITE_PROOF_TARGET under JC2 (roll-16: fops + the staged
+       * swap_stage1 table that SLIDE_SWAP selects in util.c). */
+      tgt_name = "bootid";
     } else if (!tgt_name || !tgt_name[0])
       tgt_name = "bootid";
     uintptr_t proof_tgt;
