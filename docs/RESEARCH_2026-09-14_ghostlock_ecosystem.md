@@ -487,3 +487,29 @@ Both died AT pselect entry. Postmortem findings:
      WRITE_PROOF_TARGET=fops KPHYS=0xa8000000 CORE_SEL=7 PSELECT_SHIFT=-2
      UID0_NO_SYNCLOG=1 → /data/local/tmp/gl_jc2c
 Device: 4 reboots today — fire only on explicit user go.
+
+## Fire fl094501 postmortem + jc2d build (v4 corrections)
+
+fl094501 (jc2c, fresh boot, WRITE_PROOF_TARGET=fops): still target=bootid —
+**MODE4_SLIDE_SWAP=1 force-overrides the target** (main.c ~3386, "target
+unused by stamp"). Carrier line confirmed task=init_task P0 — walk STILL
+crashed → task=fake_task theory dead too.
+
+Three-fire matrix (all died at pselect entry):
+- fl090020: pi-armed stamp + P0 page(ffffff803adf...) → crash
+- fl091910: carrier + fake_task + HIGH page(ffffff87f86c...) → crash
+- fl094501: carrier + init_task + HIGH page(ffffff87816f...) → crash
+Reading: fire 1 = pi-armed kill (known class); fires 2+3 = **high-alias
+spray pages** (Z23/Z28 alias-wrap KP class; ~32GB physmap offset, beyond
+DRAM). O-era survivors (45-55%) match fl094501's shape but never showed
+high-alias pages in their logs.
+
+jc2d fixes:
+1. SPRAY_ALIAS_MAX gate (default 0xffffff8400000000): high-alias spray
+   pages rejected + retried in prepare_good_kernel_page.
+2. Correct arming env (no SLIDE_SWAP override):
+   MODE4_ONLY=1 MODE4_WRITE_PROOF=1 WRITE_PROOF_TARGET=fops
+   MODE4_CLONE_CFG=1 MODE4_JC2=1 KPHYS=0xa8000000 CORE_SEL=7
+   PSELECT_SHIFT=-2 UID0_NO_SYNCLOG=1 FOPS_MAX_ATTEMPTS=24 → gl_jc2d
+   → W0-classic {pc=MISC-8|1, right=fake_fops} on a low-alias page,
+   ghost = init_task carrier, owner=1, cfi stage auto-follows.

