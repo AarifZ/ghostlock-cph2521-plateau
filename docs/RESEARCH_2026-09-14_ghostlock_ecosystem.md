@@ -677,3 +677,47 @@ small next build: clone the swap_stage1 table shape into the CLONE_CFG
 path (llseek=0/read=0/read_iter=ashmem/write=cfg_w) + keep WRITE_PROOF
 fops targeting. That is a one-branch change, and the next session
 starts one step from the canary.
+
+## STRUCTURAL REVIEW (post-roll-15, no-fire session) — THE INTEGRATED DESIGN
+
+User directive: stop patch-and-fire; understand the structure. Findings:
+
+### The open-KP root cause (roll 14), decoded from misc_open + table analysis
+- misc_open (0xc2428c): file->f_op=our table (+0x28), private_data (+0xd8),
+  then ->open (+0x70) — all fine with our JTs (fire-6 precedent).
+- THE KILL = the LIVE WINDOW: ~1.5s between swap-landing (punch) and our
+  post-select open, the swapped table serves ALL system ashmem traffic.
+  Roll-14's CLONE_CFG table had configfs_read JT at .read(+0x10) AND
+  configfs at read_iter(+0x20) → any system read() on an ashmem fd →
+  configfs function with a REAL ashmem_area as configfs_buffer →
+  garbage mutex/page → KP. Plus the change_child clobber lands at
+  fake_fops+8 (llseek) = data-as-code if a JT is there.
+- fire-6's stage1 table survived BY DESIGN: read=0 (EINVAL, harmless),
+  read_iter=ashmem (real handler), llseek=0 (absorbs the clobber),
+  write=cfg_w (system writes to ashmem fds ≈ never).
+
+### The fork already implements the full solution
+g_swap_staged + swap_stage1 (put_fake_fops_table): the staged table
+keeps .read NULL; configfs_read_once ARMS .read around each pread for
+microseconds via the configfs write primitive, then disarms. System
+traffic never sees the configfs read JT. This whole mechanism gates on
+MODE4_SLIDE_SWAP — whose ONLY problematic side effect is the main.c
+target force-override to bootid ("target unused by stamp" — a rationale
+invalidated by the JC2 stamp: the W0 DOES use the target).
+
+### ROLL-16 DESIGN (2-line structural fix, everything else existing)
+1. main.c write_proof: skip the SLIDE_SWAP→bootid force when MODE4_JC2
+   is set (the stamp no longer carries the write).
+2. Fire env: MODE4_SLIDE_SWAP=1 WRITE_PROOF_TARGET=fops
+   WRITE_PROOF_SHAPE=left MODE4_JC2=1 MODE4_JC2_MAIN=1 MODE4_GHOST_PRIO=1
+   MODE4_OWNER_TASK=1 MODE4_W0TASK_FAKE=1 PSELECT_SHIFT=0
+   (NO CLONE_CFG — it selects the hazard table!)
+   → stamp: roll-14's proven full carrier + main-tree swap;
+   → W0.pi: only-left@misc (roll-14 proven);
+   → table: staged stage1 (window-safe, read-arm on demand);
+   → owner=fake_task|1, W0.task=fake_task(P0), prio=1, alias gate on.
+Expected: walk cycle (roll-14 proven) → open survives (stage1 table) →
+canary via transient-arm read/write → g_swap_staged flow → physrw →
+1-byte selinux → ROOTGUARD probe-redirect → cred FIELD patch → root
+script. Every element cited: roll 14, fire 6, our disasm, JoinChang
+inherited code, NebuSec recipe.
