@@ -513,3 +513,38 @@ jc2d fixes:
    PSELECT_SHIFT=-2 UID0_NO_SYNCLOG=1 FOPS_MAX_ATTEMPTS=24 → gl_jc2d
    → W0-classic {pc=MISC-8|1, right=fake_fops} on a low-alias page,
    ghost = init_task carrier, owner=1, cfi stage auto-follows.
+
+## Fire fl095612 (jc2d) — PERFECT ARMING, STILL KP: matrix complete
+
+Log confirms every intended element for the first time:
+`WRITE_PROOF fops target=fops addr=ffffff802a91a8e8` ✓
+`mode4 ARISTOTLE W0.pi classic parent=MISC-8|1 right=fake_fops left=0` ✓
+(fire-6's landing form) `owner=1 waiters=W0` ✓ low-alias page
+(ffffff8056178000, first-attempt spray, no KS retry) ✓
+→ kernel_panic,oops at pselect entry. 56-line log, died at pre-select.
+
+**Final 6-fire matrix (today+JC2): every controllable variable exonerated.**
+| fire | ghost stamp | task | W0 form | page | result |
+|------|------------|------|---------|------|--------|
+| JC2-f2 | carrier | fake_task | mode2 {tgt-8,init_cred} | P0 | KP |
+| fl090020 | pi-armed | fake_task | only-left@bootid | P0 | KP |
+| fl091910 | carrier | fake_task | only-left@bootid | HIGH | KP |
+| fl094501 | carrier | init_task | only-left@bootid | HIGH | KP |
+| fl095612 | carrier | init_task | **classic@misc** | **LOW** | KP |
+(plus CRED_PI-L0 left-pi@prio0 KP from 09-13)
+
+Ghost stamp, task ptr, W0 geometry, target, owner, page alias: ALL varied,
+ALL die at pselect entry on the current binary. The kill is NOT in any of
+these variables — it is in the base route flow of the current codebase
+(consumer sched_setattr cadence / thread timing / delay rotation) OR in
+boot-state changes since the O-era.
+
+## NEXT: regression test (needs user go)
+/data/local/tmp/ghostlock-compact = the 08-22 O-era binary (walks survived
+45-55%, bootid proofs landed). Replay on a fresh boot:
+  MODE4_ONLY=1 MODE4_WRITE_PROOF=1 KPHYS=0xa8000000 (its era env)
+- survives → current binary route regressed → git bisect the route changes
+  (route_done timeout, detached threads, delay rotation, consumer changes)
+- also KP → the device/kernel state itself changed since Aug 22 (the
+  August walk results are no longer reproducible — different problem
+  class entirely, likely needing a fresh trigger-timing campaign).
