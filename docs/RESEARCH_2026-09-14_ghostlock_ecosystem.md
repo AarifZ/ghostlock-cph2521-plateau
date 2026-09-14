@@ -433,3 +433,33 @@ rooted child on exit unless g_boot_state flipped — if the chain lands
 but the child dies at exec, that is the NEXT targeted fix (Z49 g_boot_state
 work + vr.ko-style probe redirect via physrw). Even that outcome = first
 proven full primitive chain on this device.
+
+## Fire result (fl090020, user-approved device run): WALK CRASH at pselect
+
+Env: MODE4_ONLY=1 SLIDE_SWAP=1 CLONE_CFG=1 KPHYS/CORE_SEL/PSELECT_SHIFT=-2.
+Device rebooted ~60s in (bootreason "reboot"). Log (67 lines): spray ok
+(attempt 4), EDEADLK trigger ok, stamp logged verbatim as fire-6
+(`stack SLIDE_SWAP pi-only: *misc.fops=fake_fops (clean) main=all-zero
+lock=spray`, prio=0) — pselect entered, never returned.
+
+**Critical reinterpretation of fire-6's "stable" evidence:** fire-6 ran
+BEFORE the fdset pi-words fix — its ghost pi words were ZERO (never
+reached the waiter), so what survived was a pi-disarmed walk; the swap
+itself landed via the AUTO-WRITE_PROOF phase's W0-classic arming
+({pc=MISC-8|1, right=fake_fops, left=0}, owner=1). With the writer FIXED,
+the ghost pi words are now live — and the pi-armed walk crashed 1/1.
+Matrix with fixed writer: ghost-pi-left@prio=0 → KP (this fire +
+CRED_PI-L0 before it); ghost-pi-left@prio=1 → clean but NO store
+(CRED_PI r219140). The ghost-pi delivery requires top-waiter status
+(prio=0) which also drives the deeper processing that kills the box
+(setprio(owner) class, docs/KERNEL_5_10_RTMUTEX_WRITE_PATH.md).
+
+**Next candidate geometries (no fire until one is chosen):**
+1. W0-ONLY REPLICATION of fire-6's actual landing path: ghost = pure
+   benign carrier (pi words ZERO deliberately — the JoinChang words_compact
+   verbatim), W0.pi classic armed by the auto-phase, owner=1. Matches the
+   only historically-landed swap; our MODE4_JC2 stamp already IS the
+   benign carrier — combine with the auto-phase's W0 classic arming and
+   NO ghost-pi geometry. (MODE4_JOINCHANG=1 arms pi_waiters→W0.pi as the
+   upstream mode-4 does.)
+2. prio/owner isolation sweep for the pi-armed form (prio=1 + owner=1).
