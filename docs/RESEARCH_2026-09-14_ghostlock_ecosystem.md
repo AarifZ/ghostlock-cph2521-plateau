@@ -586,3 +586,34 @@ B) User-authorized limited re-roll loop of THIS EXACT config only
    — re-introduces the O-era's acceptance of the lottery, bounded.
 No code changes pending — the chain behind the walk (canary → configfs →
 physrw → cred-field patch) is verified and waiting.
+
+## 10-ROLL CAMPAIGN (rolls 1-6 used, 12 KPs total) — DIAGNOSTIC CONCLUSION
+
+Rolls 1-5 (classic/only-left, prio 0/1, spray/inittask878 locks, wchan
+guard ACTIVE and passing, CPU0/1 pinning, 2min-uptime protocol,
+MM_STRUCT_SZ=0x3c0): all KP at the same point.
+**Roll 6 = MODE4_NO_CONSUMER=1 (no sched_setattr punch at all):**
+```
+pselect post-select +1508ms ret=0          ← THE STAMPED WINDOW IS SAFE
+route_done wait TIMEOUT (waiter wedged)    ← wedged post-select
+[device KP'd later in the teardown]
+```
+**Conclusion:** the killer is ANY PI walk through the STAMPED ghost —
+whether triggered by the consumer punch (mid-select KP in rolls 1-5) or
+by the waiter's own exit/teardown (roll 6). The stamp content arms a
+walker-lethal ghost on current boot states. Root structural cause: at
+shift=-2 the fdset writer CANNOT stamp waiter words 0/1 (tree_entry
+pc/right — unplaceable, negative global word), so the walk's
+rt_mutex_dequeue runs on the ghost's ORIGINAL (uncontrolled) tree
+linkage — a boot-state lottery that has gone 12-for-12 lethal since
+midday (the August 45-55% era is gone with current boot states).
+
+**The ecosystem's documented answer for exactly this class: a writer
+that stamps the FULL waiter.** q8q (Z Fold 8) switched to io_submit();
+S918B uses MCAST (setsockopt stamping at fixed depth 0x98); iQOO Z9 uses
+SIGRETURN/SVE frames. All stamp words 0-9 coherently — no uncontrolled
+linkage. That is the next build (not more rolls: rolls 7-10 with the
+fdset writer would burn 4 reboots for no new information).
+
+Remaining budget: 4 rolls — PARKED pending the writer swap or user
+direction. All findings committed.
