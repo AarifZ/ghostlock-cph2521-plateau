@@ -463,3 +463,27 @@ CRED_PI-L0 before it); ghost-pi-left@prio=1 → clean but NO store
    NO ghost-pi geometry. (MODE4_JOINCHANG=1 arms pi_waiters→W0.pi as the
    upstream mode-4 does.)
 2. prio/owner isolation sweep for the pi-armed form (prio=1 + owner=1).
+
+## Fires fl090020 + fl091910 postmortem (W0-replication attempts 1-2)
+
+Both died AT pselect entry. Postmortem findings:
+1. **Env mistake found:** the auto WRITE_PROOF phase overrides the payload
+   target to BOOTID (default) — "mode4 ARISTOTLE W0.pi only-left
+   parent=fake_fops right=0 left=bootid". NEITHER fire actually armed the
+   W0-classic misc.fops form (use_classic requires WRITE_PROOF_TARGET=fops).
+   Both walks were bootid-proof shapes with today's ghost stamps.
+2. Ghost pi-armed vs carrier: BOTH crashed → ghost pi words are NOT the
+   kill variable (isolated cleanly).
+3. **Common element of both crashes absent from every historical 5.10
+   survivor: ghost task=fake_task(spray page).** Survivors used
+   task=init_task P0 (ttwu no-op). Spray quality was shaky both boots
+   (KernelSnitch 2-3 retries; PM page = 0xffffff87 high alias).
+4. Corrected replication (jc2c build):
+   - WRITE_PROOF_TARGET=fops → auto-phase arms W0-classic {pc=MISC-8|1,
+     right=fake_fops, left=0} = fire-6's landing form, ONE walk
+   - MODE4_JC2 carrier hardened: task=init_task(P0) instead of fake_task
+     (decouples the walk's first deref from spray quality)
+   - env: MODE4_ONLY=1 MODE4_SLIDE_SWAP=1 MODE4_CLONE_CFG=1 MODE4_JC2=1
+     WRITE_PROOF_TARGET=fops KPHYS=0xa8000000 CORE_SEL=7 PSELECT_SHIFT=-2
+     UID0_NO_SYNCLOG=1 → /data/local/tmp/gl_jc2c
+Device: 4 reboots today — fire only on explicit user go.
