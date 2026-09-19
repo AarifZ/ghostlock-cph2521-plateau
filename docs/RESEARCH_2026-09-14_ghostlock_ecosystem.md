@@ -750,3 +750,39 @@ MODE4_JC2_QUIET_ENTRY=1 MODE4_JC2_MIDSTAMP_UNLOCK=1
 MODE4_GHOST_PRIO=1 MODE4_OWNER_TASK=1 MODE4_W0TASK_FAKE=1
 PSELECT_SHIFT=0 SPRAY_ALIAS_MAX=0 FOPS_MAX_ATTEMPTS=24 KPHYS=0xa8000000
 UID0_NO_SYNCLOG=1 → gl_jc2p
+
+## CAMPAIGNS 44-46 (09-19/20): child-owned cred pivot + forensics
+
+Campaign 44 (30 attempts): 11 survived / 19 KP / 0 caps. Every survivor:
+swap landed (cfi_open_ok through fake table), child died (Z) regardless.
+Root NOT achieved — but the failure point moved UPSTREAM of everything:
+the CAPSONLY write now targets child+0x780 with a correctly-built cred.
+
+CAPSONLY v2 (jc3b/jc3c): child sprays ITS OWN caps-cred page
+(MODE4_CAPS_CHILD), reports {task,cred} to parent, pause-polls own CapEff
+forever (never exits → page pinned). Parent walk: child_task+0x780 =
+child's cred. Verified live: "CAPS_CHILD spray: base=... cred=... task=..."
++ "JC2 CAPSONLY v2: pc=<child cred> left=<child+0x780>" + punch + select
+return + cfi_open_ok. The child STILL dies (Z) — signal unknown; the
+parent's waitpid forensics line was lost twice (log truncation when
+timeout kills the wedged parent before the verdict line flushes).
+
+FORENSICS FIX FOR NEXT SESSION (tiny):
+1. Move the waitpid check to RIGHT AFTER run_main_route_threads returns
+   (before try_cfi/HOLD), with explicit fflush+fsync.
+2. Campaign script: pull each attempt's log IMMEDIATELY after the
+   outcome check (before the next reboot loses it).
+3. Child-side heartbeat: child writes its poll count to
+   /data/local/tmp/caps_heartbeat every loop → after death, the file
+   shows whether it polled at all post-landing.
+
+DECISIVE QUESTION the forensics answers:
+- SIGKILL → oplus guard kills on something other than uid (re-read
+  diyiqiuye's tables: addr_limit gate? second guard module?)
+- SIGSEGV/SIGBUS → the cred write landed DIRTY (recolor bit? partial
+  store?) — fix the geometry, not the cred
+- alive → write never fired (chain exits earlier than believed)
+
+State: jc3c on device + all commits. The walk+swap+open chain is
+PROVEN; the remaining unknowns are (a) walk survival ~37% and (b) the
+child-death signal — both answerable with the fixes above.
