@@ -1343,3 +1343,29 @@ fully-surviving fire) is now isolated to LOCK_EMPTY:
   re-walks the never-cleaned dangling → KP.
 Next recipe: jc20 minus LOCK_EMPTY (waiters=W0 owner=fake_task|1 = the
 jc12 shape) + keep cap/handoff/single-shot/pc=0/prio=130/markers.
+
+## 2026-09-21 (FINAL FIRE): jc22 — FULL ROUTE SURVIVAL ON HARDWARE; delivery gate remains
+
+jc22 (heal phase): spin 32 ✓ → punch#1 sched_ret=0 ✓ → heal ✓ → post-select
+ret=4 ✓ → route done calls=1 success=1 ✓ → WRITE_PROOF done ✓ → swap_hold
+park ✓ — **the complete flow ran clean on the device for the first time,
+zero KP**, boot healthy throughout. The heal phase (resume re-stamping
+after setattr returns) closed the post-punch KP class.
+
+But: CapEff=0 on the frozen child, boot_wrote=0 — **the write still does
+not land**. Both full survivors (jc12, jc22) ran walks that exited WITHOUT
+delivering. The remaining gap is inside rt_mutex_adjust_prio_chain's gate
+conditions (statically mapped: the prio-equal check at +0x2cc, the
+owner-NULL/owner-path split, the max-depth exit) — the walk needs operands
+that make it proceed to the delivery erase (rb_erase+0x7c, proven
+instruction) rather than exiting early.
+
+Campaign totals (13 fires over 09-19/20/21): no root. Structural gains:
+storm window solved (cap), stamp/punch race solved (handoff), post-walk
+mutation solved (heal), full-route hardware survival achieved, delivery
+instruction mapped, every failure class root-caused and documented.
+
+Next session entry point: gate-condition analysis of adjust_prio_chain
+(+0x2cc prio-equal, owner checks) to shape ghost prio/task/lock words so
+the walk REACHES rb_erase+0x7c. All tools in place: durable markers,
+env-tunable everything, QEMU harness fixed (P0_PHYS).
