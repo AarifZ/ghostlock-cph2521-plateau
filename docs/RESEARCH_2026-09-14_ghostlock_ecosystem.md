@@ -1369,3 +1369,21 @@ Next session entry point: gate-condition analysis of adjust_prio_chain
 (+0x2cc prio-equal, owner checks) to shape ghost prio/task/lock words so
 the walk REACHES rb_erase+0x7c. All tools in place: durable markers,
 env-tunable everything, QEMU harness fixed (P0_PHYS).
+
+## 2026-09-21 (post-campaign): cred offsets VERIFIED correct from commit_creds disasm
+
+commit_creds (0x186784) head, x20=SP_EL0=current:
+  ldr x19, [x20, #0x778]   ← task->real_cred
+  ldr x8,  [x20, #0x780]   ← task->cred
+The DUAL write targets (child+0x778/+0x780) are EXACTLY right. The
+CapEff=0 result is NOT a wrong-slot write — the chain walk exits BEFORE
+the delivery dequeue. The wrong-slot theory is eliminated.
+
+Remaining analysis (next session, free): reconstruct 5.10
+rt_mutex_adjust_prio_chain's first-iteration gates from THIS Image's
+disassembly (0x1ed8ec..) — which check exits before
+rt_mutex_dequeue(lock, ghost) on device but not in QEMU (where the chain
+reaches the rb ops with ghost task=init_task fallback). Candidates:
+waiter->task-vs-task check position, deadlock (task==top_task) with the
+call (x0=task, x1=0, x2=NULL, x3=waiter->lock, x4=NULL, x5=task),
+waiter!=top_waiter branch topology, or pi_blocked_on consistency check.
