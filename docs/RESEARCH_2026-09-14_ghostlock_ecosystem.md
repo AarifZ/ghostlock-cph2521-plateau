@@ -1247,3 +1247,28 @@ durable markers INSIDE the late-midstamp window (after the 0-timeout
 select, after the unlock, every 16 spin iterations) so the next fire
 pinpoints the KP instruction window on hardware. No fire before that
 instrumentation exists.
+
+## 2026-09-21 (session 3): requeue KP fully decoded; QEMU full-route survival restored
+
+**Instrumentation added (all in tree):** durable stage.txt markers
+(midstamp_select_done / late_unlock_done / spin_enter / sNN every 16 /
+spin_exit iters=N succ=N), env-tunable spin cadence
+(SPIN_BLOCK_EVERY=4 SPIN_BLOCK_MS=1 default; QEMU-validated 8/3), and
+STOP-ON-CALLS — the spin exits the moment the consumer issues its first
+setattr, so the fdsets (and the ghost) go QUIESCENT before the walk owns
+the words. Re-stamping DURING the walk was clobbering kernel-written
+rb linkage (the pc=1-poison decode below proved the mechanism).
+
+**rb_insert_color+0x48 KP — final decode:** the insert entry reads the
+inserted node's pc. pc==0 → treated as ROOT → color black → clean
+return. pc==1 (my first fix attempt) → parsed as RED parent=NULL →
+grandparent deref [0x8] → the exact KP. pc=0 is the only terminator.
+The earlier "pc=0 KP" was SPINSTAMP-over-the-walk (now fixed), not the
+pc value.
+
+**QEMU: FULL ROUTE SURVIVAL RESTORED** (punch fires, route completes,
+no panic) with: pc=0 pi root + stop-on-calls + cadence 8/3 + prio=1.
+
+**Device binary rebuilt with all of the above (jc17). Next fire
+(user-gated): diagnostic NOCONT — if it survives, frozen-child CapEff
+tells us if delivery landed on hardware; markers pinpoint any KP stage.
