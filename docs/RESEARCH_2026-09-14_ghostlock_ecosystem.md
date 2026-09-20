@@ -1313,3 +1313,18 @@ QEMU iteration results:
 jc18 = device binary with: spin cap 32, handoff, LOCK_EMPTY shape, black
 roots, durable markers, cadence 8/3, prio=1, stop-on-calls. Pushed
 (hash 52d2c0da...). Next fire (user-gated): NOCONT diagnostic.
+
+## 2026-09-21 (jc19 fire): spin stable 2/2; walk survival = the last coin flip
+
+jc19 (single-shot, all jc18 fixes): markers show spin_exit iters=32 again —
+the storm window is SOLVED (2/2 since the cap). KP hit before the punch
+print → inside setattr#1's walk (jc18's walk #1 survived, jc19's didn't;
+no second setattr was ever reached, so the single-shot fix wasn't the
+variable). Walk survival history: jc12 ✓ (prio=130), jc18 ✓ (prio=1),
+jc19 ✗ (prio=1) → ~2/3 and the depth of the chain walk differs by prio:
+prio=1 (highest) walks the FULL real PI dag including half-linked owner
+waiters; prio=130 exits earlier. jc12's proven-walk prio was 130.
+
+Next candidate recipe: jc19 + MODE4_GHOST_PRIO=130 (jc12's walk depth,
+with all new fixes). Also candidate: drop prio to 120 (never equals the
+post-setattr nice-19-derived prio 139/19 boundaries).
