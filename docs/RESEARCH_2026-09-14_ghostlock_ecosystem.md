@@ -872,3 +872,22 @@ this may explain why the bootid isolation run took 8 attempts (vs the
 but during the pre-punch window when an EXTERNAL walk hits the ghost.
 A quiet-page VALUE would make the walk near-deterministic but then the
 write value can't be a live cred — structural tension.
+
+## QUIET_CRED RESULT (09-20 attempt 6): +0x780 write mechanism SAFE
+
+Walk survived; QUIET_CRED fired (pc=quiet_page, left=child+0x780);
+child died — EXPECTED for zero-page cred (user_ns=NULL → deref crash).
+Combined with all prior evidence:
+
+- +0x780 write MECHANISM is safe (lands, walk survives, no KP)
+- ANY value at +0x780 becomes the child's cred pointer (dereferenced
+  on next syscall)
+- Zero page → kills (NULL user_ns) — confirmed
+- Valid caps cred → kills (mystery — construction suspected)
+- +0x790 comm → survives (safe target)
+
+REMAINING QUESTION: is our caps cred actually valid when placed on the
+child's spray page? The pointers (user/user_ns/group_info/security)
+come from fill_init_cred_copy with kaslr_slide=0 (raw image values).
+Next step: child dumps its cred bytes to a file BEFORE the walk fires
+— verify pointers are sane kernel addresses.
