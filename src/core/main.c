@@ -157,6 +157,7 @@ volatile long long g_select_start_us;
 uintptr_t g_child_task;
 uintptr_t g_child_cred;
 pid_t g_cap_child_pid = -1;
+uintptr_t g_child_orig_cred;
 atomic_int waiter_tid;
 /* Per-phase consumer nice: each walk must CHANGE the waiter task's prio,
  * or __sched_setscheduler returns early and rt_mutex_adjust_pi never runs. */

