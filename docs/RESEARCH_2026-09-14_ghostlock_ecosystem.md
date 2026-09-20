@@ -822,3 +822,19 @@ child_cred instead of fake_fops. Two outcomes:
   the guard unhook MUST land first → two-walk chain (unhook walk, then
   init_cred walk) — both targets proven (funcs leaf-NULL "Lives",
   0x778/0x780 landed in Z-era).
+
+## ★ ISOLATION TEST DECIDED (09-20 attempt 8): VALUE SURVIVES ★
+
+bootid target + child_cred VALUE → walk survived → boot_id CHANGED:
+  before: 407e5a02-0d5a-4f5c-b080-3beaa4092b3c
+  after:  00823c48-80ff-ffff-b080-3beaa4092b3c ← child_cred page bytes!
+
+**THE VALUE-AS-PARENT TRAP IS DISPROVEN.** child_cred passes through the
+erase chain cleanly and lands at any target. The problem is SPECIFICALLY
+the child+0x780 target — writing to the cred slot kills the child.
+
+Remaining suspects (narrowed):
+1. Guard reads task+0x780 directly (pointer change detection, not uid)
+2. Cred write lands but a bad field deref kills the child
+3. Rebalance side-effect corrupts +0x788 (adjacent field)
+Next: forensics (waitpid signal) on a surviving CAPSONLY run.
