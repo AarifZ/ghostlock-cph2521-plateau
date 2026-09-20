@@ -838,3 +838,37 @@ Remaining suspects (narrowed):
 2. Cred write lands but a bad field deref kills the child
 3. Rebalance side-effect corrupts +0x788 (adjacent field)
 Next: forensics (waitpid signal) on a surviving CAPSONLY run.
+
+## ISOLATION NARROWING (09-20): the +0x780 vs +0x790 gap
+
+The isolation proved the value survives. The child dies ONLY at +0x780.
+Between the proven-safe comm canary (+0x790) and the lethal cred (+0x780)
+is one qword at +0x788. Three testable causes:
+
+A) Cred content deref: the new caps_cred has a field the kernel faults on
+   during the child's next /proc/self/status read. Test: write the
+   ORIGINAL cred address back (no content change) → child lives = content
+   is the killer; child dies = the write mechanism is the killer.
+
+B) Adjacent corruption at +0x788: the erase's __rb_change_child writes
+   into parent+0x08 or parent+0x10. Parent = child_cred (the VALUE) —
+   not at +0x788. But the REBALANCE after the erase may touch the erased
+   node's neighborhood on the stack/heap. Test: write to +0x788 with a
+   safe dummy, check child survival.
+
+C) Guard pointer detection: the guard reads task+0x780 directly and
+   reacts to ANY cred pointer change (even same-uid). Test: write the
+   SAME cred pointer back (no change) — if child still dies, it's not
+   the value, it's the WRITE EVENT at +0x780.
+
+Test A = test C (same fire). ONE surviving walk answers both.
+Priority: fire test A/C first — it distinguishes content-kill from
+event-kill, which picks between fixing the cred vs fixing the write form.
+
+Walk survival note: child_cred as the ghost's parent makes external
+walks MORE dangerous than fake_fops (which points to quiet zeros) —
+this may explain why the bootid isolation run took 8 attempts (vs the
+~3 expected at 37%). The walk crash is the same value-as-parent issue
+but during the pre-punch window when an EXTERNAL walk hits the ghost.
+A quiet-page VALUE would make the walk near-deterministic but then the
+write value can't be a live cred — structural tension.
