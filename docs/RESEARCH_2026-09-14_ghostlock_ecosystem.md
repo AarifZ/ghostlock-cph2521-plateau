@@ -1219,3 +1219,31 @@ still possible; the MAIN write came from the chain's dequeue, not adjust_pi).
 **Fire #5 remains reserved.** Next free iteration: QEMU console forensics
 on the rb_insert_color crash → fix the requeue termination → expect a run
 with punch + delivery + NO panic + boot_wrote=1 → then the root fire.
+
+## 2026-09-21 (final): fire #5 spent — KP in the pre-punch window; budget 5/5 done
+
+Fire #5 (prio=1 direct root, child live with payload): KP pre-punch — same
+signature as jc13/jc14. QEMU at prio=1 survives the FULL route cleanly (the
+rb_insert_color crash is prio-dependent — prio=1 makes the ghost the tree
+minimum; the 130 mid-tree insert was the QEMU requeue-KP), but the DEVICE
+KP happens BEFORE the punch and is device-only.
+
+Durable stage.txt (survives KPs) confirms the death window: last marker =
+pselect_pre_select — i.e., inside late-midstamp select → FUTEX_UNLOCK_PI →
+SPIN loop, before the first punch setattr. QEMU now survives this window
+every time; the device does not (~1/5). Prime suspects: oplus_secure_harden
+syscall kprobes × the SPIN select-storm (each iteration is a traced
+syscall), or hardware SMP/IRQ timing QEMU cannot model.
+
+**Campaign totals (5 fires today): jc12 survive-no-delivery; jc13r1, jc13r2,
+jc14, jc16 KP pre-punch.** Root: not achieved. Structural gains: pre-select
+KP class eliminated (late-midstamp), frozen-stamp clobber eliminated
+(SPINSTAMP), write-delivery instruction mapped (rb_erase+0x7c / +0x90),
+QEMU harness garbage root-caused (P0_PHYS) and delivery demonstrated
+in-emulator, prio=1 identified as the clean-insert value.
+
+**Next session (needs user approval for any fire):** add fine-grained
+durable markers INSIDE the late-midstamp window (after the 0-timeout
+select, after the unlock, every 16 spin iterations) so the next fire
+pinpoints the KP instruction window on hardware. No fire before that
+instrumentation exists.
