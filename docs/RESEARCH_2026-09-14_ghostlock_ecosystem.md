@@ -1272,3 +1272,23 @@ no panic) with: pc=0 pi root + stop-on-calls + cadence 8/3 + prio=1.
 **Device binary rebuilt with all of the above (jc17). Next fire
 (user-gated): diagnostic NOCONT — if it survives, frozen-child CapEff
 tells us if delivery landed on hardware; markers pinpoint any KP stage.
+
+## 2026-09-21 (session 3, jc17 diagnostic fire): KP PINPOINTED — inside the spin loop at ~iteration 96
+
+Fire (jc17 NOCONT, prio=1, cadence 8/3): KP. Durable markers (first-ever
+hardware stage attribution): last = s96 — the device dies INSIDE the
+SPINSTAMP loop after ~96 iterations (~96ms into the 150ms window), BEFORE
+the first punch (0 punch lines). QEMU runs the same loop to completion
+every time.
+
+Interpretation: the spin loop itself is the device-only killer —
+consistent with the oplus syscall-hook × select-storm theory. The KP
+moves with the loop (jc12's 253-iteration run at 8/3 SURVIVED once;
+jc13r1/r2/jc14/jc16/jc17 all died in-window) → probabilistic exposure
+growing with iteration count, NOT a fixed instruction fault.
+
+Mitigation designed (not yet built): SPIN_MAX_ITERS cap + stop-on-calls
+already in tree; next candidate recipe = cap the loop at ~32 iterations
+(32 re-stamps in 150ms is still 20x the frozen-stamp freshness) — but
+each additional fire costs budget. Recommend: STOP fires tonight; next
+session design the cap + user approves.
