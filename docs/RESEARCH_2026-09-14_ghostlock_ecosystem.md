@@ -891,3 +891,331 @@ child's spray page? The pointers (user/user_ns/group_info/security)
 come from fill_init_cred_copy with kaslr_slide=0 (raw image values).
 Next step: child dumps its cred bytes to a file BEFORE the walk fires
 — verify pointers are sane kernel addresses.
+
+## 2026-09-20 (pm): 13-KP loop forensics — root cause of walk-death found (freelist window)
+
+**Evidence (all logs pr_info-flushed per-line, so last line = exact death point):**
+- jc3j loop: 13 fires, 0 survivors. 10/13 last line = `pselect pre-select +4..40ms`
+  (walk window); 3/13 died in SPRAY phase (PRE_DRAIN retype/PCP rings, no UAF
+  involved) — separate class, likely early-boot alloc churn (all were loop boots 1,2,5).
+- Walk KP rate identical jc3i (~12/15) vs jc3j (~10/13) → cred content (KIMI fixes)
+  irrelevant: death precedes any cred use. Walk survival was ALWAYS the bottleneck.
+- Consumer never printed (no SKIP, no punch line) in any walk-death → death between
+  stamp and punch-fire, not at punch.
+
+**Root cause:** In the JC2 flow the ghost page is on the kmalloc freelist from the
+mid-stamp 0-timeout select's kfree until the blocking select's kmalloc re-takes it.
+The early mid-stamp (main.c waiter path) left that window spanning the ENTIRE route
+setup — prints, fsyncs, stage.txt writes, fd opens (+4..40ms). Any competing same-size
+allocation steals the page (per-CPU freelist vs cross-CPU partial); the unlock deboost
+walk / consumer punch then reads thief garbage → panic. Fresh quiet boots hold the
+LIFO swap (~37%); busy consecutive-reboot boots get robbed (~0%). Matches every stat.
+
+**Fix (jc4, ghostlock-cph2521-jc4):** MODE4_JC2_LATE_MIDSTAMP=1 —
+- main.c: early mid-stamp skipped (would re-expose freelist).
+- fops.c do_pselect_fake_lock_route: ALL slow setup first (prints/fsyncs/fds/arm),
+  then on attempt 1 only: 0-timeout select (STAMP+kfree) → FUTEX_UNLOCK_PI (walks
+  STAMPED ghost, µs window) → clock_gettime (vDSO) → blocking select immediately
+  (same-CPU LIFO re-takes page, re-stamps, KEEPS it allocated through the punch).
+  Ghost is never walked while free. Freelist window: tens of ms → microseconds.
+- Fire env adds PSELECT_ROUTE_DELAY_USEC=8000 (punch paced by wchan guard anyway).
+
+**Residual risks:** spray-phase KP class (~3/13, early-boot churn — fire ≥180s after
+cold boot); punch-walk algebra unchanged (proven by jc3i survivors).
+
+## 2026-09-20 (evening): jc4→jc10 fire chain — walk SURVIVES, writes never land, guard-NULL is the crash
+
+**Fix trail (each fire = one boot):**
+- jc4 (LATE_MIDSTAMP): WALK SURVIVED first time — punch fired, post-select
+  returned, cfi opened through swapped table, route returned. Died at SIGCONT.
+- jc5 (+tail-unlock removed): same death point.
+- jc6 (+selinux blob osid=sid=1 at cred+0xB0, security=0x78 fixed): same point.
+- jc7 (MODE4_CAPS_NOCONT, child left frozen): **BOOT SURVIVED** → killer is the
+  child-resume, not teardown. /proc render of frozen child: **CapEff=0 → the
+  cred write NEVER LANDED** (cred = untouched original). Shell-sent
+  `kill -CONT <child>` on the live jc7 boot KP'd instantly → resume is lethal
+  independent of cred → something ELSE was corrupted.
+- jc8 (delay back to 50ms): survived, CapEff still 0 → not the delay alone.
+- jc9 (+35ms sched_yield settle for owner re-link): died in window — freelist
+  exposure of ANY length ≈ theft on these boots.
+- jc10 (no unlock at all): died right after pre-select — stamp intact → punch
+  walk RAN for real → crashed. Conclusion: **the walk's 3rd write — the
+  CAPSONLY+GUARD OVERRIDE leaf-NULL *(0x2950700-8-derived addr)=0 — zeroes
+  random kernel memory** (hardcoded image offset + KPHYS mapping; module/
+  data address not per-boot verified). jc4-8 survived because the owner's
+  post-unlock re-link defused the stamp (walk exited early, zero writes).
+
+**Code-level bug found (util.c ~1719):** the GUARD OVERRIDE also silently
+replaced the KIMI DUAL pi-write — child+0x778 was NEVER written in jc4-10
+("JC2 DUAL" print predates the override assignment = stale). AND the DUAL
+branch itself was slide-gated (MODE4_SLIDE_*), never reached by the CAPSONLY
+fire env.
+
+**jc11 (built, NOT fired — user hold):**
+- MODE4_GUARD_NULL=1 now REQUIRED for the guard leaf-NULL write (default off).
+- CAPSONLY+CAPS778+child_cred enters the DUAL W0.pi branch directly:
+  W0.pi → *(child+0x778)=cred, main tree → *(child+0x780)=cred. No third write.
+- Fire env for next test: same as jc10 + keep NOCONT to verify CapEff render
+  with zero KP risk before ever SIGCONTing.
+- NOTE: if child-resume lethality persists even with only-cred writes, the
+  0x780 store path itself needs the GhostLockAdapt dead-task re-check.
+
+**Flow-flag reference (current):** MODE4_JC2_LATE_MIDSTAMP=1 (µs freelist
+windows), PSELECT_LATE_UNLOCK=0 (skip unlock; owner stays blocked), delay
+60000µs, PSELECT_SETTLE_MS=0 (no settle).
+
+## 2026-09-20 (night): QEMU session — rb_erase delivery mapped, spin-stamp added, QEMU harness bug found
+
+**rb_erase disassembly (this Image, exact):**
+- rb_erase+0x7c (`str x9,[x8]` @ 0xab760c) = `child->__rb_parent_color = pc`
+  on the NO-RIGHT path = the write `*(left)=pc` — the DUAL shape
+  {pc=cred, right=0, left=child+0x778} delivers real_cred HERE, with the
+  only side effect being parent-slot stores INTO the cred value itself
+  (cred treated as rb parent: writes cred+0x10/+0x18 = sgid/euid area).
+- rb_erase+0x90 (`str x10,[x9]` @ 0xab7620) = same store on the ONLY-RIGHT
+  path (left=0, right≠0).
+
+**QEMU crashes today were a harness artifact:** the QEMU bootid proof target
+computed garbage `addr=ffffffffc2d89b6d` (correct alias ffffff802a6aa868 is
+printed by the p0 profile in the same boot) — the stamp was seeded with a
+garbage pointer, so rb_erase stored through it. Device targets were always
+correct (jc11: child+0x780). QEMU must not be trusted for punch validation
+until this target computation is fixed (suspect: kaslr_slide re-detection
+with perf absent).
+
+**Still-real device failure mode:** jc10/jc11 died at the punch with correct
+operands — remaining suspects: (a) pi-stamp freshness — one frozen blocking
+select leaves the fdset overlay exposed to nested IRQ frames for 60ms+
+(historically proven clobber class); (b) erase side effects downstream.
+
+**Implemented (in tree, validated to build):**
+- MODE4_JC2_SPINSTAMP=1: replaces the single blocking select with a loop of
+  0-timeout selects (every 8th blocks 3ms so the wchan guard can sample
+  do_select) for a ~150ms window — the stamp is re-copied ~700x across the
+  punch instead of frozen once.
+- PSELECT_WCHAN_CONFIRM=N (1..3): guard confirmation count knob.
+- MODE4_QEMU_DUAL=1: DUAL shape twin with bootid as left + cred_copy as pc
+  (QEMU has no PMU → no child spawn).
+- MODE4_GUARD_NULL opt-in + CAPSONLY DUAL branch reachable (from jc11).
+
+**Next session plan:** fix the QEMU bootid target computation → validate the
+DUAL-shape punch end-to-end in the emulator (watchpoint on bootid; expect
+str x9,[x8] with x8=bootid, x9=cred) → only then a device fire with
+SPINSTAMP+DUAL+NOCONT CapEff verification.
+
+## 2026-09-20 (late night): jc12 — SURVIVAL SOLVED on device; delivery is the last gap
+
+**SPINSTAMP works on device.** jc12 (SPINSTAMP + late-midstamp + no-unlock +
+DUAL + NOCONT): 253 re-stamps over the punch window, punch sched_ret=0, full
+route + cfi + teardown survived — the FIRST device fire ever to survive the
+punch without the unlock-defusing. The frozen-stamp clobber class is dead.
+
+**But the write still doesn't land (CapEff=0 on the frozen child).**
+
+**Key QEMU finding that carries over:** with breakpoints at
+rt_mutex_adjust_pi entry (+0x0) and its rb_erase call (+0x174), NEITHER fired
+during the punch in the QEMU spin runs — **adjust_pi is never called** (or
+bails before the erase call). The erase delivery therefore never executes;
+jc10/11's device KPs were the clobbered-stamp walk (now fixed), not proof the
+erase ran.
+
+**adjust_pi call site mapped:** __sched_setscheduler+0xEE4
+(bl 0xffffffc0081ef24c), gated by two flag locals (frame fp-0x2c and fp-0x1c).
+rt_mutex_adjust_pi reads pi_lock at task+0x86c.
+The bail inside adjust_pi: rt_mutex_waiter_equal(waiter->prio, task prio).
+
+**Next-session discriminators (in order):**
+1. QEMU: bp at __sched_setscheduler+0xEE4 → read the two gate flags + the
+   punched task's pi_blocked_on (+0x86c region) at punch time. If the gate
+   flag is "pi_blocked != NULL" and pi_blocked_on reads NULL, find who
+   cleared it between the EDEADLK priming and the punch (suspects: the
+   mid-stamp FUTEX_UNLOCK_PI wake path clearing waiter->pi_blocked_on via
+   remove_waiter-on-current (the BUG itself!), or futex exit cleanup on
+   the spinning waiter thread).
+2. Device: vary MODE4_GHOST_PRIO (130 → 139/120) so the waiter prio can
+   never equal the post-setattr task prio (139) — rules the bail in/out.
+3. Device: PUNCH_ALL_TIDS=1 — sched_setattr every thread; whichever task
+   still carries pi_blocked_on gets walked.
+
+**Current fire env (working survival recipe):**
+MODE4_ONLY=1 MODE4_SLIDE_SWAP=1 WRITE_PROOF_TARGET=bootid MODE4_JC2=1
+MODE4_JC2_MAIN=1 MODE4_JC2_QUIET_ENTRY=1 MODE4_JC2_LATE_MIDSTAMP=1
+PSELECT_LATE_UNLOCK=0 MODE4_JC2_SPINSTAMP=1 MODE4_GHOST_PRIO=130
+MODE4_OWNER_TASK=1 MODE4_W0TASK_FAKE=1 MODE4_CAPSONLY=1 MODE4_CAPS_CHILD=1
+MODE4_CAPS778=1 MODE4_CAPS_NOCONT=1 PSELECT_SHIFT=0 SPRAY_ALIAS_MAX=0
+FOPS_MAX_ATTEMPTS=24 KPHYS=0xa8000000 UID0_NO_SYNCLOG=1
+PSELECT_ROUTE_DELAY_USEC=60000  →  gl_jc12
+
+## 2026-09-20 (final): jc13 — the delivery blocker is the GHOST TASK WORD
+
+jc13 (nice stairs added — untested, KP'd before any punch): self-leak WORKED
+this boot → ghost task word = the REAL waiter task (ffffff8887ccdc80) → walk
+proceeded past the task check into the dequeue → KP pre-punch (+16ms).
+
+jc12 (survived, no write): self-leak FAILED → task = init_task fallback →
+walk exits at the task check BEFORE the dequeue → survives BECAUSE it never
+delivers. ("stamp falls back to init_task (walk will exit at task check)" —
+the log line was the answer all along.)
+
+**The fork:** ghost task word = init_task → early exit, no delivery.
+Ghost task word = real waiter task → delivery path, but the chain then
+continues into the real task's PI state → KP (on this boot's luck).
+
+**Next fix (no fire yet):** ghost task word = the BSS_TAIL dead-end
+(kernelsnitch dead-zone: reads as a task with pi_blocked_on=0 → walks
+TERMINATE there — the GhostLockAdapt design, MODE4_CRED_INITTASK=0 selects
+it for the W0 path). The ghost's task field must point at the dead-end so
+the chain: top_waiter check → DEQUEUE (delivers *(child+0x780)=cred) →
+task = dead-end → chain terminates cleanly. The bss_tail image offset is in
+the offsets table (off_bss_tail_lock 0x02BB9D00 region, mapped via
+data_addr → P0 alias).
+
+Also note: jc12/jc13 same pre-punch recipe on the SAME boot — jc12 survived,
+jc13 KP'd pre-punch — the late-midstamp window still has residual
+boot-luck-dependent KP risk (~the 3/13 spray-class or the unlock deboost
+reaching the ghost on leak-success boots).
+
+Fires spent of the 5-fire budget: 2 (jc12 NOCONT, jc13 KP).
+
+## 2026-09-20 (correction): task-word theory RETRACTED; delivery may already work
+
+jc12/jc13 place-line comparison: BOTH runs placed the REAL leaked task word
+(ffffff8027d69280 / ffffff8887ccdc80, 256 votes). The "carrier ... task=
+init_task P0" line prints the fallback VARIABLE, not the placed fdset word.
+jc13's pre-punch KP = residual boot luck, not geometry. The bss_tail
+dead-end fix is NOT indicated.
+
+Re-read of the QEMU runs: the punch burst's FIRST setattr is a genuine
+change (BATCH/19 on a fresh SCHED_OTHER/nice-0 thread) → __sched_setscheduler
+runs the tail → adjust_pi → the in-adjust_pi rb_erase delivers. In the QEMU
+spin runs the write likely LANDED — at the wrong alias (my QEMU bootid
+address used KPHYS base 0x401f0000; the correct _text base may be
+0x40200000 → ffffff80428aa868) — the watchpoint watched the wrong address
+while delivery succeeded. Survival + delivery may already coexist.
+
+Device jc12 (survived, CapEff=0): the burst's first setattr is equally a
+change on device → adjust_pi should fire → the DUAL erase should deliver
+*(child+0x778/+0x780)=cred. CapEff=0 contradicts that — UNLESS the burst's
+first call was consumed by an EARLIER setattr in the same boot (threads
+persist per process; jc12 was the first fire on its boot, so no) — or the
+erase delivered into child+0x778 while /proc renders cred (+0x780): BOTH
+are written by DUAL, so a render of either shows the caps.
+
+**Next session (1 fire):** refire jc13's binary (nice stairs already in) on
+a FRESH boot, NOCONT. If it survives → read the frozen child's CapEff AND
+also dump /proc/<child>/task/<tid>/... plus try a setuid probe. If CapEff
+still 0 on a survived stairs-run, the delivery gap is real and the next
+probe is PUNCH_ALL_TIDS=1 (the dangling pi_blocked_on may sit on a
+different thread of the process than waiter_tid).
+
+Also fix the QEMU alias question (0x401f0000 vs 0x40200000) with one
+watchpoint run at ffffff80428aa868 to confirm delivery-in-QEMU.
+
+Fires spent of the 5: 2. jc13 binary (with stairs) is on the device.
+
+## 2026-09-20 (night, run 2): fires #3 — the walk sits ON the survival boundary
+
+jc13 refire (fresh boot, stairs): KP inside the punch's FIRST setattr —
+no punch print (the print is after setattr returns). Both jc13 runs died in
+the exact call jc12 survived; jc12 survived it without delivering.
+
+Reading rb_erase's no-right path precisely for the DUAL main stamp
+{pc=cred, left=child+0x780, right=0}:
+- change_child picks the LEFT slot (parent->rb_left value ≠ ghost) and
+  writes child into *(cred+8) — the usage|uid qword (usage stays
+  0x40000000 in the low half, uid becomes address bits — expected)
+- then *(child+0x780) = pc → THE WRITE. /proc status renders real_cred
+  (+0x778, also written by the DUAL pi erase). CapEff should show
+  0x182082 either way. It shows 0 on survived runs.
+
+So: identical call — KP (jc13 ×2) vs survive-without-write (jc12). The
+chain's behavior at burst-1 setattr is nondeterministic at the µs level
+(IRQ timing / stamp tear during the re-stamp copy / CPU migration).
+Survival and delivery are the SAME coin flip, not two separate problems.
+
+Fires spent: 3/5. Remaining levers:
+1. PUNCH_ALL_TIDS=1 NOCONT — the pi_blocked_on holder may be a thread
+   other than waiter_tid (QEMU lldb-proven historically).
+2. Direct root fire (no NOCONT): payload fires the moment caps land;
+   KP risk and root chance are the same coin.
+
+Recommendation: stop here tonight; the next session should spend fire #4
+on PUNCH_ALL_TIDS NOCONT and decide fire #5 by its result.
+
+## 2026-09-21: fire #4 (PUNCH_ALL_TIDS) KP'd pre-punch; LOCK_ROOT_W0 = dead code; fire #5 NOT spent
+
+- Fire #4 (jc13 + PUNCH_ALL_TIDS, NOCONT): KP pre-punch — same signature
+  (0 punch lines, last line pre-select). 4/5 spent.
+- Attempted fix (lock.waiters root = fake_w0 instead of fake_fops) turned
+  out to be DEAD CODE: mode4_main_tree is never set to 1 anywhere; the
+  JC2 env reaches the FINAL else branch which ALREADY places
+  root=leftmost=fake_w0, owner=fake_task|1. jc15 binary = jc13 byte-for-
+  byte (md5 verified) → NOT fired. The requeue-descends-the-fops-table
+  KP theory is also wrong (root was already safe).
+- Current facts: identical recipe → jc12 SURVIVED (no delivery),
+  jc13r1/r2/jc14 KP'd pre-print. The variance is NOT in any env we
+  control yet. The KP is inside the punch's first setattr (before its
+  print) or in the pre-select window.
+
+**Fire #5 is reserved.** It must only be spent on a REAL change. Next
+session (all free work first):
+1. QEMU: fix the alias question by DIRECT READ — at the punch breakpoint
+   dump candidate addresses (426aa868 / 4289a868 / 428aa868) and find
+   which holds the cred pointer after the walk → proves delivery live.
+2. QEMU: breakpoint inside the burst-1 setattr walk on the KP path;
+   single-step from adjust_pi entry to find the exact faulting deref.
+3. Only then design the fire-#5 change.
+
+## 2026-09-21 (session 2): QEMU failures FULLY root-caused — P0_PHYS wrap; delivery unblocked
+
+**The QEMU crash formula-level root cause:** data_addr/p0_data_alias computes
+(phys - P0_PHYS_OFFSET) | P0_PAGE_OFFSET with compiled P0_PHYS_OFFSET=0x80000000.
+QEMU virt loads the Image at phys 0x401f0000 (< 0x80000000) → the subtraction
+wraps → EVERY image alias becomes unmapped 0xffffffffc2xxxxxx. Verified
+against both crash signatures (WRITE_PROOF addr=ffffffffc2d89b6d; tree_left
+garbage ffffffffc2b0a8e8 stored through by rb_erase+0x90).
+
+**Fix (in tree):** p0_phys_offset runtime global + P0_PHYS env override.
+QEMU launcher: KPHYS=0x401f0000 P0_PHYS=0x40000000. WRITE_PROOF addr now
+prints valid 0xffffff80-prefixed aliases.
+
+**Result: the dequeue now DELIVERS in QEMU** — the walk passed rb_erase
+(previous fatal site) and moved on to rb_insert_color (the post-dequeue
+requeue), which faults at 0x8: the insert walks a parent chain into a NULL
+grandparent because fake_w0 carries the old WRITE-shape fields instead of
+clean tree fields. gdb breakpoints/watchpoints (Z0/Z1) confirmed broken in
+this QEMU build even with correct protocol (validated: hot-function bp
+never fires; Z1 same) — console panic forensics is the only QEMU visibility.
+
+**Next free work:** make the W0 payload node a clean {pc=1, left=0, right=0}
+black root in the DUAL config (its fields currently encode the old write
+shape and poison the requeue walk). Then QEMU should run punch → deliver →
+requeue → terminate cleanly → boot_wrote=1, no panic. That validates the
+FULL chain in the emulator before fire #5.
+
+**Fire budget: 4/5 spent.** The device-side DUAL geometry needs NO change —
+the device addresses were always valid; the QEMU failures were harness-only.
+
+## 2026-09-21 (session 2, cont): MAIN-TREE DELIVERY NOW HAPPENS IN QEMU
+
+Latest QEMU run (P0_PHYS fixed): the punch's PI walk delivered the MAIN-tree
+write — *(ashmem_misc.fops) = fake_fops (THE REAL SWAP) — and crashed one
+stage LATER, in rb_insert_color (the requeue), walking a semi-real parent
+chain (x9 = a real kernel waiter, grandparent NULL → [0x8] deref).
+
+So the delivery chain is now: punch → adjust_pi/chain → dequeue →
+*(target)=value LANDS → requeue-insert crashes. One contained fix left:
+make the post-dequeue requeue safe (the insert descends a tree whose nodes
+mix our payload fields with real kernel linkage — likely fixable by giving
+the ghost a prio that makes it the tree MINIMUM, or by ensuring the fake
+nodes it links under are self-consistent black roots).
+
+Remaining unknown: whether the PI-tree (DUAL +0x778) delivery also fired
+before the crash (watchpoint ambiguity — the run's stop packet was the
+panic-exit, so the bootid watch did NOT fire; the DUAL pi shape's left =
+QEMU_TARGET may not have been reached because adjust_pi's OWN bail is
+still possible; the MAIN write came from the chain's dequeue, not adjust_pi).
+
+**Fire #5 remains reserved.** Next free iteration: QEMU console forensics
+on the rb_insert_color crash → fix the requeue termination → expect a run
+with punch + delivery + NO panic + boot_wrote=1 → then the root fire.

