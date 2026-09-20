@@ -468,6 +468,14 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         }
         pr_info("consumer punch tid=%d sched_ret=%ld errno=%d\n", tid,
                 sched_ret, errno);
+        /* SINGLE-SHOT PUNCH (jc18 post-mortem): the punch print is AFTER
+         * setattr#1 returned — and the KP hit before any second print.
+         * The outer while (go==seq) re-fires: setattr#2 walks the ghost
+         * that walk #1 just MUTATED (kernel rb linkage written into our
+         * stack stamp) → rb_erase on half-valid linkage → KP. One walk
+         * per fire is the jc12-proven-survivable pattern: disarm now. */
+        if (env_flag("MODE4_JC2_SPINSTAMP", 0))
+          atomic_store(&punch_consume_go, 0);
         if (env_flag("QEMU_INIT", 0)) {
           /* thread prints unreliable under QEMU TCG — durable file instead;
            * the launcher polls and prints it. */
