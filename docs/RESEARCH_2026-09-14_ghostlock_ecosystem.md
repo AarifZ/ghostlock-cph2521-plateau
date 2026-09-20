@@ -1292,3 +1292,24 @@ already in tree; next candidate recipe = cap the loop at ~32 iterations
 (32 re-stamps in 150ms is still 20x the frozen-stamp freshness) — but
 each additional fire costs budget. Recommend: STOP fires tonight; next
 session design the cap + user approves.
+
+## 2026-09-21 (session 3, final): jc18 built — handoff + cap + black roots
+
+QEMU iteration results:
+- pc=1 → 0 across ALL W0 sites (pc=1 is a RED root = invalid; rb_insert_color
+  entry treats pc=0 as black root = clean terminate).
+- LOCK_EMPTY (waiters root/leftmost=0, owner=0) now reachable together with
+  MODE4_OWNER_TASK. One run with it: punch fired, FULL route completed, no
+  panic. Two later stability runs KP'd again at rb_insert_color with
+  x9=REAL slab node — traced to the QEMU_DUAL target (bootid) sitting
+  inside the sysctl rb backing array: delivering *(bootid)=cred corrupts
+  the real sysctl tree → subsequent rb ops walk corrupted nodes. The
+  DEVICE DUAL target is child+0x780 (task_struct field, not an rb tree) —
+  this collateral does not exist on hardware.
+- Handoff race fixed: punch_consume_go is now set by the WAITER thread
+  after its FINAL stamp (previously armed before select → punch raced the
+  last re-copy). SPIN_MAX_ITERS cap (32) verified working in QEMU.
+
+jc18 = device binary with: spin cap 32, handoff, LOCK_EMPTY shape, black
+roots, durable markers, cadence 8/3, prio=1, stop-on-calls. Pushed
+(hash 52d2c0da...). Next fire (user-gated): NOCONT diagnostic.

