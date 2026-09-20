@@ -1328,3 +1328,18 @@ waiters; prio=130 exits earlier. jc12's proven-walk prio was 130.
 Next candidate recipe: jc19 + MODE4_GHOST_PRIO=130 (jc12's walk depth,
 with all new fixes). Also candidate: drop prio to 120 (never equals the
 post-setattr nice-19-derived prio 139/19 boundaries).
+
+## 2026-09-21 (jc20 fire): walk depth not the variable; LOCK_EMPTY is
+
+jc20 (prio=130 + all fixes): spin 32 ✓ (3/3 storm solved), punch#1
+returned 0 ✓, KP after — same post-punch window as jc18. With single-shot
+active there was no setattr#2, so the remaining delta vs jc12 (the ONE
+fully-surviving fire) is now isolated to LOCK_EMPTY:
+- jc12: waiters=W0, owner=fake_task|1 → walk exits via owner-task path,
+  ghost left consistent → survived punch + select + route + park.
+- jc18/20 (LOCK_EMPTY: waiters=0, owner=0): walk exits via owner-NULL
+  early-exit → ghost NOT dequeued → pi_blocked_on stays = ghost → the
+  post-punch window (select timeout, thread exits, attempt-2 re-arm)
+  re-walks the never-cleaned dangling → KP.
+Next recipe: jc20 minus LOCK_EMPTY (waiters=W0 owner=fake_task|1 = the
+jc12 shape) + keep cap/handoff/single-shot/pc=0/prio=130/markers.
