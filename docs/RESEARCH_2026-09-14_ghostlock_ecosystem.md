@@ -786,3 +786,39 @@ DECISIVE QUESTION the forensics answers:
 State: jc3c on device + all commits. The walk+swap+open chain is
 PROVEN; the remaining unknowns are (a) walk survival ~37% and (b) the
 child-death signal — both answerable with the fixes above.
+
+## STRUCTURAL ANALYSIS (09-20): why 0/75 — the value-as-parent trap
+
+0/75 is not luck. Re-analysis of the only-left erase found the flaw:
+
+**The write VALUE doubles as the ghost's __rb_parent_color.** The kernel
+ERASE code dereferences it: __rb_change_child(node, child, parent) reads
+parent->rb_left (+8) / rb_right (+0x10), and its else-branch writes the
+child pointer into parent+0x10 UNCONDITIONALLY when the left slot doesn't
+match.
+
+- PROVEN landings (bootid, misc.fops, roll 21): VALUE = fake_fops = OUR
+  quiet zeroed page → parent derefs/writes hit our controlled zeros →
+  harmless → write lands clean.
+- CAPSONLY: VALUE = child_cred = the CHILD'S LIVE cred page → the erase
+  writes the target-node pointer into *(child_cred+0x10) = the cred's
+  sgid field → the child's cred is CORRUPTED BY THE KERNEL'S OWN
+  ERASE — before any caps can be used. Child death on every landing is
+  EXPLAINED: the value we need (a live cred page) poisons the very cred
+  it points to.
+
+**DECISIVE ISOLATION TEST (next session, one fire):** WRITE_PROOF_TARGET
+= bootid (readback-verifiable) with MODE4_JC2_MAIN but value =
+child_cred instead of fake_fops. Two outcomes:
+- boot_id changes → the child-cred value survives the erase chain →
+  the problem is the child+0x780 target specifically (revert? guard on
+  cred fields?) → different fix
+- boot_id UNCHANGED → the child-cred VALUE breaks the erase chain
+  itself → the value-as-parent trap confirmed → the write form needs a
+  quiet-page value → the caps-cred approach via THIS primitive is
+  structurally dead → pivot to W0.pi delivery with pc=init_cred
+  (quiet immortal page whose +8/+0x10 = NULL gid/sgid = safe parent!)
+  writing *(child+0x780) = init_cred... but uid=0 = guard kill → THEN
+  the guard unhook MUST land first → two-walk chain (unhook walk, then
+  init_cred walk) — both targets proven (funcs leaf-NULL "Lives",
+  0x778/0x780 landed in Z-era).
