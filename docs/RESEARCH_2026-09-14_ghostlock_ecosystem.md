@@ -1436,3 +1436,20 @@ g_ghost_kva = hint + delta; (4) QEMU behavior-check; (5) one NOCONT fire.
 
 Tooling note: bash-heredoc mangling of backslash-n broke C strings twice —
 use chr(92) escapes when generating C via heredocs.
+
+## 2026-09-22 (session 3): waiter cluster detection live; QEMU calibration BLOCKED
+
+- Waiter-side stack-cluster detection implemented in perf_collect
+  (g_waiter_stack_hint, prints "waiter stack cluster: page=… top=… n=…")
+  and wired: g_ghost_kva = hint + PSELECT_GHOST_DELTA (consumer pre-arm).
+  Device binary builds (jc25-class).
+- QEMU CANNOT calibrate the delta: TCG has no PMU → the waiter self-leak
+  gets 0 samples → no cluster. The QEMU panic x0-as-ghost idea also dies
+  (no hint to subtract from, same boot).
+- NEXT OPTIONS (device-side ground truth needed):
+  a) Short self-perf DURING the spin (select-path frames) — delta shrinks
+     to an intra-path constant; then one NOCONT fire with a small delta
+     scan across route attempts (risk: wrong ghost→lock deref can KP).
+  b) Static disassembly of the select-path frames (core_sys_select
+     stack_fds offset vs sampled frame anchors) for the analytic delta.
+  c) Post-first-win: enable pstore access for panic ground truth.
