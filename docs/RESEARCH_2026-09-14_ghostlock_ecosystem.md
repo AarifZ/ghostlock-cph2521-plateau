@@ -1514,3 +1514,24 @@ oplus_secureguard.c, oplus_local_modules.bzl):
    (we patch neither).
 6. jc3i-era child SIGKILLs fully explained: old usage-bug cred had garbage
    uid (a decrease) → root hook. CAPSONLY removes the trigger entirely.
+
+## 2026-10-03 (session cont): delta scan progress; guard flake; DEVICE WEDGE blocks iteration
+
+- jc27 (delta=-0x80, WCHAN_CONFIRM=1): boot survived but NO punch file →
+  guard skipped AGAIN (2 of 3 runs) — the wchan sampler ("do_select" match)
+  is the flake; window varies with the self-lock's fd-bit pattern.
+- jc28 (delta=-0x80, PSELECT_NO_WCHAN_GUARD=1): punch path engaged but the
+  run WEDGED the device (adb shells hang; main R-state livelock — same
+  class as the jc25 freeze the user hard-rebooted). No verdict readable.
+- Rootguard source audit (b93b763): CAPSONLY passes every guard by
+  construction; payload must not exec from /data after setuid(0).
+
+**BLOCKERS before more fires:**
+1. THE WEDGE (highest): post-route main-thread livelock starves the system
+   — likely the swap-hold/route-probe loop or success-poll spin at high
+   priority. Fix: audit post-route loops for missing usleep/yield; add a
+   watchdog exit (alarm() at T+240s → _exit) so a wedged run self-terminates.
+2. Guard flake: with NO_WCHAN_GUARD the punch is deterministic but the
+   wedge must be fixed first (the guard's delay was masking it?).
+Delta evidence so far: 0 → KP-inside-walk (deepest); -0x80 → inconclusive
+(jc27 no punch; jc28 wedge). Next deltas after wedge fix: -0x80, +0x80.
