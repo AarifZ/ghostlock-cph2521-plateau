@@ -2453,7 +2453,7 @@ void do_pselect_fake_lock_route(void) {
     fflush(stdout);
     fsync(STDOUT_FILENO);
     {
-      int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+      int sfd = open("/data/local/tmp/stage.txt",
                      O_WRONLY | O_CREAT | O_APPEND, 0644);
       if (sfd >= 0) {
         char buf[128];
@@ -2504,7 +2504,7 @@ void do_pselect_fake_lock_route(void) {
     fflush(stdout);
     fsync(STDOUT_FILENO);
     {
-      int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+      int sfd = open("/data/local/tmp/stage.txt",
                      O_WRONLY | O_CREAT | O_APPEND, 0644);
       if (sfd >= 0) {
         const char *m = "pselect_pre_select\n";
@@ -2552,7 +2552,7 @@ void do_pselect_fake_lock_route(void) {
         /* KP FORENSICS: stage.txt's last marker before the fire-#5 KP was
          * pselect_pre_select — this pair brackets the mid-stamp select
          * itself (the 0-timeout select that lays the ghost stamp). */
-        int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+        int sfd = open("/data/local/tmp/stage.txt",
                        O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (sfd >= 0) {
           const char *m = "midstamp_select_done\n";
@@ -2574,7 +2574,7 @@ void do_pselect_fake_lock_route(void) {
       if (env_int_range("PSELECT_LATE_UNLOCK", 1, 0, 1)) {
         futex_op(f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
         {
-          int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+          int sfd = open("/data/local/tmp/stage.txt",
                          O_WRONLY | O_CREAT | O_APPEND, 0644);
           if (sfd >= 0) {
             const char *m = "late_unlock_done\n";
@@ -2646,7 +2646,7 @@ void do_pselect_fake_lock_route(void) {
        * stamp) at 1/3 the storm size. 0 = uncapped (QEMU default). */
       int max_iters = env_int_range("SPIN_MAX_ITERS", 0, 0, 100000);
       {
-        int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+        int sfd = open("/data/local/tmp/stage.txt",
                        O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (sfd >= 0) {
           const char *m = "spin_enter\n";
@@ -2673,7 +2673,7 @@ void do_pselect_fake_lock_route(void) {
         select(PSELECT_ROUTE_NFDS, &sin, &sout, &sex, &tvit);
         iters++;
         if (mark_every && (iters % mark_every) == 0) {
-          int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+          int sfd = open("/data/local/tmp/stage.txt",
                          O_WRONLY | O_CREAT | O_APPEND, 0644);
           if (sfd >= 0) {
             char buf[32];
@@ -2713,7 +2713,7 @@ void do_pselect_fake_lock_route(void) {
           break;
       }
       {
-        int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+        int sfd = open("/data/local/tmp/stage.txt",
                        O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (sfd >= 0) {
           char buf[48];
@@ -2738,7 +2738,7 @@ void do_pselect_fake_lock_route(void) {
     int saved_errno = errno;
     pr_info("pselect post-select +%.0fms ret=%d\n", fops_elapsed_ms(&route_t0), ret);
     {
-      int sfd = open("/storage/emulated/0/ghostlock_logs/stage.txt",
+      int sfd = open("/data/local/tmp/stage.txt",
                      O_WRONLY | O_CREAT | O_APPEND, 0644);
       if (sfd >= 0) {
         char buf[64];

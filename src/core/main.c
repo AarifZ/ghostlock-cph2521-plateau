@@ -3435,6 +3435,20 @@ int run_exploit(int argc, char **argv) {
   disable_rseq_for_thread();
   set_unbuffer();
   set_limit();
+  /*
+   * WEDGE WATCHDOG (jc25/jc28 post-mortem): a wedged run (main livelock /
+   * FUSE-hung stage writes) starves the whole device — adb shells hang and
+   * only a 3-button hard reboot recovers. Self-terminate hard at T+240s:
+   * the process dies, its fds close, the kernel reclaims the spray pages,
+   * and the system keeps running so forensics stay readable.
+   */
+  {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_DFL; /* default SIGALRM = terminate */
+    sigaction(SIGALRM, &sa, NULL);
+    alarm(240);
+  }
 
   /* QEMU freestanding-init mode: mount the pseudo-filesystems from bionic
    * so /dev/ashmem, /proc, /sys exist (env QEMU_INIT=1). */
