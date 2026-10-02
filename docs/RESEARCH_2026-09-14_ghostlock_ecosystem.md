@@ -1488,3 +1488,29 @@ mid-walk but the post-walk crashes, the heal phase must also re-stamp the
 LOCK words (ex[1..3]) it currently rewrites only via fdsets (it does —
 same channel ✓).
 Sequence to root unchanged: delta lands → CapEff → SIGCONT.
+
+## 2026-10-03: ROOTGUARD SOURCE AUDIT (mt6993 OSS tree — same rootguard_new family, builds for qcom with QCOM_PLATFORM)
+
+Full source review of the friend's links + siblings (oplus_root_hook.c,
+oplus_guard_general.c, oplus_exec_hook.c, oplus_harden_hook.c,
+oplus_secureguard.c, oplus_local_modules.bzl):
+
+**VERDICT: our CAPSONLY shape passes every guard by construction.**
+1. Root hook (sys_enter/exit pair): KILLS ONLY on numeric uid/euid/gid/egid
+   DECREASE across a syscall (non-root at entry, locked device). uid
+   2000→2000 = no trigger. NO capability checks. NO cred-pointer checks.
+   Whitelists the setuid-family syscalls themselves. addr_limit check
+   (get_fs() > 0x8000000000) is LIVE on 5.10 — our child stays USER_DS ✓.
+2. Harden hook (setuid-family kprobe-style): fires only if
+   capable(CAP_SETUID) && uid>=10000 && new_id==0 — uid 2000 NEVER fires;
+   even then LOG-ONLY (uid restore is commented out upstream!).
+3. EXEC hook: /data exec — non-root = LOGGED ONLY (never blocked);
+   root = blocked+SIGKILL. → PAYLOAD RULE: after any setuid(0), use
+   direct syscalls ONLY — never exec from /data as uid 0.
+   setuid(0) itself is whitelisted (root hook skips it).
+4. is_unlocked() = g_boot_state from verified_bootstate ("orange");
+   locked (green) = armed — but our shape passes regardless.
+5. inte module = hourly module/syscall-table hash checks — irrelevant
+   (we patch neither).
+6. jc3i-era child SIGKILLs fully explained: old usage-bug cred had garbage
+   uid (a decrease) → root hook. CAPSONLY removes the trigger entirely.
