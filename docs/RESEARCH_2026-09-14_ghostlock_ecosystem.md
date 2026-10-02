@@ -1413,3 +1413,26 @@ comment claiming kernel SP was wrong. Self-lock therefore defaults OFF
 3. Re-examine: QEMU "delivery" crashes may have been the owner's REAL waiter
    walk, not our ghost path — full chain-first-0x400 reconstruction still
    pending (todo from 326ca28).
+
+## 2026-09-22 (session 2): KERNEL STACK LEAK FOUND — raw x28 histogram
+
+--perfdump mode (jc24, passive — no futex/UAF) run ON DEVICE:
+- 455 samples, 54 uniq kernel-range values.
+- FINGERPRINT CONFIRMED: page ffffffc0396ab000 (VMAP) shows 11+ distinct
+  addresses clustered in bc20..bfe0 (top value x119) = the calling thread's
+  OWN KERNEL STACK mid-syscall (frame pointers/locals). Current-task slab
+  (ffffff87cdc8a500 x124, LINEAR) clearly distinguishable.
+- The existing jc2 waiter-thread leak (perf pid=0 on the waiter, mid-route)
+  already samples the waiter's stack the same way — extending it with the
+  cluster detection yields the WAITER's stack region, and the ghost lives
+  inside the same cluster (select fdsets overlay the dead waiter — the
+  fdset buffer addresses ARE in the sampled region).
+
+REMAINING: (1) add cluster detection to the waiter-side leak →
+g_waiter_stack_hint; (2) calibrate ghost−hint in QEMU (QEMU panic dumps
+hold the ghost: rb_erase-crash x0 = the erased node = the ghost, e.g.
+ffffffc00d3cbc30-class values); (3) arm PSELECT_GHOST_SELF_LOCK=1 with
+g_ghost_kva = hint + delta; (4) QEMU behavior-check; (5) one NOCONT fire.
+
+Tooling note: bash-heredoc mangling of backslash-n broke C strings twice —
+use chr(92) escapes when generating C via heredocs.
