@@ -1535,3 +1535,22 @@ oplus_secureguard.c, oplus_local_modules.bzl):
    wedge must be fixed first (the guard's delay was masking it?).
 Delta evidence so far: 0 → KP-inside-walk (deepest); -0x80 → inconclusive
 (jc27 no punch; jc28 wedge). Next deltas after wedge fix: -0x80, +0x80.
+
+## 2026-10-03 (final): safe-scan live; jc30/jc31 delta probes KP'd; targeted-cluster plan
+
+- jc28 wedge root-caused: wrong-delta lock on junk nonzero stack qword →
+  kernel qspinlock hang (unsignalable). jc29 fixes (alarm watchdog +
+  non-FUSE markers) + jc30 layout (NFDS=512, lock@+0xA0 above zero band)
+  ELIMINATED the hang class — jc30/jc31 both recovered via normal reboot.
+- jc30 (delta=0) and jc31 (delta=-8): KP at the punch setattr, durable
+  markers end at spin_exit. Self-lock armed (ghost=ffffffc04213be90-class).
+  Both deltas wrong → walk derefs junk tree pointers → fault (KP not hang).
+  Note: "place" debug print reads old wps=5 positions (print-only bug).
+- Blind delta stepping won't converge. NEXT SESSION — targeted cluster:
+  run perf_open_hw(waiter_tid) FROM THE CONSUMER during the spin (the
+  pid>0 path with 400x2ms collection exists) → samples the waiter BLOCKED
+  IN SELECT → cluster = select-path frames = the fdset buffer's own
+  neighborhood → ghost candidates come FROM DATA (print all values +
+  mutual offsets), then 1-2 confirmatory fires.
+- Fire history tonight: jc27 guard-flake (no punch), jc28 wedge (hard
+  reboot), jc30/jc31 delta KP. Rootguard audit: CAPSONLY passes all.
