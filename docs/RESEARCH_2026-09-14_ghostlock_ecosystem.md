@@ -1453,3 +1453,21 @@ use chr(92) escapes when generating C via heredocs.
   b) Static disassembly of the select-path frames (core_sys_select
      stack_fds offset vs sampled frame anchors) for the analytic delta.
   c) Post-first-win: enable pstore access for panic ground truth.
+
+## 2026-09-22 (session 4, jc25 fire): SELF-LOCK ARMED ON HARDWARE — boot survives
+
+Fire (NOCONT, SELF_LOCK=1, DELTA=0): the cluster hint fired on device
+("waiter stack cluster" → ghost=ffffffc033af3db0 = real VMAP kstack addr),
+self-lock stamps armed through all 32 spin iterations, spin + blocking
+select + route survived, ZERO KP, processes alive. The full gate machinery
+is HARDWARE-STABLE.
+
+Two follow-on issues this run (NOT crashes):
+1. window-guard SKIP → the punch never fired (CapEff=0 meaningless — no
+   walk ran). jc22 passed the same guard; likely sampling flake vs the
+   3-confirm requirement. Next fire: PSELECT_WCHAN_CONFIRM=1.
+2. waiter/main slow post-select (TIMEOUT at 2500ms, prints lagged) —
+   benign race; verify with the longer success-poll.
+
+NEXT FIRE (single env change): jc25 + PSELECT_WCHAN_CONFIRM=1 → expect
+punch → walk through the armed gate → frozen-child CapEff.
