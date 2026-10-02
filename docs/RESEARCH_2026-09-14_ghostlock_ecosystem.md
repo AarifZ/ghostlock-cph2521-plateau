@@ -1471,3 +1471,20 @@ Two follow-on issues this run (NOT crashes):
 
 NEXT FIRE (single env change): jc25 + PSELECT_WCHAN_CONFIRM=1 → expect
 punch → walk through the armed gate → frozen-child CapEff.
+
+## 2026-09-22 (session 5, jc26 fire): WALK RAN THROUGH THE ARMED GATE — KP inside the punch
+
+jc26 (jc25 + WCHAN_CONFIRM=1): spin 32 ✓, self-lock armed ✓, post-select
+completed ✓, then KP with NO punch print — with 1-confirm the guard is
+near-certain to have passed, so the KP is INSIDE the punch setattr: the
+walk entered the armed gate and died at the next internal stage. First
+device fire where the delivery path plausibly executed. No punch-print =
+KP before setattr returned (print is post-return).
+
+NEXT: (1) enable MODE4_PROOF durable pre/post-setattr markers to confirm
+guard-pass vs crash-point precisely; (2) delta scan (ghost=hint±0x200,
+step 0x40) — delta=0 may be off by a frame or two; (3) if delivery lands
+mid-walk but the post-walk crashes, the heal phase must also re-stamp the
+LOCK words (ex[1..3]) it currently rewrites only via fdsets (it does —
+same channel ✓).
+Sequence to root unchanged: delta lands → CapEff → SIGCONT.
