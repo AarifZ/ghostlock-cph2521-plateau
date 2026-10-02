@@ -366,6 +366,7 @@ extern uintptr_t pipebuf_page_base;
 extern int pr_reclaim_fds[16][2];
 extern uintptr_t g_child_task;   /* CAPSONLY v2: child-reported task */
 extern uintptr_t g_child_cred;   /* CAPSONLY v2: child-page caps-cred */
+extern uintptr_t g_ghost_kva;   /* ghost (fdset-overlay waiter) kernel addr */
 extern pid_t g_cap_child_pid;  /* CAPSONLY v2: child pid for waitpid forensics */
 extern uintptr_t g_child_orig_cred; /* child original cred ptr (SAME_CRED test) */
 extern uintptr_t pipebuf_addr;

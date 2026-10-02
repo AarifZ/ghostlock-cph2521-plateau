@@ -1387,3 +1387,29 @@ reaches the rb ops with ghost task=init_task fallback). Candidates:
 waiter->task-vs-task check position, deadlock (task==top_task) with the
 call (x0=task, x1=0, x2=NULL, x3=waiter->lock, x4=NULL, x5=task),
 waiter!=top_waiter branch topology, or pi_blocked_on consistency check.
+
+## 2026-09-22: delivery-gate work session — gate identified, SP leak dead-end validated
+
+**Gate (static, from adjust_pi disasm):** the walk enters the chain only on
+waiter->prio != task->prio (130 vs 139 ✓ passes); the chain then reads
+lock->waiters.leftmost and derefs it — the top_waiter consistency checks
+follow. Delivery needs the tree/lock words consistent with the ghost.
+
+**ImplementED (in tree, jc23):** ghost self-lock stamp (lock built in the
+fdset ex[0..3] region, root=leftmost=ghost, owner=1) + consumer pre-arm SP
+discovery + PSELECT_GHOST_DELTA env. **Validated DEAD END:** /proc/<tid>/
+syscall sp = USER SP (0x7d93... in QEMU), NOT kernel SP — the QEMU_INIT
+comment claiming kernel SP was wrong. Self-lock therefore defaults OFF
+(PSELECT_GHOST_SELF_LOCK=0) — stamping a user ptr into ghost->lock panics.
+
+**Next ghost-KVA candidates (next session):**
+1. perf x28 RAW histogram (leak infra exists): collect ALL values, not just
+   the task-majority — frame-pointer values = kernel stack addresses;
+   cluster by page → thread stack base; ghost = base + fixed offset
+   (calibrate offset in QEMU from a panic dump).
+2. kallsyms-based static stack layout disasm (core_sys_select stack_fds
+   offset + frame chain) → compute F−SP_block analytically, no leak needed
+   for the DELTA — still needs one stack-address leak for the base.
+3. Re-examine: QEMU "delivery" crashes may have been the owner's REAL waiter
+   walk, not our ghost path — full chain-first-0x400 reconstruction still
+   pending (todo from 326ca28).

