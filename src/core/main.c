@@ -407,7 +407,30 @@ void *consumer_thread(void *arg __attribute__((unused))) {
        * PSELECT_NO_WCHAN_GUARD=1 disables.
        */
       int window_ok = 0;
-      if (env_flag("PSELECT_NO_WCHAN_GUARD", 0)) {
+      if (env_flag("PSELECT_PUNCH_IN_BLOCK", 0)) {
+        /* BLOCK-GATED PUNCH v2: this kernel's blocked select reports
+         * wchan=do_select (run 1: gate never armed), so gate on the
+         * scheduler STATE instead — State: S means the waiter is ASLEEP
+         * in its 3ms spin-block → fdset copy COMPLETE, stamp atomic. */
+        char wpath[96], wbuf[2048];
+        snprintf(wpath, sizeof(wpath), "/proc/self/task/%d/status", tid);
+        for (int g = 0; g < 400 && !window_ok; g++) {
+          int wf = open(wpath, O_RDONLY);
+          if (wf >= 0) {
+            ssize_t wn = read(wf, wbuf, sizeof(wbuf) - 1);
+            close(wf);
+            if (wn > 0) {
+              wbuf[wn] = 0;
+              char *st = strstr(wbuf, "State:");
+              if (st && (st[7] == 'S' || st[7] == 'D'))
+                window_ok = 1;
+            }
+          }
+          if (!window_ok)
+            usleep(250);
+        }
+        pr_info("block-gate ok=%d (state-gate)\n", window_ok);
+      } else if (env_flag("PSELECT_NO_WCHAN_GUARD", 0)) {
         window_ok = 1;
       } else {
         for (int g = 0; g < 64 && !window_ok; g++) {

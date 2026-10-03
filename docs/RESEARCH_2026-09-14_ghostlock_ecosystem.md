@@ -1711,3 +1711,26 @@ diff — bounded, enumerable, one fire per operand.
   ONLY while the waiter is inside a 3ms block (deterministic fresh
   stamp, no tear), and/or get in-kernel ground truth via pstore after
   first boot with the old delivering flow (which DID write bootid).
+
+## 2026-10-03 (15-run budget, runs 1-3): DETERMINISTIC POST-SELECT KP = likely delivery
+
+- Run 1 (wchan block-gate): gate never armed (blocked select reports
+  wchan=do_select on this kernel) — no punch, no data.
+- Run 2 (state-gate: punch when waiter State=S in its 3ms block, stamp
+  atomic): KP AFTER post_select (markers end there; log lost to panic).
+- Run 3 (exact repeat): SAME deterministic post-select KP (2/2). First
+  DETERMINISTIC walk damage in the new flow. Interpretation: the block-
+  gated punch DELIVERED (cred swapped on the waiter = punch target) and
+  the waiter's NEXT syscalls (the CapEff readback open/read) crash via
+  the corrupted cred side-effects (the erase's 2nd store *(cred)=pc
+  garbages usage/uid; get/put_cred on the render path → UAF class).
+- RUN 4 (next): remove the waiter readback (no syscalls on the punch
+  target post-select — pure sched_yield pause) and read CapEff from
+  ANOTHER thread: /proc/<waiter_tid>/status rendered by MAIN. If
+  CapEff=0x182082 → THE DELIVERY IS REAL and root is: keep the waiter
+  silent, act from main/child. Also consider pre-fixing the fake cred
+  (usage huge + uid=2000 already) vs the *(cred) store clobbering it —
+  the delivered cred object is the child's spray page; the clobber
+  writes usage/uid on THAT page → make pc's low-32=benign-usage
+  (already ~0x...781, huge positive = never-freed ✓) and uid=0xffffff88
+  garbage — render shows garbage Uid but CapEff intact → acceptable.
