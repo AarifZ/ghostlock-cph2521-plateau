@@ -1770,3 +1770,14 @@ diff — bounded, enumerable, one fire per operand.
   (force ghost_kva = the QEMU waiter's REAL fdset buffer — find it via
   one QEMU panic's x28/pi_blocked_on register), then single-step the
   erase in the emulator to see which conditional skips the store.
+
+## 2026-10-04 (post-run-9 freeze report): park wedge starves IRQs
+
+User-observed after run 9: volume + power-long-press alive, touch dead
+→ main CPU wedged in-kernel (hard IRQs fire; threaded IRQs/kworkers
+starved). The parked gl_jc54 (R state at render time) spun post-route;
+alarm(240) can't deliver to a task stuck in a kernel path. FIX (next
+build): NO PARK under the CC/self-lock flow — after WRITE_PROOF
+forensics, _exit(0) immediately (the fake-fops hold serves nothing now
+that cfi fails errno-22 anyway); also chrt the park (if kept) to
+SCHED_IDLE via nice 19 so it can never starve IRQ threads.
