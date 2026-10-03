@@ -428,6 +428,8 @@ void *consumer_thread(void *arg __attribute__((unused))) {
           }
           close(kf);
         }
+        pr_info("KCORE dbg kf=%d errno=%d\n", kf,
+                kf >= 0 ? 0 : errno);
         pr_info("KCORE ghost=%lx (scan %s)\n",
                 (unsigned long)g_ghost_kva, hit ? "HIT" : "MISS");
         if (hit) {

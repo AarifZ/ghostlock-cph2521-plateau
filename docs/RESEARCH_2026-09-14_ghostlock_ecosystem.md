@@ -1815,3 +1815,21 @@ SCHED_IDLE via nice 19 so it can never starve IRQ threads.
   survival.
 - Next: (1) instrument scan (errno/rn prints) → make HIT work →
   single-step erase with real ghost; (2) device budget: 5 of 15 remain.
+
+## 2026-10-04 (gdb-scan harness session): QEMU observability rig works
+
+- ghost_scan.py (qemu_cph/): boots QEMU, attaches gdb, sends 'c' (the
+  attach-halt lesson), waits for spin, interrupts, scans 256MB vmalloc
+  via m-packets for the MAGIC word, then write-watchpoints the ghost.
+  Memory reads CONFIRMED working (43 chunks read on first run).
+- Bugs found+fixed: attach-halt (VM frozen at gdb attach → send c);
+  console log lost on early exits (write on all paths).
+- Remaining bug (NEXT SESSION, exact spot): a sched_setattr punch fires
+  in QEMU BEFORE spin_enter despite setup-arm suppression — suspect the
+  SECOND arm site fops.c:2821 (waiter spin-exit handoff residue) and/or
+  the consumer's endless-KCORE-rescan flood (106k lines) interleaving.
+  Fix: gate 2821 under !QEMU_KCORE_SCAN; throttle the scan retries.
+- /proc/kcore = ENOENT in QEMU (CONFIG_PROC_KCORE off) — the gdb
+  m-packet scan replaces it entirely.
+- Once the arm leak is fixed: scan finds real ghost → watchpoint →
+  full erase observability same-boot. 5 device runs remain.
