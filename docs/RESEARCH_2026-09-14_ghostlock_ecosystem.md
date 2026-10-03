@@ -1668,3 +1668,22 @@ NEXT: make the tree consistent for the requeue — candidate: word11
 the parent linkage; or pre-set word0 such that the erase leaves root
 pointing at a valid empty state (parent's slot cleared → root=NULL).
 Design, then 1 fire with waiter-self-readback (jc43 rig).
+
+## 2026-10-03 (end): jc44 tree-consistent root=parent — still no delivery
+
+Boot survived, walk ran (sched_ret=0), waiter self-readback CapEff=0.
+Three operand families tried under the surviving flow (ghost-root,
+parent-root with consistent requeue, owner variants) — all clean walks,
+zero delivery. The static decode says every gate passes; something in
+the decode is wrong OR the walk exits in the only partially-traced
+region 0x1edaa0..0x1edca8 (preempt dance / 0x1edc4c block).
+
+**DECISIVE NEXT STEP: BISECT AGAINST THE OLD DELIVERING SHAPE.** The
+pre-self-lock flow DELIVERED on this device (bootid oracle changed).
+Diff its exact stamp operands vs the new flow, one operand at a time,
+within the new surviving flow (spin/handoff/single-shot): restore the
+OLD W0-tree channel first (root=fake_w0, owner=fake_task|1, ghost->lock
+= page fake_lock — NO self-lock) + the OLD W0.pi words carrying the
+write — verify bootid lands under the new flow. Then re-introduce the
+ghost-word changes one at a time. The regression is somewhere in that
+diff — bounded, enumerable, one fire per operand.
