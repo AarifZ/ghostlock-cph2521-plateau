@@ -4412,6 +4412,17 @@ int run_exploit(int argc, char **argv) {
         durable_stage("swap_hold_main");
         fflush(stdout);
         fsync(STDOUT_FILENO);
+        /* NO PARK (run-9 freeze): the old for(;;)sleep held the process
+         * while a stuck kernel path spun a CPU and starved threaded
+         * IRQs (touch dead, buttons alive; alarm can't deliver in-kernel).
+         * The hold serves nothing under the CC flow (cfi fails errno-22
+         * anyway) — EXIT. MODE4_SWAP_HOLD=1 restores the old park. */
+        if (!env_flag("MODE4_SWAP_HOLD", 0)) {
+          pr_info("swap-hold: EXITING (no park — run-9 freeze fix)\n");
+          fflush(stdout);
+          fsync(STDOUT_FILENO);
+          _exit(0);
+        }
         for (;;)
           sleep(30);
       }

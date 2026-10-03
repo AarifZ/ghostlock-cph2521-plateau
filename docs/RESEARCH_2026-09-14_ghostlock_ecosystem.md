@@ -1781,3 +1781,22 @@ build): NO PARK under the CC/self-lock flow — after WRITE_PROOF
 forensics, _exit(0) immediately (the fake-fops hold serves nothing now
 that cfi fails errno-22 anyway); also chrt the park (if kept) to
 SCHED_IDLE via nice 19 so it can never starve IRQ threads.
+
+## 2026-10-04 (run 10): no-park build; stochastic post-punch KP persists
+
+- jc55: park removed (EXIT after forensics — the run-9 freeze fix built
+  in). Run 10: punch returned (sched_ret=0), KP during the blocking
+  select / 10s-hold entry — the run-6/7 class. jc54 (run 9) survived
+  the same point: post-punch damage is ~50/50 stochastic (timing of
+  punch vs stamp refresh / IRQ nesting), NOT park-related.
+- Budget: 10 of 15 used. Position unchanged: SCRATCH-root config =
+  cleanest walks; delivery store never executes; deferred damage kills
+  ~half the runs after setattr returns.
+- NEXT SESSION (the decisive move, all free): self-consistent QEMU —
+  stamp a MAGIC word (fdset word 14, 0xC0FFEE...) and have the QEMU
+  launcher (root in initramfs, devtmpfs mounted) find the REAL ghost by
+  scanning kernel memory for the magic (via /proc/kcore ELF parse or a
+  dedicated walk of the linear map through /dev/mem), then force
+  ghost_kva to it → single-step the erase → find the skipping branch.
+  On DEVICE the same magic + perf-cluster narrows the anchor to the
+  exact buffer without trio guessing.
