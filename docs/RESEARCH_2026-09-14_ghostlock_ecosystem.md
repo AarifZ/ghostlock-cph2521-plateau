@@ -1734,3 +1734,22 @@ diff — bounded, enumerable, one fire per operand.
   writes usage/uid on THAT page → make pc's low-32=benign-usage
   (already ~0x...781, huge positive = never-freed ✓) and uid=0xffffff88
   garbage — render shows garbage Uid but CapEff intact → acceptable.
+
+## 2026-10-04 (runs 4-7 + QEMU repro): THE CRASH IS THE REQUEUE INSERT
+
+- Runs 4-7 (15-run budget): silent/holding waiter variants survive or
+  KP variably; live CapEff poll across a whole run NEVER saw non-zero
+  on any thread. State-gated punch damage = deep-walk crash.
+- QEMU REPRO ACHIEVED (PSELECT_GHOST_FORCE_KVA exercises the self-lock
+  without perf): panic at rb_insert_color+0x48 from chain+0x5a8 = the
+  REQUEUE INSERT after the delivery erase — walking an inconsistent
+  fake root. (Caveat: forced KVA ≠ QEMU's real fdset buffer, so the
+  forced runs prove the crash class, not the exact operands.)
+- FIX IMPLEMENTED (unverified): word11 root = fake_w0 (page, black,
+  children NULL) — erase stays parented (delivery *(task+0x780)=VALUE
+  via change_child), insert then links ghost under fake_w0's empty slot
+  and insert_color terminates on the black parent. Self-consistent on
+  DEVICE (ghost_kva = real buffer → lock words really stamped).
+- NEXT: build device binary (root=fake_w0), fire run 8 with the
+  state-gated punch config; expect either clean full route + MAIN-RENDER
+  CapEff=0x182082 or a NEW backtrace pinpointing the next fault.
