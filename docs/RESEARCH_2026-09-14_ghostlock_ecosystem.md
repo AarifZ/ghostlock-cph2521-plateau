@@ -1753,3 +1753,20 @@ diff — bounded, enumerable, one fire per operand.
 - NEXT: build device binary (root=fake_w0), fire run 8 with the
   state-gated punch config; expect either clean full route + MAIN-RENDER
   CapEff=0x182082 or a NEW backtrace pinpointing the next fault.
+
+## 2026-10-04 (runs 8-9): scratch-root = full survival, still no delivery
+
+- Run 8 (root=fake_w0): punch returned; device FROZE mid-run (in-kernel
+  loop — decode: fake_w0 pc=1 reads RED → insert_color walks NULL
+  grandparent → loop). Hard reboot.
+- Run 9 (root=SCRATCH zero node {0,0,0} — black, no children): punch
+  returned, post-select printed, threads alive and renderable minutes
+  later — NO crash, NO freeze — and CapEff=0 on every thread. The
+  insert is now safe; the erase still delivers nothing.
+- Net position: state-gated punch + self-lock + scratch root = the
+  cleanest full-survival walk of the campaign with live renderable
+  targets, zero delivery. The change_child store is NOT executing.
+  Next: QEMU-forced-KVA harness with the SELF-CONSISTENT missing piece
+  (force ghost_kva = the QEMU waiter's REAL fdset buffer — find it via
+  one QEMU panic's x28/pi_blocked_on register), then single-step the
+  erase in the emulator to see which conditional skips the store.

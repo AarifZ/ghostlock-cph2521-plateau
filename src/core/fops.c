@@ -571,7 +571,12 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * = VALUE, root untouched), then the insert links ghost under
          * fake_w0's empty child slot and insert_color sees a BLACK
          * parent → terminates instantly. All reads/writes on page. */
-        ex_stamp[1] = (uint64_t)fake_w0;
+        /* root = SCRATCH zero node (run-8 freeze decode: fake_w0's pc=1
+         * reads RED -> insert_color walks NULL grandparent -> loop/freeze;
+         * SCRATCH is guaranteed {0,0,0}: BLACK, no children, prio=0 ->
+         * insert links ghost under it and terminates on the black
+         * parent immediately). */
+        ex_stamp[1] = (uint64_t)g_scratch_node;
         ex_stamp[2] = g_ghost_kva;  /* word12 leftmost = ghost (top)   */
         /* owner MUST be >1: the chain exits at owner<=1 BEFORE the
          * delivery erase (historic util.c note: "exits at owner<=1
