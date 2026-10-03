@@ -1638,3 +1638,33 @@ PSELECT_GHOST_SELF_LOCK=1 (PERFDUMP_SEL is REQUIRED for the anchor).
   words (overlay shift=0 confirmed on hardware by crash forensics).
 - Answer to "numbers to verify": the region decode is free; after it,
   at most 1-2 discriminating fires.
+
+## 2026-10-03 (closure): FULL CHAIN DECODE — all gates pass; requeue = last suspect
+
+Complete decode of the punch path (schedfull/adjchain/adjpi disasm):
+1. __do_sys_sched_setattr → __sched_setscheduler(task, attr, 0, pi=1) —
+   w3=1 ALWAYS (0x1978c8). The fp-0x1c "DL flag" only gates a debug
+   print: DL=0 branch goes DIRECTLY to 0x19636c → bl adjust_pi
+   UNCONDITIONALLY. (False alarm resolved.)
+2. adjust_pi: waiter=task->pi_blocked_on (dangling ✓); prio 130≠139 →
+   chain called with x3=waiter->lock=word7.
+3. chain entry gates (0x1ed9c4-0x1eda64): x22=x4=0 SKIPS deadlock
+   detection; x3==waiter->lock ✓ (same source); prio mismatch proceeds;
+   lock acquire on stamped wait_lock=0 ✓.
+4. owner block (0x1edca8): owner=fake_task|1 ≠ task ✓; w26=0 (cset of
+   skipped check) → tbz proceeds ✓.
+5. lock-compare (0x1edcd0): top=leftmost=ghost; top->lock=word7==lock ✓
+   EQUAL → 0x1edd8c → successor block (all paths converge) →
+   rb_erase(ghost, &lock->waiters) at 0x1edddc.
+6. rb_erase (right=0 path): *(cred)=pc-garbage (usage/uid, no-kill);
+   *(parent+8)=*(task+0x780)=CRED ← THE DELIVERY STORE.
+7. THEN THE REQUEUE (0x1eddf4+): ghost->prio=task->prio; enqueue back
+   via rb_insert on the NOW-INCONSISTENT tree (root word11 still=ghost
+   while ghost was unlinked via fake parent) — insert may self-loop,
+   silently mangle, or interfere — THE LAST UNMODELED STAGE.
+
+NEXT: make the tree consistent for the requeue — candidate: word11
+(root) = the fake parent itself (task+0x778) so post-erase root matches
+the parent linkage; or pre-set word0 such that the erase leaves root
+pointing at a valid empty state (parent's slot cleared → root=NULL).
+Design, then 1 fire with waiter-self-readback (jc43 rig).
