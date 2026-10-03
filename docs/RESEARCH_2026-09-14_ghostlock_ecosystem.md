@@ -1617,3 +1617,24 @@ NEXT DISCRIMINATORS (one per fire):
    in-walk vs post-walk.
 Fire env now: jc41 cmd + PERFDUMP_SEL=1 PSELECT_GHOST_DELTA=0
 PSELECT_GHOST_SELF_LOCK=1 (PERFDUMP_SEL is REQUIRED for the anchor).
+
+## 2026-10-03 (final): owner fix + waiter-targeted delivery + self-readback
+
+- jc42 (owner=fake_task|1): full route survived, no delivery.
+- jc43 (MODE4_TARGET_WAITER): delivery retargeted to the WAITER task
+  (self-leak 154 votes strong — child leak was 36 votes, weak) + the
+  waiter reads ITS OWN CapEff right after post-select ("WAITER CapEff=").
+  Result: walk ran (sched_ret=0), boot survived, WAITER CapEff=0 —
+  **no delivery, verified at the target itself, all intermediates
+  eliminated** (child-task quality, owner shape, ghost anchor, gate
+  EQUAL, rebalance escape — all correct/proven).
+- REMAINING: the chain-entry gate region 0x1ed8ec..0x1edcd0 (~0x440
+  bytes of undecoded conditionals: deadlock detection, waiter->task,
+  state/depth checks) — ONE of these exits before the lock-compare for
+  our operand set. NEXT SESSION TASK #1: systematically decode that
+  region against our stamp values, find the exiting conditional, shape
+  the last operand. Expect 1-2 fires to root after that.
+- jc40's BLACK-node crash inside tree ops = the walk DOES read our tree
+  words (overlay shift=0 confirmed on hardware by crash forensics).
+- Answer to "numbers to verify": the region decode is free; after it,
+  at most 1-2 discriminating fires.

