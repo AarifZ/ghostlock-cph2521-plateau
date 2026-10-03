@@ -173,10 +173,7 @@ void cpu_hop_claims(unsigned char *payload, size_t plen, int per_cpu);
 
 #define CONSUMER_CORE (CORE + 1)
 #define CONSUMER_MAX_CALLS 1
-/* 512 fds → 8 words/set → 24 stampable qwords (0xC0): waiter words 0-9 +
- * 10-qword zero padding + self-lock block at words 20-23 (lock@+0xA0).
- * Negative delta scans land on the zero band = clean exit, never hang. */
-#define PSELECT_ROUTE_NFDS 512
+#define PSELECT_ROUTE_NFDS 320
 #define PSELECT_CONSUMER_NICE 19
 #define PSELECT_CONSUMER_BURST_CALLS 1
 #define PSELECT_ENTER_DELAY_USEC 50000

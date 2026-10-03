@@ -1576,3 +1576,44 @@ NEXT: (1) print FULL 200-value histogram (grep-able) in another measure
 run; (2) identify buffer start = value v where v, v+0x40, v+0x80 (in/
 out/ex kernel pointers, wps=8) all appear; (3) ghost = v; delta =
 ghost − hint(bc58) → one confirm fire; (4) CapEff → SIGCONT root.
+
+## 2026-10-03 (late night): THE DELIVERY STORE IS MAPPED — one store from root
+
+Session arc (jc37→jc41):
+- NFDS=512 was FATAL (6×0x40 > 256 → core_sys_select KMALLOCS fdsets —
+  heap! stamp never reaches the stack ghost). Reverted to 320. Buffer
+  offset verified in disasm: stack_fds = sp_css+0x20; do_select call at
+  core_sys_select+0x270 passes bits=sp+0x20.
+- Ghost anchor SOLVED: hint = highest-count value on the select-sampled
+  cluster (PERFDUMP_SEL in the real fire → the self-leak samples the
+  SELECT path — its internal spin uses its own unstamped fdsets = safe).
+  jc40: hint=...c30 x703 ✓ the true in-buffer. jc39 without PERFDUMP_SEL
+  picked the getpid-path eb0 anchor (wrong source) — PERFDUMP_SEL is
+  REQUIRED in the fire env now.
+- Gate decode COMPLETE (chain disasm): top->lock==lock EQUAL → 0x1edd8c
+  → leftmost bookkeeping → rb_erase(ghost, &lock->waiters) at 0x1edddc
+  ← THE DELIVERY ERASE IS ON THE EQUAL PATH. (0x1eed48 earlier was a
+  different b.eq — misread.)
+- jc40 KP = __rb_erase_color wall: BLACK erased node forces rebalance
+  walking crafted parents into unmapped memory. ESCAPE: RED node (pc|1)
+  + one child = NO rebalance.
+- jc41 = change_child delivery shape: word0=pc=(task+0x778)|1 (RED,
+  parent=task+0x778), word1=0, word2=left=cred(VALUE). rb_erase decode:
+  ldp x8,x9,[ghost+8] (right,left) → right=0 path → parent=pc&~3 →
+  +0x90: child->pc=pc (writes *(cred) garbage usage/uid — tolerable,
+  uid INCREASE no kill) → +0xa4: str x9,[x8,#8] = *(task+0x780) = cred
+  ← THE STORE. Boot SURVIVED, punch ret 0, full route — but CapEff=0:
+  THE STORE DID NOT LAND. Exit is somewhere before/at the erase.
+
+NEXT DISCRIMINATORS (one per fire):
+1. The child render after each variant (CapEff).
+2. Possible early exits to recheck vs stamp: (a) waiter->task word6 vs
+   punched task (self-leak quality this run — 60 votes, check log);
+   (b) the 0x1edd94 pc==ghost self-root check; (c) 0x1edf1c right==0
+   successor block (undecoded!) — decode 0x1edf1c first, it may exit;
+   (d) adjust_pi prio gate (word8=130 vs actual).
+3. Consider printing waiter->task leak votes in the confirm log; and a
+   MODE4_PROOF-style durable write IMMEDIATELY post-setattr to bisect
+   in-walk vs post-walk.
+Fire env now: jc41 cmd + PERFDUMP_SEL=1 PSELECT_GHOST_DELTA=0
+PSELECT_GHOST_SELF_LOCK=1 (PERFDUMP_SEL is REQUIRED for the anchor).
