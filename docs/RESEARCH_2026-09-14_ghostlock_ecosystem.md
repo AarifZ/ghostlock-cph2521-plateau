@@ -1800,3 +1800,18 @@ SCHED_IDLE via nice 19 so it can never starve IRQ threads.
   ghost_kva to it → single-step the erase → find the skipping branch.
   On DEVICE the same magic + perf-cluster narrows the anchor to the
   exact buffer without trio guessing.
+
+## 2026-10-04 (final session block): kcore-scan rig built; MISS to debug
+
+- jc55-class device build: no-park (EXIT after forensics) in tree.
+- Magic word (fdset word14 = 0xC0FFEE00DEADBEEF) + SPIN_WINDOW_MS env +
+  QEMU_KCORE_SCAN consumer scan (/proc/kcore ELF parse, kernel segments
+  only, 1MB chunks) + late-arm on HIT + setup-arm suppression — all in
+  tree and building for QEMU.
+- First self-consistent QEMU run: scan MISS (magic not found — debug:
+  print open errno + pread returns; maybe kcore absent in QEMU config
+  or stamp lands after scan chunk passed) — BUT the run completed with
+  succ=1 (first consumer setattr success in the late flow) and full
+  survival.
+- Next: (1) instrument scan (errno/rn prints) → make HIT work →
+  single-step erase with real ghost; (2) device budget: 5 of 15 remain.

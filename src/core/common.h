@@ -174,6 +174,7 @@ void cpu_hop_claims(unsigned char *payload, size_t plen, int per_cpu);
 #define CONSUMER_CORE (CORE + 1)
 #define CONSUMER_MAX_CALLS 1
 #define PSELECT_ROUTE_NFDS 320
+#define PSELECT_MAGIC_WORD 0xC0FFEE00DEADBEEFULL
 #define PSELECT_CONSUMER_NICE 19
 #define PSELECT_CONSUMER_BURST_CALLS 1
 #define PSELECT_ENTER_DELAY_USEC 50000

