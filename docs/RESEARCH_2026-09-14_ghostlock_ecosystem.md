@@ -1687,3 +1687,27 @@ OLD W0-tree channel first (root=fake_w0, owner=fake_task|1, ghost->lock
 write — verify bootid lands under the new flow. Then re-introduce the
 ghost-word changes one at a time. The regression is somewhere in that
 diff — bounded, enumerable, one fire per operand.
+
+## 2026-10-03 (END): bisect + convergence — flow facts pinned
+
+- jc45 (old shape + handoff flow): full route survived, bootid UNCHANGED
+  → the OLD delivering shape does NOT deliver under the new flow: the
+  regression is in the FLOW, not operand shape.
+- ROOT CAUSE OF STALENESS: handoff (arm-after-spin) = punch fires 60ms+
+  after the last stamp — blocking select's IRQ frames clobber it (the
+  frozen-stamp class) → walks read zeros → clean exits (jc37-45).
+- jc46 (early arm + OLD shape): KP AT the punch — fresh stamp → walk
+  proceeds deep (proof the stamp freshness gates walk depth) — but the
+  old shape crashes in the walk (the pre-survival KP class).
+- jc47 CONVERGENCE (early arm + self-lock + CC + waiter target): punch
+  MID-SPIN on a fresh stamp, full route survived, sched_ret=0 — and
+  WAITER CapEff STILL 0.
+- CONCLUSION: fresh stamp + survivable shape + all gates decoded =
+  still no store. Remaining unknowns: (a) a decode error in my
+  rb_erase/store algebra, (b) the walk's exit in the partially-traced
+  0x1edaa0-0x1edca8 region, (c) stamp tear at the exact copy moment
+  (punch vs 0-timeout select copy race — the 3ms-block cadence may
+  still tear). Next session: instrument the consumer to fire the punch
+  ONLY while the waiter is inside a 3ms block (deterministic fresh
+  stamp, no tear), and/or get in-kernel ground truth via pstore after
+  first boot with the old delivering flow (which DID write bootid).
