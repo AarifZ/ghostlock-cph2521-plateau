@@ -2644,6 +2644,16 @@ void do_pselect_fake_lock_route(void) {
        * delivery iterations are pure exposure).
        */
       int mark_every = env_int_range("SPIN_MARK_EVERY", 16, 0, 1000);
+      /* GHOST MEASUREMENT (zero-risk): before the stamped spin, self-
+       * sample a select-spin (PERFDUMP_SEL path in perf_collect) — the
+       * kernel fdset buffer address is IDENTICAL for every select from
+       * this thread (syscall-path frames are caller-independent), and
+       * PMU samples during copy_from_user catch it in registers. The
+       * GVAL histogram printed = the ghost's real candidates. */
+      if (env_flag("PSELECT_GHOST_MEASURE", 0)) {
+        extern void waiter_ghost_measure(void);
+        waiter_ghost_measure();
+      }
       /* SPIN_MAX_ITERS: hard cap on re-stamps. Exposure to the oplus
        * syscall-hook layer grows with iteration count (jc17 KP'd at
        * ~96; jc12's 253-iter run survived once — probabilistic). 32

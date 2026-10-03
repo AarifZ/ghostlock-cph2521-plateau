@@ -1554,3 +1554,25 @@ Delta evidence so far: 0 → KP-inside-walk (deepest); -0x80 → inconclusive
   mutual offsets), then 1-2 confirmatory fires.
 - Fire history tonight: jc27 guard-flake (no punch), jc28 wedge (hard
   reboot), jc30/jc31 delta KP. Rootguard audit: CAPSONLY passes all.
+
+## 2026-10-03 (night): GHOST MEASUREMENT LANDED — real select-path data on device
+
+PSELECT_GHOST_MEASURE + PERFDUMP_SEL (jc32): zero-risk run (self-lock off,
+spin capped 4) — the waiter self-sampled its own select-spin; the kernel
+fdset buffer address is identical for every select from the thread
+(syscall-path frames are caller-independent), and copy_from_user exposes
+it in registers.
+
+DATA (waiter stack page ffffffc05531b000, 2483 samples):
+GVAL top: bc58 x265, beb0 x258, bc50 x209, bdb8 x182, [page+0x1000]c000
+x121, be00 x96, bdc0 x91, bc48 x71, bd30 x60, bd60 x54, bc30 x53, bdb0
+x40, bb70 x34, bc20 x20, be50 x20 ...
+Cross-referenced vs the OLD getpid-spin perfdump (frame anchors beb0/
+be00/be50/be40/bdc0/be20/bea0/bdb0/bfe0 appear in BOTH) → the select-
+specific values = bc58/bc50/bc48 (adjacent trio!), bdb8, bd30, bd60,
+bc30, bc20, bb70/bbb0.
+
+NEXT: (1) print FULL 200-value histogram (grep-able) in another measure
+run; (2) identify buffer start = value v where v, v+0x40, v+0x80 (in/
+out/ex kernel pointers, wps=8) all appear; (3) ghost = v; delta =
+ghost − hint(bc58) → one confirm fire; (4) CapEff → SIGCONT root.
