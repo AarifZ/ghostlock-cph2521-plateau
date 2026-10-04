@@ -1918,3 +1918,19 @@ forge2 experiment (gdb scan+readback through linear alias):
   bc58↔alias +0x10 of the frame we found); the WAITER struct overlay
   target = the fdset in-buffer at sp+0x20; then forge via M-writes at
   the ALIAS of that buffer, resume, read back — THE DELIVERY TEST.
+
+## 2026-10-04 (forge result): M-writes work; forge vs re-stamp race
+
+- gdb M-packet writes: ALL OK (X unsupported, M works).
+- Forged full CC shape at the ghost alias; guest resumed; walks ran;
+  outcome = "waiter wedged post-store" (in-kernel hang, QEMU exit).
+- ROOT CAUSE of the wedge-out: during the spin the fdset re-copy
+  REWRITES the ghost every ~µs — our forge survived <1 iteration, then
+  the user-stamp (scan-only env: word7=fake_lock page-tree) drove the
+  walks into the page tree wedge.
+- CONCLUSION: forge experiments must happen AFTER the stamp stops
+  (post-spin, during the 10s nanosleep hold) — the ghost then holds the
+  FINAL user-stamp stably; forge over it; the CONTINUOUS owner-walks
+  then process OUR EXACT operands; readback via alias. NEXT RUN:
+  signal = post-select print (or sleep 3s past carrier detection),
+  then M-forge + resume 5s + readback.
