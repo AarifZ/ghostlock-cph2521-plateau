@@ -2121,3 +2121,21 @@ RED-pc node was itself the trigger).
   had fw0 pc=1). Restore fw0-style node (pc=1) for nodeB, keep nodeA
   black-zero for root. That's exactly the shape that fired twice.
 - NEXT: nodeB pc=1 (RED marker parent), nodeA zero root — rerun loop.
+
+## 2026-10-04 (loop 2): pc=1 nodeB also 8/8 silent — shape difference isolated
+
+16 total forge3 runs silent. The two fired stops happened in forge2
+with its FULL phase1 (ghost forge + 5s resume) THEN phase2 combo —
+i.e., the stops fired when the ghost's OWN lock block (w10-13) was
+forged AND the waiter was walked through the ghost+0x50 SELF-lock,
+not the real lock. forge3 forges the real lock but the ghost self-
+lock block (g10-13) uses nodeA/nodeB — forge3 g11=root=nodeA but g12
+leftmost=nodeB: the walk's top_waiter comes from leftmost=nodeB and
+its ->lock@nodeB+0x38=ghost+0x50 == w7 ✓ EQUAL... yet silent.
+DIFFERENCE from fired runs: forge2's fw0 had PRIOR KERNEL WRITES (its
++0x38 was written by phase1 walks) — the kernel's own normalization
+had touched fw0 first.
+- NEXT: replicate forge2's exact two-phase order (phase1 ghost forge
+  incl self-lock, 5s resume, THEN phase2 real-lock combo) in forge3's
+  clean single-script form — that's the sequence under which both
+  stops fired. Script: copy forge2.py flow verbatim, keep retry reads.
