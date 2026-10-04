@@ -2013,3 +2013,16 @@ packet arrived (the walk wrote to fake_w0!) — then the guest wedged
   w6 preserved) lands in the FIRST interrupt; single resume; watch-
   points catch the store. The single fired watchpoint (previous run)
   proves the mechanism is reachable.
+
+## 2026-10-04 (wrap): v2 scan silent at first interrupt; race persists
+
+- v2 active-shape scan found nothing at the first interrupt — the real
+  lock at that moment has a shape we haven't captured (dump the lock's
+  words at interrupt time next: read gw-region first, derive). The
+  combo still ran via gw[7] in phase2 (dead flow) — walks processed it
+  and the guest died fast (reg read failed on exit).
+- CAMPAIGN STATE: watchpoint fired once (store contact proven); combo
+  persists on the real lock (adoption proven). Remaining: capture the
+  real lock's ACTIVE shape at first interrupt (one diagnostic run that
+  DUMPS candidate words 0x326xxxx region), then single-resume combo.
+- All rigs, maps, and procedures committed. 5 device runs remain.
