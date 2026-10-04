@@ -1897,3 +1897,24 @@ the magic is found, watchpoint → walk observability is immediate.
 - Path (a) is the delivery experiment: forge words per the CC shape
   (console gives cred/pc values), resume, watch what lands.
 - Magic-miss root cause: vmalloc VA scan blind; linear alias sees all.
+
+## 2026-10-04 (DECISIVE OBSERVATION): the fdset layout SEEN in the wild
+
+forge2 experiment (gdb scan+readback through linear alias):
+- Magic found same-boot at alias 0xffffff8013e46848; readback AFTER
+  resume shows the region = core_sys_select's STACK FRAME holding the
+  six segment pointers: w2..w7 = ffffffc00d40bd18/bc58/bc80/bca8/
+  bcd0/bcf8 — STRIDE 0x28 = 5-qword sets = the in/out/ex/res_in/
+  res_out/res_ex KERNEL POINTERS — pointing at the true fdset buffers
+  ON THE SAME VMALLOC STACK at 0xffffffc00d40bc58+.
+- CONFIRMS: (a) ghost's true VA class = 0xffffffc00d40bcXX (matches
+  every panic x0); (b) the fdset buffers are sp_css+0x20..+0xC0 on the
+  stack (matches the +0x270 do_select(bits=sp+0x20) decode); (c) the
+  waiter that pi_blocked_on names lives in this same stack page — the
+  overlay is REAL and adjacent.
+- gdb X-write packets returned EMPTY (stub may not support X) — writes
+  must go via M packets (memory-write binary) or the register hack.
+- NEXT (crisp): rescan alias for the fdset DATA buffer (vmalloc
+  bc58↔alias +0x10 of the frame we found); the WAITER struct overlay
+  target = the fdset in-buffer at sp+0x20; then forge via M-writes at
+  the ALIAS of that buffer, resume, read back — THE DELIVERY TEST.
