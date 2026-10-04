@@ -1959,3 +1959,22 @@ Blocking-select window forge (thread asleep, stack frozen, M-writes OK):
   watchpoint on fake_w0 AND on w0's parent slot; also try forging with
   w7 pointing at the REAL lock (read its addr from this run's w7-after)
   so the walk never re-links away. THE RIG ANSWERS EVERYTHING NOW.
+
+## 2026-10-04 (forge sessions summary): the normalizing walk
+
+- Multiple forge runs (blocking-select window, M-writes, equality
+  writes fw0+0x38/+0x40): fake_w0 marker NEVER lands; ghost words after
+  every resume = kernel-normalized REAL waiter linkage.
+- KEY FACT: w7/w13 after = ffffff800326xxxx EVERY run — the REAL futex
+  rt_mutex (stable per boot) — the kernel RE-WRITES waiter->lock to the
+  real lock within one walk cycle (requeue normalizes the waiter). Our
+  forged geometry is discarded before the erase's change_child runs.
+- One run read all-zero ghost (thread exited between phases — timing
+  variance; guard added).
+- CONCLUSION: single-shot forges get normalized. The delivery must ride
+  the REAL lock's tree: phase2 = forge the REAL rt_mutex's waiters
+  (root/leftmost → our nodes) + ghost tree words for the erase + fw0
+  equality — all in ONE interrupt, THEN resume. The rig has all the
+  pieces; last run's crash was an unguarded read at real_lock=0.
+- Next: guard real_lock==0 (thread-exited case) + retry phase1 to get
+  a live one; forge real lock tree; expect marker at fw0+8/+0x10.
