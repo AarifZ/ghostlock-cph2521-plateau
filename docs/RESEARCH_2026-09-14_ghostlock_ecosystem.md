@@ -1934,3 +1934,28 @@ forge2 experiment (gdb scan+readback through linear alias):
   then process OUR EXACT operands; readback via alias. NEXT RUN:
   signal = post-select print (or sleep 3s past carrier detection),
   then M-forge + resume 5s + readback.
+
+## 2026-10-04 (THE FORGE RAN — walk observed on exact operands)
+
+Blocking-select window forge (thread asleep, stack frozen, M-writes OK):
+- Ghost located+forged: w7=ghost+0x50 lock, w10=0 wait_lock, w11/12=
+  fake_w0 root/leftmost, w13=fake_task|1 owner, w0=fake_w0|RED,
+  w2=MARKER.
+- Resume 5s: NO panic (walks ran against the forged shape safely!).
+- Readback: ghost words = KERNEL-REWRITTEN (w7/w13 = ffffff800326c400
+  = a REAL kernel object — the walk REPLACED our lock pointer with a
+  real rt_mutex! w2 = ffffffc00d41b8b0 = vmalloc stack ptr). fake_w0
+  UNCHANGED (marker did NOT land — the erase's change_child didn't
+  write to our parent).
+- INTERPRETATION: the walk went deep (rewrote waiter->lock = a real
+  lock!) but delivered via a DIFFERENT path than change_child-to-our-
+  parent. The kernel REPLACED waiter->lock (w7) — the walk followed
+  the REAL lock instead of ours. w7 after = ffffff800326c400 — that's
+  likely the REAL f_pi_chain's rt_mutex (kmalloc'd) — the walk prefers
+  the lock it finds via task->pi_blocked_on->lock FRESH each time —
+  our forged w7 was used, walked, and then the kernel re-linked the
+  waiter to the REAL chain (rt_mutex_enqueue on unlock/retry).
+- NEXT: watch WHERE the marker/parent write goes — set the alias
+  watchpoint on fake_w0 AND on w0's parent slot; also try forging with
+  w7 pointing at the REAL lock (read its addr from this run's w7-after)
+  so the walk never re-links away. THE RIG ANSWERS EVERYTHING NOW.
