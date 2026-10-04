@@ -2158,3 +2158,19 @@ Two-phase loop results (8 runs):
 - The load_balance crash = separate from the delivery store: the
   watchpoint stop we want is nodeB+8 write; the console trace is the
   AFTERMATH. Retry-fast = the fix. 5 device runs remain.
+
+## 2026-10-04 (forge4 fast-g): raw-drain race still loses; 2 runs ghost w7=0
+
+forge4 loop (raw socket drain + instant g): 10 runs, watchpoint silent
+(race lost = timeout, no stop bytes at all). NOTE: attempts 8/9 had
+real_lock=0 (ghost w7 zero after phase1 normalize — the waiter's
+blocked_on got cleared = the walk UNLINKED the waiter entirely in
+those runs — significant: the walk can fully dequeue/kill the ghost
+linkage). Attempts with real_lock!=0 also silent.
+- Net across 26 rig runs: 4 stops total, all under forge2-era code
+  (fw0 geometry + phase1). forge3/forge4 variants silent — the exact
+  forge2 operand mix (fw0 pc=1 RED root at BOTH root and leftmost of
+  the SELF-lock, g0=fw0|1) differs from all later variants.
+- NEXT (final emulation step): byte-replay forge2.py itself in a loop
+  (it fired 2/2 times it completed its full sequence) with the raw
+  drain added around its existing phase2 watch block. Nothing else.
