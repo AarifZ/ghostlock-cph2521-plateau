@@ -2026,3 +2026,15 @@ packet arrived (the walk wrote to fake_w0!) — then the guest wedged
   real lock's ACTIVE shape at first interrupt (one diagnostic run that
   DUMPS candidate words 0x326xxxx region), then single-resume combo.
 - All rigs, maps, and procedures committed. 5 device runs remain.
+
+## 2026-10-04 (final wrap): lock-region dump captured (10669 entries)
+
+Diagnostic dump of 0x3200000..0x3400000 (w0=0 + kernel-ptr entries) at
+first interrupt = lockdump.txt (qemu_cph/). Looser filter (w0=0,
+owner|bit0, linear-map task) → 57 candidates, mostly rb parent_color
+values — the real futex rt_mutex needs owner = the WAITER TASK ptr.
+NEXT: correlate with the waiter task pointer (leak it: perf works in
+DEV not QEMU; in QEMU read gw[6]-class task from a normalized ghost,
+then match owner == that task | 1 in the dump). Also the dump itself
+can be mined for root=ghost±off (the on-stack waiter's tree nodes).
+Everything needed is in the repo; 5 device runs remain.
