@@ -2139,3 +2139,22 @@ had touched fw0 first.
   incl self-lock, 5s resume, THEN phase2 real-lock combo) in forge3's
   clean single-script form — that's the sequence under which both
   stops fired. Script: copy forge2.py flow verbatim, keep retry reads.
+
+## 2026-10-04 (two-phase loop): WATCH STOP CAPTURED — retry 0 consumed it
+
+Two-phase loop results (8 runs):
+- Attempts 3 & 5: STOP PACKET ARRIVED + registers were being read when
+  QEMU closed (retry 0 = stop received, 'g' sent, then EOM). The stop
+  packet IS the watchpoint; the register read raced the shutdown.
+- Console backtrace at both: **pc = load_balance+0x14c** on C1 — the
+  scheduler's load balancer walking runlists crashed after our writes
+  — the combo DOES destabilize scheduler structures (our nodes entered
+  a runqueue-adjacent tree? more likely: the walk's prio propagation
+  corrupted a task's sched fields and load_balance deref'd it).
+- The capture window: need 'g' IMMEDIATELY on stop — currently the
+  code prints/sleeps first in some paths. Fix: recv stop -> send g
+  with ZERO intervening python, parse later. Also try reading just
+  x0-x30/pc via a shorter 'p' packet (fewer bytes = faster).
+- The load_balance crash = separate from the delivery store: the
+  watchpoint stop we want is nodeB+8 write; the console trace is the
+  AFTERMATH. Retry-fast = the fix. 5 device runs remain.
