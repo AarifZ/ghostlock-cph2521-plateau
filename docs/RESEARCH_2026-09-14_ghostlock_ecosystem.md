@@ -2088,3 +2088,17 @@ Everything needed is in the repo; 5 device runs remain.
   nodeB+8 ONLY (drop +0x10) to halve the trigger surface).
 - State: 2 stop-packets received across combo runs — the walk IS
   writing our nodes. Capturing the PC at the stop = last step.
+
+## 2026-10-04 (forge3): real_lock STABLE at ffffffc00d3fbcf8 across boots
+
+- forge3 (clean single-watchpoint rig): real_lock = ffffffc00d3fbcf8
+  IDENTICAL across two separate boots — the futex rt_mutex is at a
+  DETERMINISTIC vmalloc address in QEMU (stable 0xffffffc00d3fbcf8).
+  On device the equivalent class = ffffff800326xxxx (also stable).
+- Combo writes all OK; watchpoint silent this pair (the wedge class
+  ran without touching nodeB+8 — the walks re-normalized through the
+  vmalloc lock before reaching our tree, or the insert skipped).
+- The two fired stops earlier + this stability = the capture is a
+  matter of repetition (race) — rerun loop with the stop-retry is the
+  design; each run costs ~3min and has hit before.
+- 5 device runs remain.
