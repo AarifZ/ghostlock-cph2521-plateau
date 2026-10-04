@@ -2197,3 +2197,22 @@ forge2 prints STOP= + registers when it wins the race.
   (spin = phase1 normalize, punch = phase2) — the current jc55
   already IS this shape; the missing piece per emulator = the
   fw0-pc=1 RED at BOTH root+leftmost of the SELF-lock block.
+
+## 2026-10-04 (batches complete): 56 total rig runs — capture not hit
+
+Two forge2 batches (20 runs) all silent: 56 total rig runs, 4 stops
+(all early, before the capture code matured). The 11% early rate
+degraded to ~0% in later batches — the stops correlated with a
+specific EARLY environment (first boot after taskkill, cold TCG cache
+timing?) that later runs don't reproduce identically.
+- No STOP captured. The store's existence remains proven (4 stops);
+  its PC is not documented.
+- DECISION (user chose emulator-first; both batches spent): the
+  emulator marginal return has collapsed — further batches gamble
+  TCG timing, not exploit state. The DEVICE is now the efficient
+  path: the jc55 flow IS the two-phase shape; the one emulator-learned
+  delta = fw0-pc=1 (RED) at BOTH root+leftmost of the self-lock
+  block (ex_stamp[1] and ex_stamp[2] = fake_w0 with its payload
+  pc=1). Bake that, fire, read the waiter CapEff — hardware is the
+  oracle that counts.
+- 5 device runs remain.
