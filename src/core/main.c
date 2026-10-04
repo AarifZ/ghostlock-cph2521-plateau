@@ -382,6 +382,11 @@ void *consumer_thread(void *arg __attribute__((unused))) {
        * kernel memory -> the REAL ghost, same boot. Then late-arm the
        * punch (scan takes seconds; the spin window stays open). */
       if (!g_ghost_kva && env_flag("QEMU_KCORE_SCAN", 0)) {
+        static int kcore_n = 0;
+        if (++kcore_n > 3) { /* throttle: 3 scans max then idle */
+          __asm__ volatile("yield" ::: "memory");
+          continue;
+        }
         int kf = open("/proc/kcore", O_RDONLY);
         int hit = 0;
         if (kf >= 0) {

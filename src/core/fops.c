@@ -2817,7 +2817,8 @@ void do_pselect_fake_lock_route(void) {
        * on the waiter's kernel stack is FINAL and this thread is about
        * to go quiescent in the blocking select. Only NOW may the
        * consumer punch: arm it with the route seq. */
-      if (!env_flag("MODE4_NO_CONSUMER", 0))
+      if (!env_flag("MODE4_NO_CONSUMER", 0) &&
+          !env_flag("QEMU_KCORE_SCAN", 0))
         atomic_store(&punch_consume_go, route_attempt);
     }
     int ret = select(PSELECT_ROUTE_NFDS, &in, &out, &ex, &timeout);

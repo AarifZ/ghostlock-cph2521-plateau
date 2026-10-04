@@ -1833,3 +1833,21 @@ SCHED_IDLE via nice 19 so it can never starve IRQ threads.
   m-packet scan replaces it entirely.
 - Once the arm leak is fixed: scan finds real ghost → watchpoint →
   full erase observability same-boot. 5 device runs remain.
+
+## 2026-10-04 (BREAKTHROUGH): THE WALK RUNS WITHOUT OUR PUNCH
+
+Scan-only QEMU run (MODE4_NO_CONSUMER=1 — consumer completely idle):
+the carrier prints flood (spin active) and the walk STILL panics at
+rb_insert_color+0x48 from the futex PI machinery (owner's blocked chain
+/ requeue paths) — sched_setattr NEVER NEEDED. The ghost is walked
+CONTINUOUSLY during the spin by our own owner/waiter futex chain.
+- Explains: storm-era KPs mid-spin with no punch; stochastic post-route
+  damage; why stamp shape (not punch timing) decided crash-vs-survive.
+- The delivery erase can fire from THESE walks too — the stamp shape is
+  the ONLY thing that matters; the punch was just one more trigger.
+- ghost_scan signal bug: waits for "spin_enter" but the carriers flood
+  (marker write failed in QEMU /data?) — wait for "JC2 carrier" instead.
+- NEXT: (1) fix harness signal; (2) gdb-scan mid-carrier-flood → find
+  real ghost → watchpoint → observe WHICH walker crashes the insert
+  (owner chain) and what the erase does under the continuous walks;
+  (3) re-shape stamp for the OWNER-walk (the real delivery vehicle!).
