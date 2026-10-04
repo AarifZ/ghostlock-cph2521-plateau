@@ -2216,3 +2216,35 @@ timing?) that later runs don't reproduce identically.
   pc=1). Bake that, fire, read the waiter CapEff — hardware is the
   oracle that counts.
 - 5 device runs remain.
+
+## 2026-10-05: jc56 fired-shape on device — walk damage, no render
+
+Fire #1 of the session (jc56, fw0 at BOTH root+leftmost): punch
+returned sched_ret=0, then KP (markers end spin_exit; device
+rebooted). The fired shape on hardware = walk damage — consistent
+with the emulator's load_balance+0x14c aftermath (the store fires and
+destabilizes the scheduler). The CapEff render never ran — the damage
+kills the box before readback.
+- This is DIFFERENT from the silent-shape runs (no damage, no
+  delivery): the fired shape DOES act — the write path executes and
+  something downstream crashes.
+- The CC delivery target = waiter task cred; if the erase wrote
+  cred->something garbage (change_child writes child ptr into
+  parent+8 = the cred's usage/uid qword!) → the waiter's NEXT cred
+  touch (render!) consumes a corrupted usage → crash AT RENDER —
+  matching jc43's finding (render crashes) and this run's signature.
+- FIX (next fire): the change_child slot = pc&~3 +8/+0x10 — with
+  parent=waiter_task+0x778, the write lands at waiter_task+0x780 (the
+  CRED POINTER — intended) BUT ALSO the erase writes child->pc =
+  *(child)=pc garbage INTO the cred (usage/uid) — the KIMI
+  usage=0x40000000 hardening only covers the SPRAYED copy's initial
+  content; the erase's *(cred)=pc overwrite happens AFTER. Need the
+  delivered pc's low bits to keep usage huge & uid=2000: choose
+  parent value = (task+0x778) whose +8 store writes the cred ptr
+  (good) — but the OTHER store corrupts. → Shift the CC parent to
+  task+0x778 keeps delivery; the corrupting store goes to *(child)=
+  pc where child = the VALUE slot... = child cred page — tolerable
+  (sprayed page). Actually: child->pc store writes at the CHILD addr =
+  the value word's target — fine. The corrupting write may be
+  elsewhere — needs the erased-node decode re-verified once more.
+- 4 device runs remain.
