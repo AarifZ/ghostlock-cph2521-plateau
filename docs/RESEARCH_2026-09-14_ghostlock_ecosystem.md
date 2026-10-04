@@ -1879,3 +1879,21 @@ verify kernel copy size: get_fd_set copies 5 words/set — confirm ex[4]
 within the copied span on this build; (4) scan SPAN to 0x20000000
 (stacks may sit beyond 256MB). The rig is otherwise COMPLETE — once
 the magic is found, watchpoint → walk observability is immediate.
+
+## 2026-10-04 (RIG COMPLETE): ghost LOCATED in RAM via linear-map scan
+
+- Scan pivot: gdbstub cannot read vmalloc VAs (stacks) — but the
+  LINEAR-MAP alias (0xffffff8000000000+, 768MB of RAM) reads fine.
+  fake_lock word7 scan HIT: ghost@alias=0xffffff8002841e48 — the
+  stamped fdset buffer physically located, same boot, alive stop.
+- Watchpoint via the alias VA won't trigger (kernel walks the vmalloc
+  VA; watchpoints are VA-matched). TWO paths now open:
+  (a) FORGE the stamp by gdb-WRITING through the alias (same physical
+      bytes!) — the kernel walks OUR exact operands; effects read
+      through the alias or console. No code, no race.
+  (b) Convert alias→vmalloc VA: phys = alias - 0xffffff8000000000; read
+      the kernel page tables (also in RAM via alias) to find the
+      vmalloc PTE mapping that phys → true VA → watchpoints work.
+- Path (a) is the delivery experiment: forge words per the CC shape
+  (console gives cred/pc values), resume, watch what lands.
+- Magic-miss root cause: vmalloc VA scan blind; linear alias sees all.

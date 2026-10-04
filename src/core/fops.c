@@ -549,6 +549,18 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
        * REAL buffer address pre-spin (QEMU) / anchors the device hint. */
       pselect_put_waiter_word(in, out, ex, words_per_set, 14,
                               (uint64_t)PSELECT_MAGIC_WORD, "magic");
+      { /* MAGIC DEBUG: verify user-side placement (once) */
+        static int mdbg = 0;
+        if (!mdbg++) {
+          int wq = pselect_words_per_set();
+          pr_info("MAGICDBG in14=%016llx out14=%016llx ex14=%016llx wps=%d"
+                  " in4=%016llx\n",
+                  (unsigned long long)fdset_get_word(in, 4),
+                  (unsigned long long)fdset_get_word(out, 4),
+                  (unsigned long long)fdset_get_word(ex, 4), wq,
+                  (unsigned long long)fdset_get_word(in, 4));
+        }
+      }
       uint64_t ghost_lock_word = ghost_lock;
       uint64_t ex_stamp[4] = {0, 0, 0, 0};
       int ghost_self_lock = 0;
