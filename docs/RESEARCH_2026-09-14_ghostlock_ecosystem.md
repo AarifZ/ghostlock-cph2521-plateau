@@ -2248,3 +2248,28 @@ kills the box before readback.
   the value word's target — fine. The corrupting write may be
   elsewhere — needs the erased-node decode re-verified once more.
 - 4 device runs remain.
+
+## 2026-10-05 (jc56 freeze detail): damage = in-kernel spin, not panic
+
+jc56 full evidence: punch returned, post-select printed, then the box
+FROZE (in-kernel spin — hard buttons alive, touch dead; user hard-
+booted). NOT a panic: the walk's store executed and left the waiter
+(or owner) spinning in-kernel — consistent with a corrupted cred
+refcount/lock word driving a retry loop, OR the requeue insert
+looping on the fired shape's RED pc=1 root (run-8 freeze class,
+reintroduced with fake_w0-at-both — the freeze we predicted for that
+shape!). The emulator's 4 stops under this same shape each ENDED with
+QEMU closing — same terminal class.
+- Reconciliation: the fired shape's fake_w0 payload pc (word0 of W0
+  main tree = write_pc class) is NOT 1 on device — the payload W0
+  main carries the ARISTOTLE/CC write words; only the QEMU gdb-
+  forges set pc=1. The device freeze = the insert walking fake_w0's
+  payload words as tree nodes (write_pc/write_right/write_left =
+  kernel pointers → walks valid-but-wrong tree → loop).
+- FIX (next, 4 runs left): point root/leftmost at a DEDICATED zeroed
+  node on the page (like nodeA) BUT give it the lock-equality word
+  the stops require: node.zero {0,0,0} + +0x38=fake_lock + +0x40=
+  prio — the nodeB design from forge3, which on device needs payload
+  support: stamp nodeB fields on the spray page in prepare_skb_payload
+  (zero region + two words). This merges SCRATCH-safety with the
+  fired-shape equality.
