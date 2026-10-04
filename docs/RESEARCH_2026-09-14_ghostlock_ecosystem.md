@@ -2038,3 +2038,21 @@ DEV not QEMU; in QEMU read gw[6]-class task from a normalized ghost,
 then match owner == that task | 1 in the dump). Also the dump itself
 can be mined for root=ghost±off (the on-stack waiter's tree nodes).
 Everything needed is in the repo; 5 device runs remain.
+
+## 2026-10-04 (true final): gw[7] = the real lock — MATCH confirmed
+
+- Normalize-probe (0.8s resume) → gw[7] reads the real lock; direct
+  alias when linear (ffffff800326xxxx), vmalloc when on-stack — both
+  writable via gdb M.
+- Combo (real lock tree + ghost tree + fw0 equality + watchpoints on
+  fw0+8/+0x10): all writes OK, forged values PERSIST on the real lock
+  (FIN = our fake_w0/fake_task|1) — but watchpoints silent: the walk
+  flow had already wedged/exited during the probe resume (timing).
+- LAST VARIABLE: eliminate the probe — find the real lock WITHOUT a
+  resume. Its address class ffffff800326xxxx is STABLE across boots
+  (c800/de00/d200/d600 seen). Next: at FIRST interrupt scan ONLY that
+  64KB window (0x3260000..0x3270000) reading every 8B — one of them is
+  the futex rt_mutex (owner = wtask|1 — task readable from gw[6] which
+  for the STAMPED ghost = init_task... use phase-A 0.3s probe INSIDE
+  the blocking select (select 1.5s > probe 0.3s: waiter still alive!).
+- 5 device runs remain. All rigs committed.
