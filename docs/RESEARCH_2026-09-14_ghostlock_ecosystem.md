@@ -1978,3 +1978,21 @@ Blocking-select window forge (thread asleep, stack frozen, M-writes OK):
   pieces; last run's crash was an unguarded read at real_lock=0.
 - Next: guard real_lock==0 (thread-exited case) + retry phase1 to get
   a live one; forge real lock tree; expect marker at fw0+8/+0x10.
+
+## 2026-10-04 (WATCHPOINT FIRED): the walk WROTE fake_w0!
+
+Combo forge (gw[7] real-lock tree + ghost tree + fw0 equality, single
+interrupt, resume): the Z2 write-watchpoint on fake_w0 FIRED — a stop
+packet arrived (the walk wrote to fake_w0!) — then the guest wedged
+("waiter wedged post-store" + launcher exit; QEMU closed).
+- THE MECHANISM LIVES: forging the REAL lock's tree made the walk
+  finally touch our node. The wedge after = the walk continued into
+  deeper inconsistency (insert path) — but the WRITE happened.
+- The stop packet was consumed before registers could be read (QEMU
+  died). NEXT: (1) read registers IMMEDIATELY on watch stop (the
+  current code sleeps/prints first — reorder); (2) dump fw0 words the
+  moment the stop lands; (3) if the wedge races, watchpoint fw0+8 only
+  (the change_child slot) instead of fw0+0.
+- This is the closest the campaign has EVER been: the delivery store
+  exists, is reachable, and fired once. Shape refinement + wedge
+  handling (SCRATCH-root insert survival) completes it.
