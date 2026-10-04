@@ -1864,3 +1864,18 @@ CONTINUOUSLY during the spin by our own owner/waiter futex chain.
   address (waiter task from leak regs) instead of the scan.
 - All committed at 5f6eed1+; the no-punch-walk discovery stands as the
   session's key finding — it reframes the whole delivery problem.
+
+## 2026-10-04 (harness final state): interrupt+scan fully working; magic MISS persists
+
+WORKING: raw 0x03 break (NOT protocol-wrapped — the multi-session
+interrupt bug), carrier-signal detection (50ms), STOP + register reads,
+1MB scan with 64KB sub-chunk retries (41 chunks read, stack regions
+reached). GUEST ALIVE at stop (no panic, carriers flowing).
+MISS persists: magic not found in ffffffc000000000+256MB despite
+unconditional word-14 stamp. NEXT DEBUG (in order): (1) verify the
+magic lands in the USER fdsets (print fdset_get_word(ex,4) from the
+waiter); (2) scan USER space for the stamp (gdb reads it too); (3)
+verify kernel copy size: get_fd_set copies 5 words/set — confirm ex[4]
+within the copied span on this build; (4) scan SPAN to 0x20000000
+(stacks may sit beyond 256MB). The rig is otherwise COMPLETE — once
+the magic is found, watchpoint → walk observability is immediate.

