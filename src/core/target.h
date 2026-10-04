@@ -281,6 +281,7 @@
 
 /* Write 2 specific */
 #define CRED_COPY_OFF 0x1080
+#define NODEB_OFF 0x700
 
 #endif
 
