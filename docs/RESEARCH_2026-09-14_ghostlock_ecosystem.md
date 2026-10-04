@@ -2071,3 +2071,20 @@ Everything needed is in the repo; 5 device runs remain.
   children); fake node for top_waiter equality = a second zero node
   with ONLY +0x38 lock and +0x40 prio set; ghost g0 = second-node|RED.
   That is the crash-free delivery shape. 5 device runs remain.
+
+## 2026-10-04 (SCRATCH combo ran): stop-arrives-then-dies again
+
+- SCRATCH shape (nodeA black zero root @page+0x600, nodeB top-waiter
+  @page+0x700 with only +0x38 lock/+0x40 prio, real-lock tree pointed
+  at them, ghost g0=nodeB|RED g2=MARKER, watchpoints nodeB+8/+0x10):
+  ALL writes OK; on resume a STOP packet arrived then QEMU closed
+  (reg-read race) — same signature as the first fired watchpoint.
+- Console: waiter wedged post-store. The stop-then-close = watchpoint
+  fires and the wedge kills QEMU within the register-read window.
+- NEXT: widen the register-read race — after recv stop, FIRST send
+  nothing, read 'g' with retries; if QEMU dies, the console's panic
+  backtrace is the fallback (this console shows wedge not panic —
+  increase resume window so the panic prints; or set watchpoint on
+  nodeB+8 ONLY (drop +0x10) to halve the trigger surface).
+- State: 2 stop-packets received across combo runs — the walk IS
+  writing our nodes. Capturing the PC at the stop = last step.
