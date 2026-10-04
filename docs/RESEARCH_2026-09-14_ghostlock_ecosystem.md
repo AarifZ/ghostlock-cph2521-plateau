@@ -1851,3 +1851,16 @@ CONTINUOUSLY during the spin by our own owner/waiter futex chain.
   real ghost → watchpoint → observe WHICH walker crashes the insert
   (owner chain) and what the erase does under the continuous walks;
   (3) re-shape stamp for the OWNER-walk (the real delivery vehicle!).
+
+## 2026-10-04 (harness tuning): scan rig 90% there
+
+- Spin signal fixed (JC2 carrier, 150ms poll — spin detected ✓).
+- Remaining: the \x03 interrupt doesn't stop QEMU before the owner-walk
+  panics (guest dies within the first carrier window; break packet may
+  not preempt TCG mid-TB). NEXT: interrupt BEFORE the spin starts (at
+  the first carrier, send \x03 from a background thread polling at
+  10ms), or single-step the guest from route start with reads between
+  steps, or set the watchpoint before resume using a KNOWN symbol
+  address (waiter task from leak regs) instead of the scan.
+- All committed at 5f6eed1+; the no-punch-walk discovery stands as the
+  session's key finding — it reframes the whole delivery problem.
