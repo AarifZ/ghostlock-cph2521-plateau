@@ -2056,3 +2056,18 @@ Everything needed is in the repo; 5 device runs remain.
   for the STAMPED ghost = init_task... use phase-A 0.3s probe INSIDE
   the blocking select (select 1.5s > probe 0.3s: waiter still alive!).
 - 5 device runs remain. All rigs committed.
+
+## 2026-10-04 (session close): direct M-on-real-lock works; wedge races
+
+- vmalloc real-lock writes: direct M packets land (OK) at both sites.
+- Runs with full combo + watchpoints: one run hit "reg read fail"
+  (stop packet came THEN QEMU exited — the walk processed the combo
+  hard); others timed out with waiter wedged post-store.
+- The wedge ("waiter wedged post-store") = the walk runs our geometry
+  then hangs in the insert — the SCRATCH-root survival shape must be
+  applied to the REAL LOCK's tree too (root=SCRATCH zero node, not
+  fake_w0 which has RED pc=1... fw0lock equality used fake_w0->pc).
+- NEXT: real-lock root/leftmost = SCRATCH zero node (black, no
+  children); fake node for top_waiter equality = a second zero node
+  with ONLY +0x38 lock and +0x40 prio set; ghost g0 = second-node|RED.
+  That is the crash-free delivery shape. 5 device runs remain.
