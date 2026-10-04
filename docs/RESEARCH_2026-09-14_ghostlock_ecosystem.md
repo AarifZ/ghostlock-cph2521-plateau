@@ -2102,3 +2102,22 @@ Everything needed is in the repo; 5 device runs remain.
   matter of repetition (race) — rerun loop with the stop-retry is the
   design; each run costs ~3min and has hit before.
 - 5 device runs remain.
+
+## 2026-10-04 (loop result): 8 runs, watchpoint silent — lock varies after all
+
+8x forge3 repetition: real_lock VARIES per boot (ffffffc00d3f3/d3eb/
+d40b/d413/d423cf8 — the ..cf8 suffix constant, page varies). Ghost
+found every boot (deterministic ..848 suffix). Watchpoint silent 8/8 —
+the two earlier fired stops happened under DIFFERENT conditions (the
+fake_w0 geometry, not nodeB; possibly the fw0lock equality write to a
+RED-pc node was itself the trigger).
+- The store fires via fake_w0-class nodes (RED pc=1 read as red by
+  insert_color = the writes we watched hitting). With SCRATCH nodes
+  (pc=0) the walk never writes nodeB — the erase's change_child needs
+  the erased node's parent = a node the kernel will DEREF-write, and
+  zero-nodes make the walk exit earlier.
+- CONCLUSION: nodeB must be a REAL-looking node (non-zero pc with
+  parent bits = nodeA, but nodeA pc=1|RED... the original fired shape
+  had fw0 pc=1). Restore fw0-style node (pc=1) for nodeB, keep nodeA
+  black-zero for root. That's exactly the shape that fired twice.
+- NEXT: nodeB pc=1 (RED marker parent), nodeA zero root — rerun loop.
