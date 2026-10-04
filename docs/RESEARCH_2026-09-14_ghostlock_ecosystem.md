@@ -2174,3 +2174,26 @@ linkage). Attempts with real_lock!=0 also silent.
 - NEXT (final emulation step): byte-replay forge2.py itself in a loop
   (it fired 2/2 times it completed its full sequence) with the raw
   drain added around its existing phase2 watch block. Nothing else.
+
+## 2026-10-04 (forge2 replay): 10 more silent — stop rate confounded
+
+10x forge2 replay: all silent this batch (36 total rig runs, 4 stops).
+The stops are TIMING-correlated within the forge2 config (not purely
+config-deterministic): they fired when phase2's combo landed in a
+particular walk state (likely the exact moment the owner's requeue
+path was mid-flight — a window of the walk's own cycle). Loop count
+is the answer: N more replays eventually re-hit; the capture code in
+forge2 prints STOP= + registers when it wins the race.
+- Attempt 8 observed: gw[7]=0 post-normalize again (unlink class).
+- CAMPAIGN LEDGER: 4 stops / 36 runs ≈ 11% per run under forge2
+  config; 10-run batches have ~65% hit probability. Continue replay
+  batches until STOP= prints with PC — or move to device now (the
+  device fire under the same two-phase shape is the real test; the
+  emulator stops confirmed the store EXISTS — the capture is for
+  documentation, the device CapEff render is the actual proof).
+- DECISION POINT next session: (a) 2 more forge2 batches (~20 runs,
+  ~90% cumulative) for the PC capture, then device; or (b) device
+  first — bake nodeB-equality + two-phase timing into the stamp
+  (spin = phase1 normalize, punch = phase2) — the current jc55
+  already IS this shape; the missing piece per emulator = the
+  fw0-pc=1 RED at BOTH root+leftmost of the SELF-lock block.
