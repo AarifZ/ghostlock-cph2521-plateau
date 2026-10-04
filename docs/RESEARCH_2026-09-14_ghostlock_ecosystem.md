@@ -1996,3 +1996,20 @@ packet arrived (the walk wrote to fake_w0!) — then the guest wedged
 - This is the closest the campaign has EVER been: the delivery store
   exists, is reachable, and fired once. Shape refinement + wedge
   handling (SCRATCH-root insert survival) completes it.
+
+## 2026-10-04 (session end): first-interrupt combo — scan heuristic gap
+
+- Instant-register-read reorder in place; fw0+8/+0x10 watchpoints.
+- First-interrupt combo: our forged root/leftmost/owner PERSIST on the
+  (gw[7]-derived) real lock through resume — the walk adopts them with-
+  out normalizing. But no store: the runs after phase1's resume are a
+  dead flow (waiter wedged) — the shape-scan for the real lock at the
+  FIRST interrupt failed (idle-shape [0,0,0,task|1] never matched; the
+  ACTIVE lock has the ghost-linked waiters: root/leftmost point at
+  ghost±offsets in vmalloc).
+- NEXT (first thing): real-lock scan heuristic v2 = w[0]==0 AND w[1]!=0
+  AND w[1] not self-ref(±8) AND (w[3]&1) in 0x3200000..0x3400000 —
+  then the ENTIRE combo (real-lock tree + ghost tree + fw0 equality +
+  w6 preserved) lands in the FIRST interrupt; single resume; watch-
+  points catch the store. The single fired watchpoint (previous run)
+  proves the mechanism is reachable.
