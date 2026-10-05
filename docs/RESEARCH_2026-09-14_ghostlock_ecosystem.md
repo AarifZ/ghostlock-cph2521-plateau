@@ -2344,3 +2344,31 @@ there harmlessly FIRST as a marker readback = PROOF OF WRITE), and
 only after marker-verified delivery move the parent to task+0x778.
 That two-step (marker first, cred second) converts the damage into a
 diagnostic. 2 device runs remain: marker-run then cred-run.
+
+## 2026-10-05 (jc58 MARKER RUN): SURVIVABLE FULL CYCLE — first ever
+
+CC parent = fake_lock+0x800 (spray page), child = 0x0BADF00D MARKER:
+- Boot SURVIVED (uptime climbing, no KP, no freeze)
+- Punch fired sched_ret=0, post-select completed
+- Waiter wedged post-store (in-kernel spin, one CPU); main hung
+  reading the wedged waiter's /proc status (MAIN-READER blocks) —
+  that's why the log ends at route_done TIMEOUT.
+- CONTRAST: marker target = survives; cred target (jc57-2) = instant
+  crash. The damage IS the write at the cred target: the erase's
+  child->pc store writes parent-color garbage INTO *(child+0) =
+  the cred's usage/uid qword → next cred touch crashes.
+- THE FIX (next fire): deliver cred_addr - 0x28 (or another offset
+  such that the cred struct fields land right but the pc store hits
+  page padding)... NO — simpler: deliver the cred copy placed at
+  page+0x1D8 such that cred+0 (where pc garbage lands) = padding and
+  fields we need are still within our stamped region. OR: point
+  child->pc store harmlessly by choosing child = &cred.field we don't
+  care about... The cleanest: re-spray the cred copy with 0x60 bytes
+  of extra zero padding BEFORE the struct (so delivered pointer =
+  page+0x1A0, pc store hits zeroed padding at page+0x1A0, fields
+  read from +0x28.. = our caps). The child->pc store corrupts
+  PADDING, cred content intact.
+- ALSO: wedge means the waiter thread spins — the no-park exit can't
+  run if main is blocked on /proc read of the wedged thread. Add
+  alarm-based forced exit + skip MAIN-RENDER when waiter wedged.
+- 2 device runs remain: (1) padded-cred run → CapEff; (2) SIGCONT root.
