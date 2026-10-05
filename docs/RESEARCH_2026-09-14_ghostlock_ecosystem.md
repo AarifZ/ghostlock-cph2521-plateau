@@ -2408,3 +2408,21 @@ kernel before the delivery store executes, regardless of guard state).
   before reaching the store. The problem is intrinsic to the GhostLock
   delivery algebra on this kernel, not the guard, not the timing, not
   the stamp freshness.
+
+## 2026-10-05 (RECONCILIATION): the traditional method DOES work — analysis
+
+THE CRITICAL REALIZATION (from the fire-6 evidence + dirtyfrag success):
+- The fire-6 form {pi_parent=fake_fops(page), pi_right=0, pi_left=target}
+  LANDED writes to misc.fops AND real_cred+0x778 — THE DELIVERY
+  PRIMITIVE IS PROVEN ON THIS DEVICE.
+- What failed was POST-DELIVERY: RootGuard killed the child (rgoff
+  fixes this), kCFI was wrongly blamed (errno 22 = swap miss, not CFI),
+  and our subsequent fixes (SPINSTAMP, late-midstamp, self-lock, etc.)
+  changed the geometry away from the proven form until delivery stopped.
+- PATH FORWARD with root + rgoff:
+  1. Root reads task_struct directly (no perf leak — exact target)
+  2. The fire-6 proven form: pi_parent=fake_fops, pi_right=0,
+     pi_left=task->cred → erase writes fake_fops value at target
+     (or better: pi_parent=cred_value, pi_left=target for cred write)
+  3. The SIMPLE original flow (no SPINSTAMP etc.)
+  4. RootGuard already neutered (rgoff_min loaded)
