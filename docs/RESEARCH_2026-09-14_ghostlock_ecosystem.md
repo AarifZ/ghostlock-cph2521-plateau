@@ -2372,3 +2372,23 @@ CC parent = fake_lock+0x800 (spray page), child = 0x0BADF00D MARKER:
   run if main is blocked on /proc read of the wedged thread. Add
   alarm-based forced exit + skip MAIN-RENDER when waiter wedged.
 - 2 device runs remain: (1) padded-cred run → CapEff; (2) SIGCONT root.
+
+## 2026-10-05 (jc59-3 + capwatch): DEFINITIVE negative — cred never lands
+
+capwatch daemon (100ms poll, durable synced log, survives reboot):
+jc59_3 full run (spray OK, punch ret=0, post-select done, boot froze
+afterward) — capwatch.log EMPTY: no thread of the process EVER showed
+non-zero CapEff at any sampled moment. Combined with jc59-2 (survived,
+no render): the cred write DOES NOT LAND under the true algebra on
+hardware, despite the walk running and the punch returning.
+- Emulator reconciliation: the 4 watchpoint stops fired on OUR page
+  nodes (fake_w0/nodeB) = the walk's internal tree bookkeeping writes,
+  NOT the target-slot delivery store. The *(left)=pc branch never
+  executes on the device walk path.
+- CAMPAIGN HONEST CLOSE: survival machinery complete (spin/handoff/
+  state-gate/no-park/watcher), guard fully audited, walk executes on
+  hardware — but the delivery store to the cred slot has never fired
+  on device. The remaining work is locating the exact branch the device
+  walk takes (the QEMU gdb rig remains the tool — the device walk's
+  exit point needs the emulator watchpoint anchored to the REAL ghost
+  with the completed capture loop).
