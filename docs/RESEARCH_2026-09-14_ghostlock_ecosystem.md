@@ -2512,3 +2512,36 @@ we stamp the correct address.
 CRITICAL QUESTION: does KASLR re-randomize per boot? If YES, the
 addresses change each boot and we need a runtime leak (perf). If NO
 (fixed per device/boot chain), we can hardcode.
+
+## 2026-10-06 (CORRECTION): physmap aliases were CORRECT — KASLR not the cred blocker
+
+Deeper analysis with root data:
+- KASLR randomizes VIRTUAL kernel image base per boot (confirmed:
+  _text changed from ffffffd4fee00000 to ffffffdf48600000 across hard
+  reboots). Kernel image offsets from _text are STABLE.
+- BUT our data_addr() computes PHYSMAP aliases: PAGE_OFFSET +
+  (KPHYS + offset - PHYS_OFFSET). KPHYS = 0xa8000000 (STABLE per
+  /proc/iomem "Kernel code" entry). So the physmap targets for
+  bootid/init_cred/init_task/misc.fops were CORRECT all along.
+- The bootid write DID land at the physmap alias — proof the physmap
+  computation is right. init_cred's physmap alias (0xffffff802a7e0be0)
+  is equally correct.
+- THE CRED WRITE FAILURE IS STILL THE PI WALK DELIVERY, not addresses.
+
+WHAT THE ROOT ACCESS DOES REVEAL:
+1. Guard module is at VMALLOC addresses (changes per boot). Our
+   GUARD_NULL write at kernel-image offset 0x2950700 targeted the
+   WRONG memory (kernel .data, not the guard module's function array).
+   The guard was never actually neutered by our writes!
+2. With rgoff (skip-kprobes), the guard IS neutered. But jc59-4 with
+   rgoff still crashed at the punch — meaning the walk damage is
+   independent of the guard (the PI walk's own tree operations crash
+   on our crafted nodes).
+3. The guard addresses (from kallsyms with root) are in the module's
+   vmalloc space, not reachable via our physmap computation.
+
+THE REAL ISSUE (unchanged from before): the PI walk processes our
+stamped ghost but crashes during the rb_erase/reinsert on crafted
+nodes before the *(left)=pc delivery store executes. This is the same
+conclusion as jc59-4 — it's intrinsic to the walk, not the guard,
+not the addresses.
