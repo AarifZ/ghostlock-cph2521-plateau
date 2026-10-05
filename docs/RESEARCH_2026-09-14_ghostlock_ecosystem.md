@@ -2426,3 +2426,51 @@ THE CRITICAL REALIZATION (from the fire-6 evidence + dirtyfrag success):
      (or better: pi_parent=cred_value, pi_left=target for cred write)
   3. The SIMPLE original flow (no SPINSTAMP etc.)
   4. RootGuard already neutered (rgoff_min loaded)
+
+## 2026-10-06 (Phase 1 complete): critical addresses from rooted device
+
+Extracted with root (kptr_restrict=0):
+- init_task: ffffffd5015cc000
+- init_cred: ffffffd5015e0be0
+- selinux_state: ffffffd5018793c8
+- ashmem_misc: ffffffd50171a8d8 (offset 0x171a8d8)
+- guard module base: ffffffd4fabb2000 (VMALLOC — VARIES PER BOOT)
+- g_boot_state: guard_base+0x3020
+- root_check_pre: guard_base+0x3ac
+- root_check_post: guard_base+0x3e8
+- exe_block_ret: guard_base+0x744
+- harden_pre: guard_base+0x9bc
+- selinux_enforcing_boot: ffffffd501574c84
+
+NOTE: guard module base is VMALLOC (ffffffd4...) — NOT stable across
+boots (same class as the fdset buffer). The OFFSETS from base are
+stable (same module). The kernel .data/.rodata addresses (init_task,
+init_cred, selinux_state, ashmem_misc) are ffffffd50... which also
+look like vmalloc/module region, NOT the ffffffc008... text region we
+used in our stamps.
+
+CRITICAL MISMATCH FOUND: our stamps used KIMAGE_TEXT_BASE =
+0xffffffc008000000 for init_task/init_cred — but the REAL addresses
+are ffffffd5015cc000/ffffffd5015e0be0. THE ADDRESSES WERE WRONG!
+
+This means: every fire that stamped init_task at 0xffffffc008000000+off
+was writing to the WRONG ADDRESS. The bootid target may have worked
+because bootid is in .data (close to text), but init_cred was at a
+completely different address than our stamp assumed.
+
+THIS IS THE ROOT CAUSE of the cred write never landing — the target
+address in the stamp was wrong!
+
+Wait — but the QEMU work had valid addresses and still didn't deliver.
+And the bootid write DID land with the old stamps. Need to reconcile:
+the .data symbols like bootid ARE at ffffffc008000000+off (within the
+kernel image). init_cred at ffffffd5015e0be0 is... the module region?
+No — init_cred is a kernel core symbol, it should be in the kernel
+image. The ffffffd5 prefix suggests these are from a DIFFERENT boot
+where KASLR was active, OR kallsyms is reporting with a different
+base on this rooted kernel.
+
+VERIFICATION NEEDED: compare these addresses across boots. If
+ffffffd50... is stable, the kernel image is actually loaded at a
+different base than we assumed. If it varies per boot, KASLR IS active
+on this device and our slide=0 assumption was wrong!
