@@ -2289,3 +2289,30 @@ boot STAYED UP (uptime climbing through the run, process exited).
 - NEXT: refire jc57 on a fresh boot (spray failures are boot-
   dependent; jc56 fired fine on this same boot lineage earlier).
   If spray succeeds → the nodeB walk verdict is the real test.
+
+## 2026-10-05 (jc57-2 fresh boot): spray SUCCEEDED — walk damage again
+
+Fresh boot refire: CAPS_CHILD spray landed (cred=ffffff8048f18200),
+CC+DUAL armed, SELF-LOCK armed with ghost=ffffffc044353dd8 (the fdset
+buffer, select-sampled hint working), magic in place. KP after
+pre-select (markers end spin_exit; reboot). NO punch print — died at
+the punch setattr = same walk-damage class as jc56: the fired-family
+geometries act (write path executes) and the damage kills before any
+readback.
+- nodeB/root ex_stamp values: this build = SCRATCH/nodeB only when
+  those globals nonzero — but the ghost=...dd8 print shows
+  root=leftmost=GHOST (the OLD jc55 stamps!) — the nodeB wiring did
+  NOT take effect in this build (g_scratch_node/g_nodeb are assigned
+  in prepare_skb_payload — the payload stamp loop sets them, but the
+  jc57 binary's SELF-LOCK print shows ghost at both slots — the
+  ex_stamp fallbacks fired, meaning g_nodeb was 0 at stamp time (the
+  fdset stamps run on the WAITER thread BEFORE the spray main path
+  sets the globals? No — spray precedes route. The print shows
+  root=leftmost=ghost — jc57's edit didn't reach this build? The
+  build DID include nodeB (compiled OK) — but the SELF-LOCK print is
+  the OLD line printing ghost at both — CHECK: the print string
+  prints root=leftmost=ghost — that print predates the ex_stamp
+  change (it prints g_ghost_kva twice, not ex_stamp values!) — the
+  STAMPS may actually be nodeB while the PRINT lies.
+- Either way: walk damage on fired-family geometry confirmed 2x on
+  hardware. 2 device runs remain.
