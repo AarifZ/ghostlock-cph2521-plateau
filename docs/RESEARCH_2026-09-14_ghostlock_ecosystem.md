@@ -2474,3 +2474,41 @@ VERIFICATION NEEDED: compare these addresses across boots. If
 ffffffd50... is stable, the kernel image is actually loaded at a
 different base than we assumed. If it varies per boot, KASLR IS active
 on this device and our slide=0 assumption was wrong!
+
+## 2026-10-06 (SMOKING GUN): KASLR IS ACTIVE — _text at ffffffd4fee00000
+
+From rooted device: _text = ffffffd4fee00000, NOT ffffffc008000000.
+Our stamps assumed KIMAGE_TEXT_BASE = ffffffc008000000 (slide=0).
+THE ENTIRE CAMPAIGN RAN WITH WRONG KERNEL ADDRESSES.
+
+The bootid write DID land because: bootid_data at image offset
+0x026aa868 → our stamp computed ffffffc008000000 + 0x026aa868 =
+0xffffffc02eaa868. The REAL address would be ffffffd4fee00000 +
+0x026aa868 = 0xffffffd501aa868. These are COMPLETELY different.
+
+Wait — but bootid DID change. So the write to "0xffffffc008000000+
+0x26aa868" DID modify bootid. That means the physmap alias of the
+kernel .data WAS accessible at our computed address. The kernel's
+.data pages are also mapped in the linear/physmap at PAGE_OFFSET+
+phys. Our old stamps were accidentally hitting the PHYSMAP ALIAS
+of these targets, not the direct kernel image mapping.
+
+So: bootid landed via physmap alias. init_cred would ALSO be reachable
+via physmap alias IF we computed the right physmap address. The fact
+that cred never landed means the physmap alias of init_cred wasn't at
+our computed address (init_cred is in .data which is at a different
+physmap offset than bootid).
+
+THE FIX: with root, read the ACTUAL addresses + the physmap alias:
+- _text = ffffffd4fee00000 → slide = ffffffd4fee00000 - ffffffc008000000
+- init_cred at ffffffd5015e0be0 (from kallsyms with kptr_restrict=0)
+- physmap alias = 0xffffff80... + (phys of init_cred)
+
+With dirtyfrag root we can read the page tables to find the exact
+physmap alias of init_cred, then compute the CORRECT stamp target.
+On the next boot (same kernel, KASLR re-randomizes? need to check)
+we stamp the correct address.
+
+CRITICAL QUESTION: does KASLR re-randomize per boot? If YES, the
+addresses change each boot and we need a runtime leak (perf). If NO
+(fixed per device/boot chain), we can hardcode.
