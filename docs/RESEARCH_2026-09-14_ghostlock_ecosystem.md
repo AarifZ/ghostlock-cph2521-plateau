@@ -2316,3 +2316,31 @@ readback.
   STAMPS may actually be nodeB while the PRINT lies.
 - Either way: walk damage on fired-family geometry confirmed 2x on
   hardware. 2 device runs remain.
+
+## 2026-10-05 (HANDOFF — final state of the campaign)
+
+DEVICE EVIDENCE (fires this stretch):
+- jc56 (fw0@both root+leftmost): punch sched_ret=0 → in-kernel
+  FREEZE (hard reboot). Write path acted.
+- jc57-1 (nodeB): spray failed — clean abort, boot survived.
+- jc57-2 (fresh boot, spray OK, full arm): KP at punch setattr.
+- Verdict: fired-family geometry = write path EXECUTES on hardware
+  2/2; the damage kills before CapEff render every time.
+
+THE ONE QUESTION LEFT: which store kills. Candidates (from erase
+algebra): (a) change_child writes *(parent+8)=child → parent=
+tgt_task+0x778 → writes cred ptr at task+0x780 (INTENDED) but ALSO
+clears/sets parent's rb slots; (b) child->pc store writes the pc
+(parent|color) INTO the child = VALUE = cred page → corrupts cred
+usage/uid (KIMI-hardened initial content, but the erase overwrite
+lands AFTER) → waiter's next cred touch crashes; (c) the insert
+walks nodeB/fake_w0 payload words as tree nodes.
+NEXT-SESSION OPENING MOVE: read the W0 main-tree payload words for
+this exact env (the ex_stamp[1]/[2] fallback means the ACTUAL stamped
+root/leftmost may be ghost — the print lies, verify by reading the
+payload's W0_OFF words in the stamp). Then aim the corrupting store
+at the spray page: choose CC parent = spray-page node (delivery lands
+there harmlessly FIRST as a marker readback = PROOF OF WRITE), and
+only after marker-verified delivery move the parent to task+0x778.
+That two-step (marker first, cred second) converts the damage into a
+diagnostic. 2 device runs remain: marker-run then cred-run.
