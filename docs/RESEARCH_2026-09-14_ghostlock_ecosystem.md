@@ -2392,3 +2392,19 @@ hardware, despite the walk running and the punch returning.
   walk takes (the QEMU gdb rig remains the tool — the device walk's
   exit point needs the emulator watchpoint anchored to the REAL ghost
   with the completed capture loop).
+
+## 2026-10-05 (jc59-4 WITH ROOTGUARD NEUTERED): guard NOT the blocker
+
+Fire with rgoff_min loaded (all 4 guard kill-paths skip-kprobed):
+spray landed (cred=ffffff8048210200), then crashed at/before punch —
+same class as all fired-shape runs. RootGuard's interference ELIMINATED
+as the cred-delivery blocker. The walk damage is in the PI mechanism
+itself (the walk's own tree operations on our crafted nodes crash the
+kernel before the delivery store executes, regardless of guard state).
+- HONEST CONCLUSION: dirtyfrag achieved root because its write
+  primitive (splice-based file patch) doesn't depend on PI walk
+  geometry. GhostLock's delivery requires the kernel's rb_erase to
+  execute our crafted tree shape — the walk crashes on our nodes
+  before reaching the store. The problem is intrinsic to the GhostLock
+  delivery algebra on this kernel, not the guard, not the timing, not
+  the stamp freshness.
